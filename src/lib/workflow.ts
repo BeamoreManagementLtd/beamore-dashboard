@@ -46,7 +46,7 @@ export async function loadWorkflow(db: SupabaseClient, p: P): Promise<{ stages: 
     ({ id, title, state: done || manual.has(id) ? "done" : "todo", note: done ? note : by(id) ?? note, ...opts });
 
   const pricing: Step[] = [
-    step("P1", "Request to price received", true, fmt(p.created_at), { how: "auto" }),
+    step("P1", "Request to price received", true, legacy ? undefined : fmt(p.created_at), { how: "auto" }),
     { ...step("P2", "DfE or not", p.is_dfe != null, p.is_dfe == null ? undefined : p.is_dfe ? "DfE" : "Not DfE", { how: "auto" }),
       note: p.is_dfe == null && p.dfe_evidence?.startsWith("Unsure") ? "Question waiting for you" : p.is_dfe == null ? undefined : p.is_dfe ? "DfE" : "Not DfE" },
     step("P3", "Cost proposal sent", p.stage === "sent" || pastPricing, undefined, { manual: true, how: "button" }),
