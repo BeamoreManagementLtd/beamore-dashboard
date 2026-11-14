@@ -6,6 +6,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   const director = me.role === "director";
   const nav: [string, string][] = [
     ["/", "Home"],
+    ["/due", "Due list"],
     ["/projects", "Projects"],
     ["/invoices", "Overdue invoices"],
     ["/reports", "Reports"],

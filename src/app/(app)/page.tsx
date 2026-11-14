@@ -2,6 +2,7 @@ import Link from "next/link";
 import { requireProfile } from "@/lib/auth";
 import { createClient } from "@/lib/supabase/server";
 import { gbp, fd, fdt, today } from "@/lib/format";
+import { buildDueList, isMine } from "@/lib/due";
 
 export const dynamic = "force-dynamic";
 
@@ -11,10 +12,10 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ d
   const db = await createClient();
   const t = today();
 
-  const [{ data: overdue }, { data: queue }, { data: tasks }, { data: snap }, { data: lastSync }] = await Promise.all([
+  const [{ data: overdue }, { data: queue }, due, { data: snap }, { data: lastSync }] = await Promise.all([
     db.from("invoices").select("number,amount_due,due,chase_state(status)").gt("amount_due", 0).lt("due", t),
     db.from("report_queue").select("due,checker"),
-    db.from("tasks").select("title,due,link,kind").eq("owner_id", me.id).is("done_at", null).order("due").limit(8),
+    buildDueList(db, me),
     // RLS returns nothing here for admin accounts
     db.from("finance_snapshots").select("*").eq("period", "latest").order("taken_at", { ascending: false }).limit(1),
     db.from("sync_runs").select("source,finished_at,ok").eq("ok", true).order("finished_at", { ascending: false }).limit(6),
@@ -30,6 +31,7 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ d
   const q = queue ?? [];
   const qLate = q.filter((r) => r.due && r.due < t).length;
   const f = snap?.[0];
+  const mine = due.filter((x) => isMine(x, me) || (!x.owner && me.role === "director"));
 
   return (
     <>
@@ -65,15 +67,22 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ d
       </div>
 
       <section className="panel">
-        <h2>Your next actions</h2>
-        {tasks?.length ? (
+        <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
+          <h2>Your next actions</h2>
+          <Link href="/due" className="small">Whole team’s due list ({due.length}) →</Link>
+        </div>
+        {mine.length ? (
           <table><tbody>
-            {tasks.map((x, i) => (
-              <tr key={i}><td>{x.link ? <Link href={x.link}>{x.title}</Link> : x.title}<span className="two">{x.kind}</span></td>
-                <td className={`num ${x.due && x.due < t ? "neg" : ""}`}>{fd(x.due)}</td></tr>
+            {mine.slice(0, 8).map((x) => (
+              <tr key={x.key}>
+                <td style={{ width: 90 }}><span className="pill neutral">{x.kind}</span></td>
+                <td>{x.link ? <Link href={x.link}>{x.title}</Link> : x.title}{x.detail && <span className="two">{x.detail}</span>}</td>
+                <td className={`num ${x.due && x.due < t ? "neg" : ""}`}>{x.due ? (x.due === t ? "Today" : fd(x.due)) : "—"}</td>
+              </tr>
             ))}
           </tbody></table>
-        ) : <p className="empty">Nothing due.</p>}
+        ) : <p className="empty">Nothing due for you.</p>}
+        {mine.length > 8 && <p className="small"><Link href="/due?who=mine">{mine.length - 8} more of yours →</Link></p>}
       </section>
     </>
   );
