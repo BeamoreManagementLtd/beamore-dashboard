@@ -3,6 +3,8 @@ import { notFound } from "next/navigation";
 import { requireProfile } from "@/lib/auth";
 import { createClient } from "@/lib/supabase/server";
 import { gbp, fd, today, daysBetween, CHASE_STATUS } from "@/lib/format";
+import { loadWorkflow } from "@/lib/workflow";
+import { WorkflowPanel } from "./workflow-panel";
 import { saveProject, addAlias, setDfe, startInfoChecklist, addInfoItem, requestOutstanding, setInfoReceived, removeInfoItem, addProjectEvent } from "../actions";
 
 export const dynamic = "force-dynamic";
@@ -21,6 +23,7 @@ export default async function Project({ params }: { params: Promise<{ id: string
   const monthStart = `${t.slice(0, 7)}-01`;
   const { data: p } = await db.from("projects").select("*,clients(name)").eq("id", id).maybeSingle();
   if (!p) notFound();
+  const [wf, { data: clerkList }] = await Promise.all([loadWorkflow(db, p), db.from("clerks").select("id,name").eq("active", true).order("name")]);
   const [{ data: info }, { data: pevents }] = await Promise.all([
     db.from("project_info").select("id,item,requested_on,received_on,hint,hint_thread,auto").eq("project_id", id).order("created_at"),
     db.from("project_events").select("id,happened_at,source,kind,who,body").eq("project_id", id).order("happened_at", { ascending: false }).limit(40),
@@ -90,6 +93,8 @@ export default async function Project({ params }: { params: Promise<{ id: string
         <div className="tile"><span className="label">This month: planned / charged</span><span className="big">{thisMonth?.planned ?? 0} / {(thisMonth?.b ?? 0) + (thisMonth?.me ?? 0)}</span></div>
         <div className={`tile ${owed ? "alert" : ""}`}><span className="label">Outstanding invoices</span><span className="big">{gbp(owed)}</span><span className="sub">{invoices?.length ?? 0} invoice{invoices?.length === 1 ? "" : "s"}</span></div>
       </div>
+
+      <WorkflowPanel projectId={p.id} stages={wf.stages} current={wf.current} clerks={clerkList ?? []} ticked={new Set(wf.ticked)} />
 
       {infoBanner && <p className={`callout ${infoBanner.tone}`}><b>{infoBanner.title}</b> {infoBanner.text}</p>}
       <div className="grid2">

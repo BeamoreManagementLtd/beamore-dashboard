@@ -123,3 +123,65 @@ export async function linkSite(form: FormData) {
   f.set("alias", site);
   await addAlias(project, f);
 }
+
+// ---- project workflow (src/lib/workflow.ts)
+const workflowLog = async (projectId: string, kind: string, body: string) => {
+  const me = await requireProfile();
+  const db = await createClient();
+  await db.from("project_events").insert({ project_id: projectId, source: "team", kind, who: me.full_name ?? me.email, body, created_by: me.id });
+  return { me, db };
+};
+
+export async function markStep(projectId: string, step: string, done: boolean) {
+  const me = await requireProfile();
+  const db = await createClient();
+  if (done) await db.from("project_steps").upsert({ project_id: projectId, step, done_by: me.full_name ?? me.email, done_at: new Date().toISOString() });
+  else await db.from("project_steps").delete().eq("project_id", projectId).eq("step", step);
+  revalidatePath(`/projects/${projectId}`);
+}
+
+/** P5: won starts set-up (the intake job then starts the checklist); lost closes the project with a reason. */
+export async function setOutcome(projectId: string, form: FormData) {
+  const outcome = String(form.get("outcome"));
+  const reason = String(form.get("reason") ?? "").trim() || null;
+  const { db } = await workflowLog(projectId, outcome === "won" ? "Won" : "Lost", outcome === "won" ? "Project won" : `Lost${reason ? `: ${reason}` : ""}`);
+  await db.from("projects").update(outcome === "won" ? { stage: "won_arranging" } : { stage: "lost", lost_reason: reason }).eq("id", projectId);
+  revalidatePath(`/projects/${projectId}`);
+  revalidatePath("/projects");
+}
+
+/** S3: pick the clerk, or say we need to find one. */
+export async function setClerk(projectId: string, form: FormData) {
+  const v = String(form.get("clerk") ?? "");
+  const db = await createClient();
+  if (v === "finding") {
+    await workflowLog(projectId, "Clerk of works", "No clerk yet, finding one");
+    await db.from("projects").update({ clerk_status: "finding", clerk_id: null }).eq("id", projectId);
+  } else if (v) {
+    const { data: c } = await db.from("clerks").select("name").eq("id", v).maybeSingle();
+    await workflowLog(projectId, "Clerk of works", `${c?.name ?? "Clerk"} allocated`);
+    await db.from("projects").update({ clerk_status: "have", clerk_id: v }).eq("id", projectId);
+  }
+  revalidatePath(`/projects/${projectId}`);
+}
+
+export async function setPo(projectId: string, form: FormData) {
+  const po = String(form.get("po") ?? "").trim();
+  if (!po) return;
+  const { db } = await workflowLog(projectId, "PO number", po);
+  await db.from("projects").update({ po_number: po }).eq("id", projectId);
+  revalidatePath(`/projects/${projectId}`);
+}
+
+/** X2: finished (completes once paid), paused (on hold) or still going (asked again next quiet month). */
+export async function closeOutAnswer(projectId: string, answer: "finished" | "paused" | "going") {
+  const { me, db } = await workflowLog(projectId, "Close-out", answer === "finished" ? "Project finished" : answer === "paused" ? "Project paused" : "Still going");
+  await db.from("project_steps").upsert({ project_id: projectId, step: "X2", note: answer, done_by: me.full_name ?? me.email, done_at: new Date().toISOString() });
+  if (answer === "paused") await db.from("projects").update({ stage: "on_hold" }).eq("id", projectId);
+  if (answer === "finished") {
+    const { data: inv } = await db.from("invoices").select("amount_due").eq("project_id", projectId).gt("amount_due", 0).limit(1);
+    if (!inv?.length) await db.from("projects").update({ stage: "complete" }).eq("id", projectId);
+  }
+  revalidatePath(`/projects/${projectId}`);
+  revalidatePath("/projects");
+}
