@@ -2,7 +2,7 @@ import { requireProfile } from "@/lib/auth";
 import { createClient } from "@/lib/supabase/server";
 import { monthComparison, monthLabel } from "@/lib/signoff";
 import { gbp, fdt } from "@/lib/format";
-import { prepare, approve } from "./actions";
+import { prepare, approve, check } from "./actions";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 120;
@@ -48,6 +48,7 @@ export default async function SignOff({ searchParams }: { searchParams: Promise<
       </div>
       {sp.error && <p className="callout bad">{sp.error}</p>}
       {sp.done === "prepared" && <p className="callout info">{sp.n} draft{sp.n === "1" ? "" : "s"} ready to check below; {sp.s} project{sp.s === "1" ? "" : "s"} not drafted (see why).</p>}
+      {sp.done === "checked" && <p className="callout info">Check: {sp.n} of {sp.s} rebuilt drafts match what was invoiced to the penny. Differences are listed below.</p>}
       {sp.done === "created" && <p className="callout info">{sp.n} draft invoice{sp.n === "1" ? "" : "s"} created in Xero{Number(sp.f) ? `; ${sp.f} failed (see below)` : ""}. Review and approve them in Xero.</p>}
       {signoff && <p className="callout info">Signed off {fdt(signoff.approved_at)} by {(signoff.profiles as unknown as { full_name: string } | null)?.full_name ?? "the director"}.</p>}
       {!hasPlan && rows.length > 0 && <p className="callout warn">No planned (grey) days in the diary for {monthLabel(m)}, so there’s nothing to compare against. The grey side starts with November 2026.</p>}
@@ -84,6 +85,7 @@ export default async function SignOff({ searchParams }: { searchParams: Promise<
               <p className="small muted">Each draft copies the project’s last invoice (contact, wording, PO, account and VAT) with this month’s charged days, the Rates tab price and the next number for that client. They’re created as drafts only: you approve and send them in Xero.</p>
             </div>
             <div className="row">
+              <form action={check.bind(null, m)}><button className="btn" title="For a month already invoiced: rebuild the drafts from the month before and compare with what was invoiced">Check against what was invoiced</button></form>
               <form action={prepare.bind(null, m)}><button className="btn">{ds.length ? "Prepare again" : "Prepare drafts"}</button></form>
               {ready.length > 0 && (
                 <form action={approve.bind(null, m)}><button className="btn primary">Approve {monthLabel(m)} and create {ready.length} draft{ready.length > 1 ? "s" : ""} in Xero</button></form>

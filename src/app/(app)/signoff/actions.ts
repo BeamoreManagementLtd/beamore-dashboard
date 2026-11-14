@@ -19,6 +19,20 @@ export async function prepare(m: string) {
   redirect(`/signoff?month=${monthStart(m).slice(0, 7)}&${q}`);
 }
 
+/** Rebuilds an already-invoiced month's drafts from the month before and compares them with what was invoiced. */
+export async function check(m: string) {
+  await requireDirector();
+  if (!ok(m)) throw new Error("Bad month");
+  let q: string;
+  try {
+    const r = await prepareDrafts(createServiceClient(), m, { test: true });
+    q = `done=checked&n=${r.matched}&s=${r.compared}`;
+  } catch (e) {
+    q = `error=${encodeURIComponent(e instanceof Error ? e.message : String(e))}`;
+  }
+  redirect(`/signoff?month=${m.slice(0, 7)}&${q}`);
+}
+
 export async function approve(m: string) {
   const me = await requireDirector();
   if (!ok(m)) throw new Error("Bad month");

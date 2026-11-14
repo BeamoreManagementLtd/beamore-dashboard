@@ -45,7 +45,7 @@ export async function monthComparison(db: SupabaseClient, m: string): Promise<Mo
 type XLine = { Description?: string; Quantity?: number; UnitAmount?: number; AccountCode?: string; TaxType?: string; ItemCode?: string; Tracking?: { Name: string; Option: string }[] };
 type XInv = {
   InvoiceID: string; InvoiceNumber: string; Reference?: string; Status: string; Type: string; LineAmountTypes?: string;
-  Contact: { ContactID: string; Name: string }; DateString?: string; DueDateString?: string; LineItems?: XLine[];
+  Contact: { ContactID: string; Name: string }; DateString?: string; DueDateString?: string; LineItems?: XLine[]; SubTotal?: number;
 };
 
 const MONTHS = "January|February|March|April|May|June|July|August|September|October|November|December";
@@ -71,8 +71,12 @@ async function allInvoices(get: XeroGet, from: string) {
   return out;
 }
 
-/** Builds draft invoices for month m and stores them (replacing earlier unsent drafts for that month). */
-export async function prepareDrafts(admin: SupabaseClient, m: string) {
+/**
+ * Builds draft invoices for month m and stores them (replacing earlier unsent drafts for that month).
+ * With test: true, for a month already invoiced, it builds each draft from the invoice before and compares it with
+ * what was actually invoiced, so you can see how close the drafts are. Nothing can be created from a test.
+ */
+export async function prepareDrafts(admin: SupabaseClient, m: string, { test = false } = {}) {
   const end = lastDay(m);
   const get = await xeroClient(admin);
   const [rows, { data: projects }, { data: rates }, { data: linked }, invoices] = await Promise.all([
@@ -125,7 +129,8 @@ export async function prepareDrafts(admin: SupabaseClient, m: string) {
     const dated = (i: XInv) => (i.DateString ?? "").slice(0, 10);
     const already = history.find((i) => (dated(i) >= m && dated(i) <= addDays(end, 20)) || (i.Reference ?? "").includes(monthLabel(m)));
     const base = { month: m, project_id: r.projectId, days_building: r.chargedB, days_me: r.chargedMe, warnings: [] as string[] };
-    if (already) { drafts.push({ ...base, status: "skipped", invoice_number: already.InvoiceNumber, contact_name: already.Contact.Name, reference: already.Reference, note: `Already in Xero (${already.Status.toLowerCase()})` }); continue; }
+    if (already && !test) { drafts.push({ ...base, status: "skipped", invoice_number: already.InvoiceNumber, contact_name: already.Contact.Name, reference: already.Reference, note: `Already in Xero (${already.Status.toLowerCase()})` }); continue; }
+    if (test && !already) { drafts.push({ ...base, status: "skipped", note: "Check: nothing in Xero for this month to compare with" }); continue; }
     const tpl = history.find((i) => dated(i) < m && i.Status !== "DRAFT" && (i.LineItems ?? []).some(priced));
     if (!tpl) { drafts.push({ ...base, status: "skipped", note: "No earlier invoice in the last 5 months to copy: raise this one by hand" }); continue; }
 
@@ -169,6 +174,15 @@ export async function prepareDrafts(admin: SupabaseClient, m: string) {
       })),
     };
     const total = lines.filter(priced).reduce((s, l) => s + l.Quantity! * l.UnitAmount!, 0);
+    if (test && already) {
+      const actual = Number(already.SubTotal ?? 0), diff = Math.round((total - actual) * 100) / 100;
+      drafts.push({
+        ...base, status: "skipped", invoice_number: already.InvoiceNumber, contact_name: tpl.Contact.Name, reference, total_net: total,
+        lines: lines.map((l) => ({ text: l.Description, qty: l.Quantity ?? null, rate: l.UnitAmount ?? null })), warnings,
+        note: diff === 0 ? `Check: matches ${already.InvoiceNumber} (£${actual})` : `Check: ${already.InvoiceNumber} was £${actual}, draft £${total} (${diff > 0 ? "+" : ""}${diff})`,
+      });
+      continue;
+    }
     drafts.push({
       ...base, status: "prepared", invoice_number: number, contact_name: tpl.Contact.Name, reference, total_net: total,
       lines: lines.map((l) => ({ text: l.Description, qty: l.Quantity ?? null, rate: l.UnitAmount ?? null })),
@@ -181,7 +195,10 @@ export async function prepareDrafts(admin: SupabaseClient, m: string) {
     const { error } = await admin.from("invoice_drafts").insert(drafts);
     if (error) throw new Error(error.message);
   }
-  return { prepared: drafts.filter((d) => d.status === "prepared").length, skipped: drafts.filter((d) => d.status === "skipped").length };
+  return {
+    prepared: drafts.filter((d) => d.status === "prepared").length, skipped: drafts.filter((d) => d.status === "skipped").length,
+    matched: drafts.filter((d) => d.note?.startsWith("Check: matches")).length, compared: drafts.filter((d) => d.note?.startsWith("Check:") && !d.note.includes("nothing in Xero")).length,
+  };
 }
 
 /** Sends the prepared drafts to Xero as DRAFT invoices and records the month as signed off. */
