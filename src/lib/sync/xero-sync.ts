@@ -101,10 +101,16 @@ export async function syncXero(admin: SupabaseClient) {
     const { data: projects } = await admin.from("projects").select("id,name,diary_aliases");
     const projByKey = new Map<string, string>();
     for (const p of projects ?? []) for (const a of [p.name, ...p.diary_aliases]) if (siteKey(a)) projByKey.set(siteKey(a), p.id);
+    const keys = [...projByKey.keys()];
     const projectFor = (ref?: string) => {
       if (!ref) return null;
-      const head = ref.split(/\s+[-–]\s+/)[0];
-      return projByKey.get(siteKey(head)) ?? projByKey.get(siteKey(ref)) ?? null;
+      const head = siteKey(ref.split(/\s+[-–]\s+/)[0]);
+      const exact = projByKey.get(head) ?? projByKey.get(siteKey(ref));
+      if (exact) return exact;
+      // shortened names ("Dukes Wharf", "WalesHigh"): accept only if every candidate is the same project
+      if (head.length < 5) return null;
+      const hits = new Set(keys.filter((k) => k.length >= 5 && (k.startsWith(head) || head.startsWith(k))).map((k) => projByKey.get(k)));
+      return hits.size === 1 ? [...hits][0]! : null;
     };
 
     const rows = [...open, ...closed].map((i) => ({
