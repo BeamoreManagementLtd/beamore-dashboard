@@ -114,3 +114,4 @@ input,select,textarea{background:var(--surface);border:1px solid var(--line);bor
   .nav{flex-direction:row;overflow-x:auto}
   main.work{padding:16px}
 }
+.linklike{background:none;border:0;padding:0;color:var(--link);cursor:pointer;font:inherit;text-decoration:underline}

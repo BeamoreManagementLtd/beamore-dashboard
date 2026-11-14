@@ -53,6 +53,14 @@ export async function startInfoChecklist(projectId: string, kind: "dfe" | "stand
   revalidatePath(`/projects/${projectId}`);
 }
 
+/** Corrects the automatic DfE decision; the automation won't change it back. */
+export async function setDfe(projectId: string, dfe: boolean) {
+  const me = await requireProfile();
+  const db = await createClient();
+  await db.from("projects").update({ is_dfe: dfe, dfe_evidence: `Set by ${me.full_name ?? me.email}` }).eq("id", projectId);
+  revalidatePath(`/projects/${projectId}`);
+}
+
 export async function addInfoItem(projectId: string, form: FormData) {
   await requireProfile();
   const item = s(form, "item");

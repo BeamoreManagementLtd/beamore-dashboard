@@ -99,6 +99,17 @@ export async function buildDueList(db: SupabaseClient, me: Profile): Promise<Due
   for (const [pid, x] of byProj)
     items.push({ key: `info-${pid}`, kind: "Projects", title: `${x.name}: chase the client for project information`, detail: x.items.join(", "), due: addDays(x.since, 7), link: `/projects/${pid}`, ...ownerOf(null, "Judy") });
 
+  // ---- replies to cost proposals that read like a go-ahead (director confirms; nothing changes by itself)
+  if (director) {
+    const { data: ga } = await db.from("project_events").select("id,project_id,happened_at,who,body,projects(display_name,stage)")
+      .eq("kind", "Possible go-ahead").gte("happened_at", addDays(t, -21));
+    for (const e of ga ?? []) {
+      const p = e.projects as unknown as { display_name: string; stage: string } | null;
+      if (!p || ["won_arranging", "won_preparing", "live", "complete", "lost"].includes(p.stage)) continue;
+      items.push({ key: `goahead-${e.id}`, kind: "Projects", title: `Possible go-ahead: ${p.display_name}`, detail: `${e.who}: ${(e.body ?? "").replace(/\s*\[[^\]]+\]$/, "").slice(0, 120)}. If won, change its stage`, due: e.happened_at.slice(0, 10), link: `/projects/${e.project_id}`, ...ownerOf(me.id, null) });
+    }
+  }
+
   // ---- project next actions
   for (const p of projects.data ?? [])
     items.push({ key: `project-${p.id}`, kind: "Projects", title: `${p.display_name}: ${p.next_action ?? "next action"}`, due: p.next_action_due, link: "/projects", ...ownerOf(p.owner_id, null) });

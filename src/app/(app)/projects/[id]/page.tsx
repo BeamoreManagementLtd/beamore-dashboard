@@ -3,7 +3,7 @@ import { notFound } from "next/navigation";
 import { requireProfile } from "@/lib/auth";
 import { createClient } from "@/lib/supabase/server";
 import { gbp, fd, today, daysBetween, CHASE_STATUS } from "@/lib/format";
-import { saveProject, addAlias, startInfoChecklist, addInfoItem, requestOutstanding, setInfoReceived, removeInfoItem, addProjectEvent } from "../actions";
+import { saveProject, addAlias, setDfe, startInfoChecklist, addInfoItem, requestOutstanding, setInfoReceived, removeInfoItem, addProjectEvent } from "../actions";
 
 export const dynamic = "force-dynamic";
 
@@ -22,7 +22,7 @@ export default async function Project({ params }: { params: Promise<{ id: string
   const { data: p } = await db.from("projects").select("*,clients(name)").eq("id", id).maybeSingle();
   if (!p) notFound();
   const [{ data: info }, { data: pevents }] = await Promise.all([
-    db.from("project_info").select("id,item,requested_on,received_on").eq("project_id", id).order("created_at"),
+    db.from("project_info").select("id,item,requested_on,received_on,hint,hint_thread,auto").eq("project_id", id).order("created_at"),
     db.from("project_events").select("id,happened_at,source,kind,who,body").eq("project_id", id).order("happened_at", { ascending: false }).limit(40),
   ]);
   const [months, { data: invoices }, { data: onSite }, { data: queue }, { data: log }, { data: contacts }, { data: staff }, { data: fin }] = await Promise.all([
@@ -66,7 +66,7 @@ export default async function Project({ params }: { params: Promise<{ id: string
     : waitingOn.length ? { tone: oldest && daysBetween(oldest, t) > 7 ? "bad" : "warn", title: "Waiting on the client", text: `for ${waitingOn.map((i) => i.item).join(", ")} (asked ${fd(oldest)}${daysBetween(oldest, t) > 7 ? `, ${daysBetween(oldest, t)} days ago: chase` : ""}).` }
     : notAsked.length ? { tone: "bad", title: "Ball is in our court.", text: `${notAsked.length} item${notAsked.length > 1 ? "s" : ""} not asked for yet: ${notAsked.map((i) => i.item).join(", ")}.` }
     : { tone: "good", title: "All project information received.", text: "" };
-  const look = (kind: string) => kind === "Email received" || kind === "Info received" ? "in" : kind === "Email sent" || kind === "Info requested" ? "out" : kind === "Phone call" || kind === "Note" ? "team" : "xero";
+  const look = (kind: string) => kind === "Email received" || kind === "Info received" || kind === "Possible go-ahead" ? "in" : kind === "Email sent" || kind === "Info requested" ? "out" : kind === "Phone call" || kind === "Note" ? "team" : "xero";
 
   return (
     <>
@@ -74,7 +74,10 @@ export default async function Project({ params }: { params: Promise<{ id: string
       <div className="head">
         <div>
           <h1>{p.display_name}</h1>
-          <p>{(p.clients as unknown as { name: string } | null)?.name ?? "No client yet"}{p.proposal_folder ? ` · ${p.proposal_folder}` : ""}</p>
+          <p>{(p.clients as unknown as { name: string } | null)?.name ?? "No client yet"}{p.proposal_folder ? ` · ${p.proposal_folder}` : ""}{" "}
+            {p.is_dfe === true && <span className="pill warn" title={p.dfe_evidence ?? ""}>DfE project</span>}
+            {p.is_dfe === false && <span className="pill neutral" title={p.dfe_evidence ?? ""}>Not DfE</span>}</p>
+          {p.is_dfe != null && <div className="small muted">{p.is_dfe ? `Why DfE: ${p.dfe_evidence}` : p.dfe_evidence} · <form action={setDfe.bind(null, p.id, !p.is_dfe)} style={{ display: "inline" }}><button className="linklike" type="submit">{p.is_dfe ? "Not DfE?" : "Actually DfE?"}</button></form></div>}
         </div>
       </div>
 
@@ -104,7 +107,8 @@ export default async function Project({ params }: { params: Promise<{ id: string
             <table><tbody>
               {items.map((i) => (
                 <tr key={i.id}>
-                  <td>{i.item}</td>
+                  <td>{i.item}
+                    {!i.received_on && i.hint && <span className="two">Possibly in {i.hint}{i.hint_thread && <> · <a href={`https://mail.google.com/mail/u/0/#all/${i.hint_thread}`} target="_blank" rel="noopener">open ↗</a></>}</span>}</td>
                   <td className="small">{i.received_on ? <span className="pill good">Received {fd(i.received_on)}</span>
                     : i.requested_on ? <span className={`pill ${daysBetween(i.requested_on, t) > 7 ? "bad" : "warn"}`}>Asked {fd(i.requested_on)}</span>
                     : <span className="pill neutral">Not asked yet</span>}</td>
