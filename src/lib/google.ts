@@ -1,13 +1,14 @@
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
-// Drive: read everything (diary, reports, proposals); drive.file lets it create project folders and save files into them,
-// touching only files it created itself, never deleting yours. Gmail: read (chases, replies) and compose, used only to
-// save drafts in the Drafts folder. The dashboard never sends anything (Ronan's rule).
+// Drive: read everything (diary, reports, proposals) and create project folders inside the existing Work/Schools and
+// Work/Others folders (which needs normal Drive access because the dashboard didn't make those folders). The code only
+// ever creates folders and files; it never deletes, moves or trashes. Gmail: read (chases, replies) and compose, used
+// only to save drafts in the Drafts folder. The dashboard never sends anything (Ronan's rule).
 export const GOOGLE_SCOPES = process.env.GOOGLE_SCOPES ??
-  "openid email https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.compose";
+  "openid email https://www.googleapis.com/auth/drive https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.compose";
 /** Connections made before this lack drive.file and gmail.compose (project folders, drafts). */
-export const GOOGLE_SCOPES_CHANGED_AT = "2026-11-14T21:00:00Z";
+export const GOOGLE_SCOPES_CHANGED_AT = "2026-11-14T21:30:00Z";
 
 type Tokens = { access_token: string; refresh_token?: string; expires_in: number; id_token?: string };
 
@@ -77,6 +78,13 @@ export async function driveClient(admin: SupabaseClient) {
   };
   return {
     connection: c,
+    /** POST JSON to a Google API (creating Drive folders, saving Gmail drafts). Nothing in the dashboard sends or deletes. */
+    post: async <T>(url: string, body: unknown) => {
+      if (/\/send\b|\/delete\b|\/trash\b/.test(url)) throw new Error("The dashboard never sends, deletes or trashes anything");
+      const res = await fetch(url, { method: "POST", headers: { Authorization: `Bearer ${access}`, "Content-Type": "application/json" }, body: JSON.stringify(body), cache: "no-store" });
+      if (!res.ok) throw new Error(`Google ${url.includes("gmail") ? "Gmail" : "Drive"} ${res.status}: ${(await res.text()).slice(0, 200)}`);
+      return res.json() as Promise<T>;
+    },
     /** Gmail API (users/me), e.g. gmail("threads", { q }) */
     gmail: async <T>(path: string, params: Record<string, string | string[]>) => {
       const q = new URLSearchParams();

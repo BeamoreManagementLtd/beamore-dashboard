@@ -1,11 +1,12 @@
 import type { Stage, Status, Step } from "@/lib/workflow";
-import { markStep, setOutcome, setClerk, setPo, closeOutAnswer } from "../actions";
+import { markStep, setOutcome, setClerk, setPo, closeOutAnswer, setFolderKind, redraftInfoRequest } from "../actions";
+import { FOLDER_KINDS } from "@/lib/folder-kinds";
 
 /** The project's workflow: stages across the top, then the current stage's steps (green done, amber waiting, grey to come). */
 const WHO = { us: "Waiting on us", client: "Waiting on the client", you: "Waiting on you", admin: "Waiting on the admin team", clerk: "Waiting on the clerk" } as const;
 
-export function WorkflowPanel({ projectId, stages, current, clerks, ticked, status }: {
-  projectId: string; status: Status; stages: Stage[]; current: string; clerks: { id: string; name: string }[]; ticked: Set<string>;
+export function WorkflowPanel({ projectId, stages, current, clerks, ticked, status, folder }: {
+  projectId: string; status: Status; folder: { id: string | null; kind: string }; stages: Stage[]; current: string; clerks: { id: string; name: string }[]; ticked: Set<string>;
 }) {
   const open = stages.find((s) => s.state === "now") ?? stages[stages.length - 1];
   const count = (s: Stage) => `${s.steps.filter((x) => x.state === "done").length} of ${s.steps.length}`;
@@ -31,6 +32,20 @@ export function WorkflowPanel({ projectId, stages, current, clerks, ticked, stat
           <a className="small" href={`/personnel?project=${projectId}#new`}>New to Beamore?</a>
         </form>
       );
+    if (st.id === "S4")
+      return (
+        <span className="wf-ctl">
+          {folder.id && <a className="small" href={`https://drive.google.com/drive/folders/${folder.id}`} target="_blank" rel="noopener">Open folder ↗</a>}
+          <form action={setFolderKind.bind(null, projectId)} className="wf-inline">
+            <select name="kind" defaultValue={folder.kind} aria-label="Folder type">
+              {Object.entries(FOLDER_KINDS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+            </select>
+            <button className="btn">{folder.id ? "Fix folders" : "Make folder"}</button>
+          </form>
+        </span>
+      );
+    if (st.id === "S2" && st.state !== "done")
+      return <form action={redraftInfoRequest.bind(null, projectId)} className="wf-ctl"><button className="btn">Draft the email</button></form>;
     if (st.id === "S6" && st.state !== "done")
       return (
         <form action={setPo.bind(null, projectId)} className="wf-ctl wf-inline">

@@ -151,7 +151,13 @@ export async function setOutcome(projectId: string, form: FormData) {
   const reason = String(form.get("reason") ?? "").trim() || null;
   const { db } = await workflowLog(projectId, outcome === "won" ? "Won" : "Lost", outcome === "won" ? "Project won" : `Lost${reason ? `: ${reason}` : ""}`);
   await db.from("projects").update(outcome === "won" ? { stage: "won_arranging" } : { stage: "lost", lost_reason: reason }).eq("id", projectId);
+  if (outcome === "won") {
+    const { onWon } = await import("@/lib/project-setup");
+    const { createServiceClient } = await import("@/lib/supabase/server");
+    await onWon(createServiceClient(), projectId);
+  }
   revalidatePath(`/projects/${projectId}`);
+  revalidatePath("/workflows");
   revalidatePath("/projects");
 }
 
@@ -189,4 +195,31 @@ export async function closeOutAnswer(projectId: string, answer: "finished" | "pa
   }
   revalidatePath(`/projects/${projectId}`);
   revalidatePath("/projects");
+}
+
+/** S4: which kind of folder (DfE school, other school, other, cladding); makes or fixes the Drive folder. */
+export async function setFolderKind(projectId: string, form: FormData) {
+  await requireProfile();
+  const kind = String(form.get("kind") ?? "");
+  const { FOLDER_KINDS, ensureProjectFolder } = await import("@/lib/project-setup");
+  if (!(kind in FOLDER_KINDS)) return;
+  const { createServiceClient } = await import("@/lib/supabase/server");
+  const admin = createServiceClient();
+  await admin.from("projects").update({ folder_kind: kind }).eq("id", projectId);
+  try { await ensureProjectFolder(admin, projectId); } catch (e) {
+    await admin.from("project_events").insert({ project_id: projectId, source: "dashboard", kind: "Set-up problem", who: "Dashboard", body: `Drive folder not done yet: ${e instanceof Error ? e.message : String(e)}`.slice(0, 300) });
+  }
+  revalidatePath(`/projects/${projectId}`);
+}
+
+/** S2: (re)make the Gmail draft asking the client for the outstanding items. Only ever a draft. */
+export async function redraftInfoRequest(projectId: string) {
+  await requireProfile();
+  const { draftInfoRequest } = await import("@/lib/project-setup");
+  const { createServiceClient } = await import("@/lib/supabase/server");
+  const admin = createServiceClient();
+  try { await draftInfoRequest(admin, projectId); } catch (e) {
+    await admin.from("project_events").insert({ project_id: projectId, source: "dashboard", kind: "Set-up problem", who: "Dashboard", body: `Info request draft not done: ${e instanceof Error ? e.message : String(e)}`.slice(0, 300) });
+  }
+  revalidatePath(`/projects/${projectId}`);
 }

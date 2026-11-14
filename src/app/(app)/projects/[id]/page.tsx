@@ -5,6 +5,7 @@ import { createClient } from "@/lib/supabase/server";
 import { gbp, fd, today, daysBetween, CHASE_STATUS } from "@/lib/format";
 import { loadWorkflow } from "@/lib/workflow";
 import { WorkflowPanel } from "./workflow-panel";
+import { guessFolderKind } from "@/lib/folder-kinds";
 import { saveProject, addAlias, setDfe, startInfoChecklist, addInfoItem, requestOutstanding, setInfoReceived, removeInfoItem, addProjectEvent } from "../actions";
 
 export const dynamic = "force-dynamic";
@@ -94,7 +95,7 @@ export default async function Project({ params }: { params: Promise<{ id: string
         <div className={`tile ${owed ? "alert" : ""}`}><span className="label">Outstanding invoices</span><span className="big">{gbp(owed)}</span><span className="sub">{invoices?.length ?? 0} invoice{invoices?.length === 1 ? "" : "s"}</span></div>
       </div>
 
-      <WorkflowPanel projectId={p.id} stages={wf.stages} current={wf.current} clerks={clerkList ?? []} ticked={new Set(wf.ticked)} status={wf.status} />
+      <WorkflowPanel projectId={p.id} stages={wf.stages} current={wf.current} clerks={clerkList ?? []} ticked={new Set(wf.ticked)} status={wf.status} folder={{ id: p.drive_folder_id ?? null, kind: p.folder_kind ?? guessFolderKind(p) }} />
 
       {infoBanner && <p className={`callout ${infoBanner.tone}`}><b>{infoBanner.title}</b> {infoBanner.text}</p>}
       <div className="grid2">

@@ -3,6 +3,7 @@ import JSZip from "jszip";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { driveClient } from "@/lib/google";
 import { INFO_DFE, INFO_STANDARD } from "@/lib/project-info";
+import { ensureProjectFolder } from "@/lib/project-setup";
 
 /**
  * Project intake (hourly, read only):
@@ -167,6 +168,23 @@ export async function runIntake(admin: SupabaseClient) {
       }
     }
 
+    // ---- 3c. won projects: retry the folder / draft if Google wasn't ready; notice the info request going out (S2)
+    let setupDone = 0, requestsSent = 0;
+    const { data: wonNow } = await admin.from("projects").select("id,name,drive_folder_id").in("stage", ["won_arranging", "won_preparing"]).not("stage_changed_at", "is", null);
+    for (const p of wonNow ?? []) {
+      if (!p.drive_folder_id) { try { await ensureProjectFolder(admin, p.id); setupDone++; } catch { /* logged on Won; try again next hour */ } }
+      const { data: drafted } = await admin.from("project_events").select("happened_at").eq("project_id", p.id).eq("kind", "Info request drafted").order("happened_at", { ascending: false }).limit(1);
+      const { count: waiting } = await admin.from("project_info").select("id", { count: "exact", head: true }).eq("project_id", p.id).is("requested_on", null).is("received_on", null);
+      if (!drafted?.[0] || !waiting) continue;
+      const since = Math.floor(Date.parse(drafted[0].happened_at) / 1000) - 60;
+      const sent = await q(`in:sent subject:${quoted(p.name)} after:${since}`, 1);
+      if (!sent.messages?.length) continue;
+      const day = new Date().toISOString().slice(0, 10);
+      await admin.from("project_info").update({ requested_on: day }).eq("project_id", p.id).is("requested_on", null).is("received_on", null);
+      await admin.from("project_events").insert({ project_id: p.id, source: "gmail", kind: "Info requested", who: "You", body: "Request for project information sent (found in sent email)" });
+      requestsSent++;
+    }
+
     // ---- 4. replies to cost proposals that look like a go-ahead (logged once per message)
     const replies = await q('(subject:proposal OR subject:"fee") (instruct OR "go ahead" OR "pleased to confirm" OR "happy to proceed" OR appoint OR "purchase order") -from:me newer_than:14d', 20);
     for (const m of replies.messages ?? []) {
@@ -181,7 +199,7 @@ export async function runIntake(admin: SupabaseClient) {
       goAheads++;
     }
 
-    const msgText = `${classified} projects checked for DfE, ${started} checklists started, ${hinted} checklist items found in email, ${sentFound} proposals found sent, ${replies4} client replies, ${goAheads} possible go-aheads`;
+    const msgText = `${classified} projects checked for DfE, ${started} checklists started, ${hinted} checklist items found in email, ${sentFound} proposals found sent, ${replies4} client replies, ${setupDone} folders made, ${requestsSent} info requests seen sent, ${goAheads} possible go-aheads`;
     await finish(true, msgText);
     return { ok: true, message: msgText };
   } catch (e) {
