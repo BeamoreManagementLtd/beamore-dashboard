@@ -78,6 +78,7 @@ export default async function Project({ params }: { params: Promise<{ id: string
             {p.is_dfe === true && <span className="pill warn" title={p.dfe_evidence ?? ""}>DfE project</span>}
             {p.is_dfe === false && <span className="pill neutral" title={p.dfe_evidence ?? ""}>Not DfE</span>}</p>
           {p.is_dfe != null && <div className="small muted">{p.is_dfe ? `Why DfE: ${p.dfe_evidence}` : p.dfe_evidence} · <form action={setDfe.bind(null, p.id, !p.is_dfe)} style={{ display: "inline" }}><button className="linklike" type="submit">{p.is_dfe ? "Not DfE?" : "Actually DfE?"}</button></form></div>}
+          {p.is_dfe == null && p.dfe_evidence?.startsWith("Unsure") && <div className="callout warn">Is this a DfE project? {p.dfe_evidence.replace(/^Unsure: /, "")}. <form action={setDfe.bind(null, p.id, true)} style={{ display: "inline" }}><button className="btn" type="submit">Yes, DfE</button></form> <form action={setDfe.bind(null, p.id, false)} style={{ display: "inline" }}><button className="btn" type="submit">No</button></form></div>}
         </div>
       </div>
 

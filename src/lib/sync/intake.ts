@@ -16,6 +16,8 @@ import { INFO_DFE, INFO_STANDARD } from "@/lib/project-info";
  */
 const STARTING = ["won_arranging", "won_preparing", "live"];
 const STRONG = [/\bDfE\b/, /department for education/i, /education\.gov\.uk/i, /\bSRP\s?\d{3,4}\b/i, /school rebuilding programme/i, /\bTAS\s?2[15]\b/i];
+// a school-type name with no DfE signs is a question for the director, not a "no"
+const SCHOOLISH = /(school|academy|college|primary|high|grammar|sixth form|infant|junior|SEN)/i;
 const MEDIUM = [/\bCQM\b/, /construction quality monitor/i, /technical advis[eo]r/i, /\bDfE CoW\b/i];
 
 export function classifyDfe(texts: { source: string; text: string }[]) {
@@ -25,7 +27,7 @@ export function classifyDfe(texts: { source: string; text: string }[]) {
     for (const re of STRONG) { const m = re.exec(text); if (m) { score += 2; hits.push(`"${m[0]}" in ${source}`); } }
     for (const re of MEDIUM) { const m = re.exec(text); if (m) { score += 1; hits.push(`"${m[0]}" in ${source}`); } }
   }
-  return { dfe: score >= 2, decided: score >= 2 || texts.length > 0, evidence: [...new Set(hits)].slice(0, 4).join("; ") };
+  return { dfe: score >= 2, score, evidence: [...new Set(hits)].slice(0, 4).join("; ") };
 }
 
 // what to look for in email for each checklist item
@@ -59,13 +61,13 @@ export async function runIntake(admin: SupabaseClient) {
     const quoted = (name: string) => `"${name.replace(/"/g, "")}"`;
 
     const { data: projects } = await admin.from("projects")
-      .select("id,number,name,display_name,stage,is_dfe,stage_changed_at,proposal_folder,diary_aliases")
+      .select("id,number,name,display_name,stage,is_dfe,dfe_evidence,stage_changed_at,proposal_folder,diary_aliases")
       .in("stage", [...STARTING, "sent", "pricing", "enquiry"]);
     let classified = 0, started = 0, hinted = 0, goAheads = 0;
 
     // ---- 1. DfE or not, for live/won projects not yet decided
     // newly started projects first; the backlog of existing live jobs is spread over a few hourly runs
-    const undecided = (projects ?? []).filter((p) => STARTING.includes(p.stage) && p.is_dfe == null)
+    const undecided = (projects ?? []).filter((p) => STARTING.includes(p.stage) && p.is_dfe == null && !p.dfe_evidence?.startsWith("Unsure"))
       .sort((a, b) => (b.stage_changed_at ? 1 : 0) - (a.stage_changed_at ? 1 : 0)).slice(0, 25);
     for (const p of undecided) {
       const texts: { source: string; text: string }[] = [{ source: "project name", text: `${p.name} ${p.diary_aliases.join(" ")}` }];
@@ -97,7 +99,12 @@ export async function runIntake(admin: SupabaseClient) {
           c = classifyDfe(texts);
         }
       }
-      await admin.from("projects").update({ is_dfe: c.dfe, dfe_evidence: c.dfe ? c.evidence : "No DfE signs in the project's name, invoices, reports, recent emails or proposal" }).eq("id", p.id);
+      const unsure = !c.dfe && (c.score === 1 || SCHOOLISH.test(`${p.name} ${p.display_name}`));
+      await admin.from("projects").update(c.dfe
+        ? { is_dfe: true, dfe_evidence: c.evidence }
+        : unsure
+          ? { is_dfe: null, dfe_evidence: `Unsure: ${c.score === 1 ? `only a weak sign (${c.evidence})` : "sounds like a school but no DfE signs found"}` }
+          : { is_dfe: false, dfe_evidence: "No DfE signs in the project's name, invoices, reports, recent emails or proposal" }).eq("id", p.id);
       classified++;
     }
 

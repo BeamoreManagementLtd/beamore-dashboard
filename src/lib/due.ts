@@ -99,6 +99,13 @@ export async function buildDueList(db: SupabaseClient, me: Profile): Promise<Due
   for (const [pid, x] of byProj)
     items.push({ key: `info-${pid}`, kind: "Projects", title: `${x.name}: chase the client for project information`, detail: x.items.join(", "), due: addDays(x.since, 7), link: `/projects/${pid}`, ...ownerOf(null, "Judy") });
 
+  // ---- the DfE check couldn't decide: ask the director rather than guess
+  if (director) {
+    const { data: unsure } = await db.from("projects").select("id,display_name,dfe_evidence").is("is_dfe", null).like("dfe_evidence", "Unsure%");
+    for (const p of unsure ?? [])
+      items.push({ key: `dfe-${p.id}`, kind: "Projects", title: `Is ${p.display_name} a DfE project?`, detail: `${(p.dfe_evidence ?? "").replace(/^Unsure: /, "")}. Answer on the project page (sets the right checklist)`, due: t, link: `/projects/${p.id}`, ...ownerOf(me.id, null) });
+  }
+
   // ---- replies to cost proposals that read like a go-ahead (director confirms; nothing changes by itself)
   if (director) {
     const { data: ga } = await db.from("project_events").select("id,project_id,happened_at,who,body,projects(display_name,stage)")
