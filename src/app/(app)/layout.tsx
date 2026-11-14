@@ -17,7 +17,8 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   return (
     <div className="shell">
       <aside className="side">
-        <div className="brand"><span className="brand-mark">BM</span>Beamore</div>
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <Link href="/" className="brand"><img src="/beamore-logo.jpg" alt="Beamore" /><span><b>Beamore</b><small>Management</small></span></Link>
         <nav className="nav">
           {nav.map(([href, label]) => (
             <Link key={href} href={href}>{label}{label === "Finance" && <span className="ronly">Director</span>}</Link>

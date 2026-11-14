@@ -1,7 +1,10 @@
 /* Layout: left register rail + working area. Same tokens as the reviewed prototype. */
+/* Beamore brand (beamore.co.uk): red #DA4444, charcoal #484848, grey #8E8E8E, teal links #5199A8; Montserrat headings */
 :root{
-  --bg:#f2f4f6; --surface:#ffffff; --surface-2:#f6f8fa; --ink:#162029; --muted:#5a6674; --line:#dde3e9;
-  --accent:#20577d; --accent-ink:#ffffff; --accent-soft:#e1ecf4;
+  --brand:#da4444; --brand-soft:#fbe9e9;
+  --bg:#f4f4f4; --surface:#ffffff; --surface-2:#f7f7f7; --ink:#2b2b2b; --muted:#6b6b6b; --line:#e2e2e2;
+  --accent:#484848; --accent-ink:#ffffff; --accent-soft:#ececec; --link:#3b7d8b;
+  --heading:"Montserrat",system-ui,sans-serif;
   --good:#1c784c; --good-soft:#e0f1e8; --warn:#a4620a; --warn-soft:#fbeed6; --bad:#b1322a; --bad-soft:#f8e2df;
   --neutral:#56616e; --neutral-soft:#eaeef2; --ronan:#6a4c93; --ronan-soft:#efe9f6;
   --font:"Instrument Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
@@ -9,17 +12,18 @@
   color-scheme: light;
 }
 @media (prefers-color-scheme: dark){:root{
-  --bg:#0e1318; --surface:#161d24; --surface-2:#1b232c; --ink:#e4e9ef; --muted:#96a2af; --line:#27313b;
-  --accent:#6aacd9; --accent-ink:#0a1722; --accent-soft:#17303f;
+  --brand:#ef7272; --brand-soft:#3a1c1c;
+  --bg:#141414; --surface:#1c1c1c; --surface-2:#232323; --ink:#ececec; --muted:#a3a3a3; --line:#323232;
+  --accent:#d6d6d6; --accent-ink:#141414; --accent-soft:#2c2c2c; --link:#7cc0ce;
   --good:#52c28d; --good-soft:#142f20; --warn:#e2a548; --warn-soft:#342711; --bad:#ef7c71; --bad-soft:#391b18;
   --neutral:#a6b0bb; --neutral-soft:#222b34; --ronan:#b99be0; --ronan-soft:#2a2238; color-scheme:dark}}
 *{box-sizing:border-box}
 html,body{margin:0}
 body{background:var(--bg);color:var(--ink);font-family:var(--font);font-size:14px;line-height:1.45}
-h1,h2,h3{margin:0;text-wrap:balance;font-weight:600;letter-spacing:-.01em}
+h1,h2,h3{margin:0;text-wrap:balance;font-weight:600;letter-spacing:-.01em;font-family:var(--heading)}
 h1{font-size:23px} h2{font-size:15.5px} h3{font-size:14px}
 p{margin:0}
-a{color:var(--accent)}
+a{color:var(--link)}
 button,input,select,textarea{font:inherit;color:inherit}
 :focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .muted{color:var(--muted)} .small{font-size:12.5px} .mono{font-family:var(--mono);font-size:12.5px}
@@ -28,12 +32,14 @@ button,input,select,textarea{font:inherit;color:inherit}
 .label{font-size:11px;text-transform:uppercase;letter-spacing:.07em;color:var(--muted);font-weight:600}
 
 .shell{display:grid;grid-template-columns:220px minmax(0,1fr);min-height:100vh}
-.side{background:var(--surface);border-right:1px solid var(--line);padding:18px 12px;display:flex;flex-direction:column;gap:18px;position:sticky;top:0;height:100vh}
-.brand{display:flex;align-items:center;gap:10px;font-weight:700;font-size:14.5px;padding:0 6px}
-.brand-mark{width:28px;height:28px;border-radius:7px;background:var(--accent);color:var(--accent-ink);display:grid;place-items:center;font-size:12px;font-weight:700}
+.side{background:var(--surface);border-right:1px solid var(--line);border-top:4px solid var(--brand);padding:18px 12px;display:flex;flex-direction:column;gap:18px;position:sticky;top:0;height:100vh}
+.brand{display:flex;align-items:center;gap:10px;padding:0 6px;text-decoration:none;color:var(--ink)}
+.brand img{width:40px;height:40px;object-fit:contain;border-radius:6px;background:#fff}
+.brand b{font-family:var(--heading);font-size:14px;line-height:1.15;display:block}
+.brand small{color:var(--brand);font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase}
 .nav{display:flex;flex-direction:column;gap:2px}
-.nav a{display:flex;justify-content:space-between;padding:8px 10px;border-radius:8px;text-decoration:none;color:var(--ink);font-weight:500}
-.nav a:hover{background:var(--surface-2)}
+.nav a{display:flex;justify-content:space-between;padding:8px 10px;border-radius:8px;text-decoration:none;color:var(--ink);font-weight:500;border-left:3px solid transparent}
+.nav a:hover{background:var(--surface-2);border-left-color:var(--brand)}
 .me{margin-top:auto;font-size:12.5px;color:var(--muted);padding:0 6px}
 main.work{padding:22px 26px 48px;min-width:0;display:flex;flex-direction:column;gap:18px}
 .head{display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;justify-content:space-between}
