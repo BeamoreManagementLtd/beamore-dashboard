@@ -162,3 +162,4 @@ input,select,textarea{background:var(--surface);border:1px solid var(--line);bor
 .join-form h2{font-size:16px;margin-top:10px}
 .join-ppe{display:flex;flex-wrap:wrap;gap:8px 16px}
 .join-ppe label{display:inline-flex;gap:6px;align-items:center;font-size:14px}
+tr.now-row td{background:var(--warn-soft)} b.over{color:var(--bad)}

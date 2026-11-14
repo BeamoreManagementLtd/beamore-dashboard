@@ -3,7 +3,7 @@ import JSZip from "jszip";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { driveClient } from "@/lib/google";
 import { INFO_DFE, INFO_STANDARD } from "@/lib/project-info";
-import { ensureProjectFolder, saveProjectAttachments } from "@/lib/project-setup";
+import { ensureProjectFolder, saveProjectAttachments, onWon } from "@/lib/project-setup";
 
 /**
  * Project intake (hourly, read only):
@@ -110,16 +110,24 @@ export async function runIntake(admin: SupabaseClient) {
       classified++;
     }
 
-    // ---- 2. projects that started since the automation began: start the right checklist
-    const { data: fresh } = await admin.from("projects").select("id,display_name,is_dfe,dfe_evidence,stage")
-      .in("stage", STARTING).not("stage_changed_at", "is", null).not("is_dfe", "is", null);
+    // ---- 2. every won/live project gets the right checklist (DfE or standard) without anyone clicking.
+    // Jobs already running before the dashboard: the client sent all this long ago, so the items are ticked as
+    // "assumed received" (untick any that are really missing) instead of being chased.
+    const { data: fresh } = await admin.from("projects").select("id,display_name,is_dfe,dfe_evidence,stage,stage_changed_at")
+      .in("stage", STARTING).not("is_dfe", "is", null);
+    const { data: hasList } = await admin.from("project_info").select("project_id");
+    const listed = new Set((hasList ?? []).map((h) => h.project_id));
     for (const p of fresh ?? []) {
-      const { count } = await admin.from("project_info").select("id", { count: "exact", head: true }).eq("project_id", p.id);
-      if (count) continue;
+      if (listed.has(p.id)) continue;
       const list = p.is_dfe ? INFO_DFE : INFO_STANDARD;
-      await admin.from("project_info").insert(list.map((item) => ({ project_id: p.id, item, auto: true })));
-      await admin.from("project_events").insert({ project_id: p.id, source: "dashboard", kind: "Checklist started",
-        who: "Dashboard", body: `${p.is_dfe ? "DfE" : "Standard"} checklist started automatically when the project started. ${p.is_dfe ? `Why DfE: ${p.dfe_evidence}` : ""}`.trim() });
+      const running = !p.stage_changed_at && p.stage === "live";
+      const today = new Date().toISOString().slice(0, 10);
+      await admin.from("project_info").insert(list.map((item) => ({ project_id: p.id, item, auto: true,
+        ...(running ? { received_on: today, note: "Assumed received: the project was running before the dashboard" } : {}) })));
+      await admin.from("project_events").insert({ project_id: p.id, source: "dashboard", kind: "Checklist started", who: "Dashboard",
+        body: (running
+          ? `${p.is_dfe ? "DfE" : "Standard"} checklist added. The job was already running, so every item is ticked as received; untick any that are missing and they'll be chased.`
+          : `${p.is_dfe ? "DfE" : "Standard"} checklist started automatically when the project started.`) + (p.is_dfe ? ` Why DfE: ${p.dfe_evidence}` : "") });
       started++;
     }
 
@@ -172,7 +180,11 @@ export async function runIntake(admin: SupabaseClient) {
     let setupDone = 0, requestsSent = 0;
     const { data: wonNow } = await admin.from("projects").select("id,name,drive_folder_id").in("stage", ["won_arranging", "won_preparing"]).not("stage_changed_at", "is", null);
     for (const p of wonNow ?? []) {
-      if (!p.drive_folder_id) { try { await ensureProjectFolder(admin, p.id); setupDone++; } catch { /* logged on Won; try again next hour */ } }
+      if (!p.drive_folder_id) {
+        // won some other way than the Won button (stage changed on the project, or here): run the whole set-up once
+        const { count: drafted } = await admin.from("project_events").select("id", { count: "exact", head: true }).eq("project_id", p.id).in("kind", ["Info request drafted", "Set-up problem"]);
+        try { if (drafted) await ensureProjectFolder(admin, p.id); else await onWon(admin, p.id); setupDone++; } catch { /* logged; try again next hour */ }
+      }
       const { data: drafted } = await admin.from("project_events").select("happened_at").eq("project_id", p.id).eq("kind", "Info request drafted").order("happened_at", { ascending: false }).limit(1);
       const { count: waiting } = await admin.from("project_info").select("id", { count: "exact", head: true }).eq("project_id", p.id).is("requested_on", null).is("received_on", null);
       if (!drafted?.[0] || !waiting) continue;

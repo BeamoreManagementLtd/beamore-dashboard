@@ -25,7 +25,8 @@ export default async function Project({ params }: { params: Promise<{ id: string
   const monthStart = `${t.slice(0, 7)}-01`;
   const { data: p } = await db.from("projects").select("*,clients(name)").eq("id", id).maybeSingle();
   if (!p) notFound();
-  const [wf, { data: clerkList }] = await Promise.all([loadWorkflow(db, p), db.from("clerks").select("id,name").eq("active", true).order("name")]);
+  const [wf, { data: clerkList }, { data: plan }] = await Promise.all([loadWorkflow(db, p), db.from("clerks").select("id,name").eq("active", true).order("name"),
+    db.from("project_planned_months").select("month,building,me").eq("project_id", p.id).order("month")]);
   const [{ data: info }, { data: pevents }] = await Promise.all([
     db.from("project_info").select("id,item,requested_on,received_on,hint,hint_thread,auto").eq("project_id", id).order("created_at"),
     db.from("project_events").select("id,happened_at,source,kind,who,body").eq("project_id", id).order("happened_at", { ascending: false }).limit(40),
@@ -43,13 +44,17 @@ export default async function Project({ params }: { params: Promise<{ id: string
 
   // months: charged/planned by kind
   type M = { month: string; kind: string; side: string; days: number };
-  const rows = new Map<string, { b: number; me: number; planned: number }>();
+  const rows = new Map<string, { b: number; me: number; planned: number; plan: number }>();
+  // the plan from the latest cost sheet covers every month of the job, including ones not in the diary yet
+  for (const m of plan ?? []) rows.set(m.month, { b: 0, me: 0, planned: 0, plan: Number(m.building) + Number(m.me) });
   for (const r of (months.data ?? []) as M[]) {
-    const x = rows.get(r.month) ?? { b: 0, me: 0, planned: 0 };
+    const x = rows.get(r.month) ?? { b: 0, me: 0, planned: 0, plan: 0 };
     if (r.side === "planned") x.planned += Number(r.days); else if (r.kind === "me") x.me += Number(r.days); else x.b += Number(r.days);
     rows.set(r.month, x);
   }
+  const sorted = [...rows].sort(([a], [b]) => a.localeCompare(b));
   const charged = [...rows.values()].reduce((s, x) => s + x.b + x.me, 0);
+  const planTotal = (plan ?? []).reduce((s, m) => s + Number(m.building) + Number(m.me), 0);
   const agreed = (Number(p.agreed_days_building ?? 0) + Number(p.agreed_days_me ?? 0)) || null;
   const thisMonth = rows.get(monthStart);
   const clerks = new Map<string, { planned: number; charged: number }>();
@@ -168,11 +173,13 @@ export default async function Project({ params }: { params: Promise<{ id: string
       <div className="grid2">
         <section className="panel">
           <h2>Days by month</h2>
-          {!rows.size ? <p className="empty">No diary days yet.</p> : (
+          {p.plan_file && <p className="small muted">Plan from {p.plan_file} ({planTotal} days in all). The latest cost sheet is read every morning.</p>}
+          {!rows.size ? <p className="empty">No diary days or cost sheet plan yet.</p> : (
             <table>
-              <thead><tr><th>Month</th><th className="num">Planned</th><th className="num">Building</th><th className="num">M&amp;E</th><th className="num">Charged</th></tr></thead>
-              <tbody>{[...rows].map(([m, x]) => (
-                <tr key={m}><td>{label(m)}</td><td className="num">{x.planned || "—"}</td><td className="num">{x.b || "—"}</td><td className="num">{x.me || "—"}</td><td className="num"><b>{x.b + x.me || "—"}</b></td></tr>
+              <thead><tr><th>Month</th><th className="num" title="From the latest cost sheet">Plan</th><th className="num" title="Grey side of the diary">In diary</th><th className="num">Building</th><th className="num">M&amp;E</th><th className="num">Charged</th></tr></thead>
+              <tbody>{sorted.map(([m, x]) => (
+                <tr key={m} className={m === monthStart ? "now-row" : ""}><td>{label(m)}</td><td className="num">{x.plan || "—"}</td><td className="num">{x.planned || "—"}</td><td className="num">{x.b || "—"}</td><td className="num">{x.me || "—"}</td>
+                  <td className="num"><b className={x.plan && m < monthStart && x.b + x.me > x.plan ? "over" : ""}>{x.b + x.me || "—"}</b></td></tr>
               ))}</tbody>
             </table>
           )}
