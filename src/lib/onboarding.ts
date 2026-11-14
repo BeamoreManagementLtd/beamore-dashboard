@@ -8,7 +8,8 @@ export type OnbGroup = { id: string; title: string; steps: OnbStep[] };
 
 /** Ticked by hand (stored in onboarding_items.item). */
 export const TICKS = {
-  hat: "PPE: hard hat", boots: "PPE: safety boots", hivis: "PPE: hi-vis", glasses: "PPE: safety glasses", gloves: "PPE: gloves",
+  // Beamore issues a helmet and a vest; that's the PPE (Ronan, 14 Nov 2026)
+  helmet: "PPE: Beamore helmet", vest: "PPE: Beamore vest",
   rate: "Day rate agreed", template: "Report template and guidance sent", briefing: "Briefed on how we report", access: "System access set up",
   noChartership: "No chartership (not needed)",
 } as const;
@@ -46,8 +47,7 @@ export function buildOnboarding(c: OnbCompliance, ticked: Map<string, string | n
       auto("O2f", "Right to work checked", !!c.right_to_work_checked, c.right_to_work_checked ? fmt(c.right_to_work_checked) : undefined),
     ] },
     { id: "O3", title: "PPE", steps: [
-      tick("O3a", "Hard hat", TICKS.hat), tick("O3b", "Safety boots", TICKS.boots), tick("O3c", "Hi-vis", TICKS.hivis),
-      tick("O3d", "Safety glasses", TICKS.glasses), tick("O3e", "Gloves", TICKS.gloves),
+      tick("O3a", "Beamore helmet issued", TICKS.helmet), tick("O3b", "Beamore vest issued", TICKS.vest),
     ] },
     { id: "O4", title: "Terms and rate", steps: [
       auto("O4a", "Terms signed", !!c.terms_signed, c.terms_signed ? fmt(c.terms_signed) : undefined),

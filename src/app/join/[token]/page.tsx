@@ -85,13 +85,13 @@ export default async function Join({ params, searchParams }: { params: Promise<{
       <div className="field"><label htmlFor="qf">Certificate</label><input id="qf" name="qual_file" type="file" accept=".pdf,image/*" /></div>
 
       <h2>PPE</h2>
-      <p className="small muted">Tick what you already have. We’ll send anything missing.</p>
+      <p className="small muted">Beamore provides a helmet and a vest. Tick any you already have from us.</p>
       <div className="join-ppe">
         {PPE_ITEMS.map((i) => (
           <label key={i}><input type="checkbox" name={`ppe_${i}`} defaultChecked={((c.ppe_have as string[]) ?? []).includes(i)} /> {i}</label>
         ))}
       </div>
-      <div className="field"><label htmlFor="ps">Sizes (boots, hi-vis, gloves)</label><input id="ps" name="ppe_sizes" defaultValue={v("ppe_notes")} /></div>
+      <div className="field"><label htmlFor="ps">Vest size</label><input id="ps" name="ppe_sizes" defaultValue={v("ppe_notes")} /></div>
 
       <p className="small muted">Files up to about 4 MB in total. If yours are bigger, email them to us instead.</p>
       <button className="btn primary">Send to Beamore</button>

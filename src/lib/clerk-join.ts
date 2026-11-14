@@ -10,7 +10,8 @@ import { driveClient } from "@/lib/google";
  */
 export const SITE = "https://dashboard.beamore.co.uk";
 export const joinLink = (token: string) => `${SITE}/join/${token}`;
-export const PPE_ITEMS = ["Hard hat", "Safety boots", "Hi-vis", "Safety glasses", "Gloves"];
+/** Beamore issues a helmet and a vest. */
+export const PPE_ITEMS = ["Beamore helmet", "Beamore vest"];
 
 export async function ensureJoinToken(admin: SupabaseClient, clerkId: string) {
   const { data } = await admin.from("clerk_compliance").select("join_token").eq("clerk_id", clerkId).maybeSingle();
