@@ -10,9 +10,9 @@ const DBS: Record<string, [string, string]> = {
   verified: ["good", "Verified"], in_progress: ["neutral", "In progress"], action_needed: ["warn", "Action needed"], none: ["bad", "No check on file"],
 };
 
-export default async function Personnel({ searchParams }: { searchParams: Promise<{ show?: string; project?: string }> }) {
+export default async function Personnel({ searchParams }: { searchParams: Promise<{ show?: string; project?: string; name?: string }> }) {
   await requireProfile();
-  const { show, project } = await searchParams;
+  const { show, project, name } = await searchParams;
   const db = await createClient();
   const t = today();
   const cutoff = new Date(Date.parse(t + "T00:00:00Z") - 60 * 86400000).toISOString().slice(0, 10);
@@ -49,7 +49,7 @@ export default async function Personnel({ searchParams }: { searchParams: Promis
           <p className="small">Being onboarded: {onboarding.map((c, i) => <span key={c.id}>{i ? ", " : ""}<Link href={`/personnel/${c.id}`}>{c.name}</Link></span>)}. They’re not ready for site until every step is green.</p>
         )}
         <form action={addNewClerk} className="row">
-          <div className="field"><label htmlFor="nn">Name (as it will appear in the diary)</label><input id="nn" name="name" required /></div>
+          <div className="field"><label htmlFor="nn">Name (as it will appear in the diary)</label><input id="nn" name="name" required defaultValue={name ?? ""} /></div>
           <div className="field"><label htmlFor="ne">Email</label><input id="ne" name="email" type="email" /></div>
           <div className="field"><label htmlFor="np">Phone</label><input id="np" name="phone" /></div>
           <div className="field"><label htmlFor="nj">Appointed for</label>

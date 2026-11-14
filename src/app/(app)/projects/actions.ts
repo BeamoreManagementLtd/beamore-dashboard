@@ -223,3 +223,46 @@ export async function redraftInfoRequest(projectId: string) {
   }
   revalidatePath(`/projects/${projectId}`);
 }
+
+// ---- find a clerk (workflow 3)
+export async function saveClerkNeeds(projectId: string, form: FormData) {
+  await requireProfile();
+  const db = await createClient();
+  const v = (k: string) => String(form.get(k) ?? "").trim() || null;
+  await db.from("projects").update({ start_date: v("start_date"), visits_per_week: v("visits_per_week") ? Number(v("visits_per_week")) : null, clerk_needed: v("clerk_needed") }).eq("id", projectId);
+  revalidatePath(`/projects/${projectId}`);
+}
+
+export async function addCandidate(projectId: string, clerkId: string | null, name: string, form: FormData) {
+  const n = name || String(form.get("name") ?? "").trim();
+  if (!n) return;
+  const { db } = await workflowLog(projectId, "Clerk search", `Approached ${n}`);
+  await db.from("clerk_candidates").insert({ project_id: projectId, clerk_id: clerkId, name: n, note: String(form.get("note") ?? "").trim() || null });
+  revalidatePath(`/projects/${projectId}`);
+}
+
+export async function setCandidateStatus(projectId: string, candidateId: string, form: FormData) {
+  await requireProfile();
+  const db = await createClient();
+  const status = String(form.get("status") ?? "");
+  if (!["approached", "interested", "interviewed", "references", "declined"].includes(status)) return;
+  await db.from("clerk_candidates").update({ status, updated_at: new Date().toISOString() }).eq("id", candidateId).eq("project_id", projectId);
+  revalidatePath(`/projects/${projectId}`);
+}
+
+/** C4: an existing clerk becomes the project's clerk; someone new goes to Personnel to be added and onboarded. */
+export async function appointCandidate(projectId: string, candidateId: string) {
+  await requireProfile();
+  const db = await createClient();
+  const { data: c } = await db.from("clerk_candidates").select("clerk_id,name").eq("id", candidateId).single();
+  if (!c) return;
+  await db.from("clerk_candidates").update({ status: "appointed", updated_at: new Date().toISOString() }).eq("id", candidateId);
+  if (c.clerk_id) {
+    await workflowLog(projectId, "Clerk of works", `${c.name} appointed`);
+    await db.from("projects").update({ clerk_id: c.clerk_id, clerk_status: "have" }).eq("id", projectId);
+    revalidatePath(`/projects/${projectId}`);
+    return;
+  }
+  const { redirect } = await import("next/navigation");
+  redirect(`/personnel?project=${projectId}&name=${encodeURIComponent(c.name)}#new`);
+}
