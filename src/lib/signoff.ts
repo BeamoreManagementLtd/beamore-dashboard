@@ -3,6 +3,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { xeroClient, type XeroGet } from "@/lib/xero";
 import { projectMatcher } from "@/lib/project-match";
 import { siteKey } from "@/lib/site-key.mjs";
+import { projectCategory, CATEGORY } from "@/lib/xero-tracking";
 
 /**
  * Monthly sign-off (decision 6): compare the diary's grey (planned) and salmon (charged) days per project, then prepare
@@ -87,6 +88,9 @@ export async function prepareDrafts(admin: SupabaseClient, m: string, { test = f
     allInvoices(get, addDays(m, -150)),
   ]);
   const match = projectMatcher(projects ?? []);
+  // Xero "Project" tracking options (if set up): drafts are tagged with their project
+  const cat = await projectCategory(get).catch(() => null);
+  const trackingOption = new Map((cat?.Options ?? []).filter((o) => o.Status === "ACTIVE").map((o) => [o.Name.toLowerCase(), o.Name]));
   // links already made (by the Xero sync, the diary's invoice table or by hand) win; then every part of the reference
   // ("FS1018 - Wisbech", "BLMS0547 - Paignton"), then the line descriptions
   const known = new Map((linked ?? []).map((i) => [i.number, i.project_id as string]));
@@ -165,12 +169,16 @@ export async function prepareDrafts(admin: SupabaseClient, m: string, { test = f
     const reference = new RegExp(MONTHS).test(tpl.Reference ?? "") || new RegExp(SHORT).test(tpl.Reference ?? "")
       ? retext(tpl.Reference, m) : `${(tpl.Reference ?? p.name).split(/\s+[-–]\s+/)[0]} - ${monthLabel(m)}`;
     const number = nextNumber(prefix);
+    const option = trackingOption.get(p.display_name.toLowerCase());
+    if (cat && !option) warnings.push(`No "${CATEGORY}" tracking option for ${p.display_name} in Xero yet`);
+    const tagged = (l: XLine) => option ? [...(l.Tracking ?? []).filter((t) => t.Name !== CATEGORY), { Name: CATEGORY, Option: option }] : l.Tracking;
     const payload = {
       Type: "ACCREC", Status: "DRAFT", Contact: { ContactID: tpl.Contact.ContactID }, InvoiceNumber: number, Reference: reference,
       Date: end, DueDate: addDays(end, termDays), LineAmountTypes: tpl.LineAmountTypes ?? "Exclusive",
       LineItems: lines.map((l) => ({
         Description: l.Description, ...(priced(l) ? { Quantity: l.Quantity, UnitAmount: l.UnitAmount, AccountCode: l.AccountCode, TaxType: l.TaxType } : {}),
-        ...(l.ItemCode && priced(l) ? { ItemCode: l.ItemCode } : {}), ...(l.Tracking?.length ? { Tracking: l.Tracking.map((t) => ({ Name: t.Name, Option: t.Option })) } : {}),
+        ...(l.ItemCode && priced(l) ? { ItemCode: l.ItemCode } : {}),
+        ...(priced(l) && tagged(l)?.length ? { Tracking: tagged(l)!.map((t) => ({ Name: t.Name, Option: t.Option })) } : {}),
       })),
     };
     const total = lines.filter(priced).reduce((s, l) => s + l.Quantity! * l.UnitAmount!, 0);

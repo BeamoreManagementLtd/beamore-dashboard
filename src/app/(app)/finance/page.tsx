@@ -1,7 +1,7 @@
 import { requireDirector } from "@/lib/auth";
 import { createClient } from "@/lib/supabase/server";
 import { gbp, fdt } from "@/lib/format";
-import { syncNow, syncDiaryNow, syncGmailNow } from "./actions";
+import { syncNow, syncDiaryNow, syncGmailNow, setupTracking } from "./actions";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300; // "Read diary now" / "Read Gmail now" can take a minute or two
@@ -10,7 +10,7 @@ export default async function Finance({ searchParams }: { searchParams: Promise<
   await requireDirector(); // page guard; the tables themselves are director-only in the database too
   const { xero, diary, reason } = await searchParams;
   const db = await createClient();
-  const [{ data: snaps }, { data: conn }, { data: runs }, { data: gconn }, { data: druns }, { data: gmruns }] = await Promise.all([
+  const [{ data: snaps }, { data: conn }, { data: runs }, { data: gconn }, { data: druns }, { data: gmruns }, { data: truns }] = await Promise.all([
     db.from("finance_snapshots").select("*").order("taken_at", { ascending: false }).limit(12),
     db.rpc("xero_connection_status"),
     db.from("sync_runs").select("finished_at,ok,message").eq("source", "xero").order("started_at", { ascending: false }).limit(1),
@@ -18,8 +18,10 @@ export default async function Finance({ searchParams }: { searchParams: Promise<
     // the last diary read that did something (hourly checks that find no change are skipped here)
     db.from("sync_runs").select("finished_at,ok,message").eq("source", "diary").neq("message", "Diary unchanged since last read").order("started_at", { ascending: false }).limit(1),
     db.from("sync_runs").select("finished_at,ok,message").eq("source", "gmail").order("started_at", { ascending: false }).limit(1),
+    db.from("sync_runs").select("finished_at,ok,message").eq("source", "xero-tracking").order("started_at", { ascending: false }).limit(1),
   ]);
   const glast = gmruns?.[0];
+  const tlast = truns?.[0];
   const c = (conn as { tenant_name: string; connected_at: string }[] | null)?.[0];
   const last = runs?.[0];
   const g = (gconn as { email: string; connected_at: string; diary_modified_time: string | null }[] | null)?.[0];
@@ -51,6 +53,21 @@ export default async function Finance({ searchParams }: { searchParams: Promise<
             {c && <form action={syncNow}><button className="btn primary">Sync now</button></form>}
             <a className={`btn ${c ? "" : "primary"}`} href="/api/xero/connect">{c ? "Reconnect" : "Connect Xero"}</a>
           </div>
+        </div>
+      </section>
+      {xero === "tracking" && <p className="callout info">Project tracking updated in Xero.</p>}
+      <section className="panel">
+        <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
+          <div>
+            <b>Project tracking in Xero</b>{" "}
+            <span className="muted">a “Project” tracking category with one option per live project (“St Aidans 1073”), so draft invoices are tagged and Xero reports can be run by project. Only adds; never archives or deletes.</span>
+            {tlast && (
+              <span className="two">
+                Last run {fdt(tlast.finished_at)}: {tlast.ok ? tlast.message : <span className="neg">failed: {tlast.message}</span>}
+              </span>
+            )}
+          </div>
+          {c && <form action={setupTracking}><button className="btn">{tlast?.ok ? "Add new live projects" : "Set up Project tracking in Xero"}</button></form>}
         </div>
       </section>
       {diary === "connected" && <p className="callout info">Google Drive is connected and the diary has been read. It’s checked for changes every hour.</p>}
