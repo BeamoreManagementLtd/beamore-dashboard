@@ -59,6 +59,8 @@ export async function setDfe(projectId: string, dfe: boolean) {
   const db = await createClient();
   await db.from("projects").update({ is_dfe: dfe, dfe_evidence: `Set by ${me.full_name ?? me.email}` }).eq("id", projectId);
   revalidatePath(`/projects/${projectId}`);
+  revalidatePath("/projects/dfe");
+  revalidatePath("/due");
 }
 
 export async function addInfoItem(projectId: string, form: FormData) {

@@ -103,7 +103,7 @@ export async function buildDueList(db: SupabaseClient, me: Profile): Promise<Due
   if (director) {
     const { data: unsure } = await db.from("projects").select("id,display_name,dfe_evidence").is("is_dfe", null).like("dfe_evidence", "Unsure%");
     for (const p of unsure ?? [])
-      items.push({ key: `dfe-${p.id}`, kind: "Projects", title: `Is ${p.display_name} a DfE project?`, detail: `${(p.dfe_evidence ?? "").replace(/^Unsure: /, "")}. Answer on the project page (sets the right checklist)`, due: t, link: `/projects/${p.id}`, ...ownerOf(me.id, null) });
+      items.push({ key: `dfe-${p.id}`, kind: "Projects", title: `Is ${p.display_name} a DfE project?`, detail: `${(p.dfe_evidence ?? "").replace(/^Unsure: /, "")}. Answer with one click (sets the right checklist)`, due: t, link: `/projects/dfe`, ...ownerOf(me.id, null) });
   }
 
   // ---- replies to cost proposals that read like a go-ahead (director confirms; nothing changes by itself)

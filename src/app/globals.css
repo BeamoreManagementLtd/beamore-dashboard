@@ -139,3 +139,6 @@ input,select,textarea{background:var(--surface);border:1px solid var(--line);bor
 .wf-all h3{font-size:14px;margin:12px 0 6px}
 .wf-status{border-bottom:1px solid var(--line);padding-bottom:12px;margin-bottom:12px}
 .wf-status p{margin:6px 0 0;font-size:15px;max-width:80ch} .wf-status p.small{font-size:13px;margin-top:4px}
+.dfe-table{width:100%} .dfe-table td{vertical-align:middle;padding:8px 6px;border-top:1px solid var(--line)}
+.dfe-table td:nth-child(2){max-width:46ch}
+.dfe-btns{white-space:nowrap;text-align:right} .dfe-btns form{display:inline-block;margin-left:6px}
