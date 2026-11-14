@@ -2,6 +2,7 @@ import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Profile } from "@/lib/auth";
 import { SCOPES_CHANGED_AT } from "@/lib/xero";
+import { GOOGLE_SCOPES_CHANGED_AT } from "@/lib/google";
 import { loadWorkflows, WORKFLOW_COLUMNS, daysSince, type WorkflowProject } from "@/lib/workflow";
 
 /**
@@ -219,6 +220,10 @@ export async function buildDueList(db: SupabaseClient, me: Profile): Promise<Due
     const conn = (xc as { connected_at: string }[] | null)?.[0];
     if (conn && conn.connected_at < SCOPES_CHANGED_AT)
       items.push({ key: "xero-reconnect", kind: "Xero", title: "Reconnect Xero so draft invoices can be tagged by project", detail: "Finance → Xero → Reconnect (reads the Project tracking options)", due: addDays(nextMonth, -3), link: "/finance", ...ownerOf(me.id, null) });
+    const { data: gc } = await db.rpc("google_connection_status");
+    const g = (gc as { connected_at: string }[] | null)?.[0];
+    if (g && g.connected_at < GOOGLE_SCOPES_CHANGED_AT)
+      items.push({ key: "google-reconnect", kind: "Xero", title: "Reconnect Google once so the dashboard can make project folders and save email drafts", detail: "Finance → Google → Reconnect. It still never deletes files or sends emails", due: t, link: "/finance", ...ownerOf(me.id, null) });
   }
 
   // ---- a sync that's failing (director only: it's about the connections)

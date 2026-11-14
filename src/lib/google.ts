@@ -1,9 +1,13 @@
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
-// Read-only Drive (the diary and report files) and read-only Gmail (chase emails for each invoice). Nothing is changed or sent.
+// Drive: read everything (diary, reports, proposals); drive.file lets it create project folders and save files into them,
+// touching only files it created itself, never deleting yours. Gmail: read (chases, replies) and compose, used only to
+// save drafts in the Drafts folder. The dashboard never sends anything (Ronan's rule).
 export const GOOGLE_SCOPES = process.env.GOOGLE_SCOPES ??
-  "openid email https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/gmail.readonly";
+  "openid email https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.compose";
+/** Connections made before this lack drive.file and gmail.compose (project folders, drafts). */
+export const GOOGLE_SCOPES_CHANGED_AT = "2026-11-14T21:00:00Z";
 
 type Tokens = { access_token: string; refresh_token?: string; expires_in: number; id_token?: string };
 
