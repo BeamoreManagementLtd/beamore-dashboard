@@ -32,7 +32,9 @@ export async function writeDiary(admin, d, label) {
   // ---- projects by name or diary spelling, plus sites someone has linked by hand
   const projects = must(await admin.from("projects").select("id,name,diary_aliases"), "projects");
   const byKey = new Map();
-  for (const p of projects) for (const a of [p.name, ...p.diary_aliases]) if (siteKey(a)) byKey.set(siteKey(a), p.id);
+  // names first, then diary spellings: a spelling linked to one project wins when two projects share a name
+  for (const p of projects) if (siteKey(p.name)) byKey.set(siteKey(p.name), p.id);
+  for (const p of projects) for (const a of p.diary_aliases) if (siteKey(a)) byKey.set(siteKey(a), p.id);
   const resolved = must(await admin.from("unmatched_diary_sites").select("site_as_typed,resolved_project_id").not("resolved_project_id", "is", null), "resolved");
   for (const r of resolved) byKey.set(siteKey(r.site_as_typed), r.resolved_project_id);
   const projectFor = (site) => byKey.get(siteKey(site)) ?? null;
