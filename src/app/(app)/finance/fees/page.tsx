@@ -5,7 +5,7 @@ import { gbp } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
 
-type Fee = { project_id: string | null; month: string; invoices: number; invoiced_net: number; paid: number; outstanding: number; credited: number };
+type Fee = { project_id: string | null; month: string; invoices: number; invoiced_net: number; paid: number; outstanding: number; credited: number; one_off: boolean };
 const label = (m: string) => new Date(m + "T00:00:00Z").toLocaleDateString("en-GB", { month: "short", year: "2-digit", timeZone: "UTC" });
 
 /** Fees by project for the financial year (from 1 Dec 2025), from Xero's invoices. Director only; reads only. */
@@ -26,13 +26,14 @@ export default async function Fees({ searchParams }: { searchParams: Promise<{ s
 
   const byProject = new Map<string, { net: number; paid: number; out: number; n: number; credited: number; months: Map<string, number> }>();
   for (const x of f) {
-    const k = x.project_id ?? "none";
+    const k = x.project_id ?? (x.one_off ? "oneoff" : "none");
     const p = byProject.get(k) ?? { net: 0, paid: 0, out: 0, n: 0, credited: 0, months: new Map() };
     p.net += Number(x.invoiced_net ?? 0); p.paid += Number(x.paid); p.out += Number(x.outstanding); p.n += Number(x.invoices); p.credited += Number(x.credited);
     p.months.set(x.month, (p.months.get(x.month) ?? 0) + Number(x.invoiced_net ?? 0));
     byProject.set(k, p);
   }
-  const rows = [...byProject].filter(([k]) => k !== "none").sort(([, a], [, b]) =>
+  const oneOff = byProject.get("oneoff");
+  const rows = [...byProject].filter(([k]) => k !== "none" && k !== "oneoff").sort(([, a], [, b]) =>
     sort === "outstanding" ? b.out - a.out : sort === "perday" ? 0 : b.net - a.net);
   if (sort === "perday") rows.sort(([ka, a], [kb, b]) => (b.net / (dm.get(kb) || Infinity)) - (a.net / (dm.get(ka) || Infinity)));
   const none = byProject.get("none");
@@ -57,7 +58,8 @@ export default async function Fees({ searchParams }: { searchParams: Promise<{ s
               <span className="sub">{tot.n} invoices{credNet ? ` · less credit notes ${gbp(credNet)} = ${gbp(tot.net - credNet)}` : ""}{pl ? ` · P&L sales ${gbp(pl)}` : ""}</span></div>
             <div className="tile"><span className="label">Paid</span><span className="big">{gbp(tot.paid)}</span><span className="sub">incl. VAT</span></div>
             <div className={`tile ${tot.out ? "alert" : ""}`}><span className="label">Outstanding</span><span className="big">{gbp(tot.out)}</span><span className="sub">incl. VAT</span></div>
-            <div className={`tile ${none?.net ? "alert" : ""}`}><span className="label">Not linked to a project</span><span className="big">{gbp(none?.net ?? 0)}</span><span className="sub">{none?.n ?? 0} invoices</span></div>
+            <div className={`tile ${none?.net ? "alert" : ""}`}><span className="label">Not linked to a project</span><span className="big">{gbp(none?.net ?? 0)}</span>
+              <span className="sub">{none?.n ?? 0} invoices{oneOff ? ` · one-off work ${gbp(oneOff.net)}` : ""}</span></div>
           </div>
           <section className="panel">
             <h2>By month</h2>
