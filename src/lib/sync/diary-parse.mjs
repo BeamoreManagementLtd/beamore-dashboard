@@ -112,5 +112,31 @@ export function parseDiary(wb, { year = 2026, fileLabel = "Diary 2026.xlsx" } = 
     const row = rs.getRow(r), site = str(row.getCell(1));
     if (site) rates.push({ site, charge: num(row.getCell(2)), pay: num(row.getCell(3)) });
   }
-  return { visits, absences, invoiceLines, rates, invoiceEmails, clerks: [...clerks] };
+  // "Report emails" tab: who each site's reports go to (rows without a site are client headings)
+  const reportEmails = [];
+  const re = wb.getWorksheet("Report emails");
+  if (re) for (let r = 2; r <= re.rowCount; r++) {
+    const row = re.getRow(r), site = str(row.getCell(2)), to = emails(str(row.getCell(6)));
+    if (site && to.length) reportEmails.push({ site, inspector: str(row.getCell(3)) || null, inspection: str(row.getCell(4)) || null, reporting: str(row.getCell(5)) || null, to, cc: emails(str(row.getCell(7))) });
+  }
+
+  // "Invoice POs" tab: two side-by-side lists, site in B (PO in C, project number in D) and site in F (PO in G, project number in H)
+  const invoicePOs = [];
+  const po = wb.getWorksheet("Invoice POs");
+  if (po) for (let r = 2; r <= po.rowCount; r++) {
+    const row = po.getRow(r);
+    for (const [s, p, n, o] of [[2, 3, 4, 5], [6, 7, 8, 9]]) {
+      const site = str(row.getCell(s)), text = [str(row.getCell(p)), str(row.getCell(n)), str(row.getCell(o))].join(" ").trim();
+      if (site && text) invoicePOs.push({ site, poText: str(row.getCell(p)), projectNumber: str(row.getCell(n)), other: str(row.getCell(o)) });
+    }
+  }
+
+  // "Contact details" tab: clerks' Beamore email, own email and phone
+  const contactDetails = [];
+  const cd = wb.getWorksheet("Contact details");
+  if (cd) for (let r = 2; r <= cd.rowCount; r++) {
+    const row = cd.getRow(r), first = str(row.getCell(1)), last = str(row.getCell(2));
+    if (first && last) contactDetails.push({ name: `${first} ${last}`, email: emails(str(row.getCell(3)))[0] ?? null, email2: emails(str(row.getCell(4)))[0] ?? null, phone: str(row.getCell(5)) || null });
+  }
+  return { visits, absences, invoiceLines, rates, invoiceEmails, reportEmails, invoicePOs, contactDetails, clerks: [...clerks] };
 }

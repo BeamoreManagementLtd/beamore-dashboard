@@ -152,6 +152,57 @@ export async function writeDiary(admin, d, label) {
     contacts = new Set(rows.filter((r) => r.project_id || r.client_id).map((r) => r.label)).size;
   }
 
+  // ---- checklist items the diary answers: ticked with the actual value (replacing "assumed received")
+  const today = new Date().toISOString().slice(0, 10);
+  const tick = async (projectId, itemRe, note) => {
+    const items = must(await admin.from("project_info").select("id,item,received_on,note").eq("project_id", projectId), "info");
+    for (const i of items.filter((x) => itemRe.test(x.item)))
+      if (!i.received_on || !i.note || /^Assumed/.test(i.note) || /^From the diary/.test(i.note))
+        must(await admin.from("project_info").update({ received_on: i.received_on ?? today, note: note.slice(0, 500) }).eq("id", i.id), "tick");
+  };
+  const siteProject = (site) => projectFor(site) ?? (() => { const k = siteKey(site); if (byKey.has(k)) return byKey.get(k); if (k.length < 5) return null;
+    const hits = new Set([...byKey.keys()].filter((x) => x.length >= 5 && (x.startsWith(k) || k.startsWith(x))).map((x) => byKey.get(x))); return hits.size === 1 ? [...hits][0] : null; })();
+
+  // "Report emails" → distribution list
+  let distLists = 0;
+  for (const e of d.reportEmails ?? []) {
+    const pid = siteProject(e.site);
+    if (!pid) continue;
+    must(await admin.from("projects").update({ report_to: e.to.join("; "), report_cc: e.cc.join("; ") || null, inspection_frequency: e.inspection, reporting_frequency: e.reporting }).eq("id", pid), "report emails");
+    await tick(pid, /distribution list/i, `From the diary (Report emails): to ${e.to.join(", ")}${e.cc.length ? `; cc ${e.cc.join(", ")}` : ""}`);
+    distLists++;
+  }
+
+  // "Invoice POs" → PO number and the DfE (SRP) project number
+  let pos = 0;
+  for (const p of d.invoicePOs ?? []) {
+    const pid = siteProject(p.site);
+    if (!pid) continue;
+    const all = `${p.poText} ${p.projectNumber} ${p.other}`;
+    const srp = /\bSRP\s?(\d{3,4})\b/i.exec(all);
+    const poNo = /\b(MM\d{6,}|PO[\s:#-]*([A-Z0-9-]{4,})|\d{5,})\b/i.exec(p.poText.replace(/SRP\s?\d+/gi, ""));
+    const value = poNo ? (poNo[2] ?? poNo[1]) : null;
+    if (value) {
+      must(await admin.from("projects").update({ po_number: value }).eq("id", pid).is("po_number", null), "po");
+      await tick(pid, /\bPO\b/, `From the diary (Invoice POs): ${p.poText}`);
+      pos++;
+    }
+    if (srp) {
+      must(await admin.from("projects").update({ dfe_project_number: `SRP${srp[1]}` }).eq("id", pid).is("dfe_project_number", null), "srp");
+      await tick(pid, /DfE project number/i, `From the diary (Invoice POs): SRP${srp[1]}`);
+    }
+  }
+
+  // "Contact details" → clerks' phone and email where the dashboard has none
+  let clerkContacts = 0;
+  for (const c of d.contactDetails ?? []) {
+    const id = clerkId.get(clerkKey(c.name));
+    if (!id) continue;
+    const cur = must(await admin.from("clerks").select("email,phone").eq("id", id).single(), "clerk");
+    const upd = { ...(!cur.email && (c.email || c.email2) ? { email: c.email ?? c.email2 } : {}), ...(!cur.phone && c.phone ? { phone: c.phone } : {}) };
+    if (Object.keys(upd).length) { must(await admin.from("clerks").update(upd).eq("id", id), "clerk contact"); clerkContacts++; }
+  }
+
   // ---- second spellings of a clerk from the first import, once nothing points at them
   const dupes = existing.filter((c) => c.name_key == null && clerkId.get(clerkKey(c.name)) !== c.id).map((c) => c.id);
   if (dupes.length) await admin.from("clerks").delete().in("id", dupes);
@@ -159,6 +210,6 @@ export async function writeDiary(admin, d, label) {
   const matched = rows.filter((r) => r.project_id).length;
   const planned = d.visits.filter((v) => v.side === "planned").length / 2;
   return `${d.visits.length / 2 - planned} days charged and ${planned} planned, ${latest.size} clerks, ${abs.length} holidays, ` +
-    `${contacts} of ${d.invoiceEmails?.length ?? 0} invoice email rows matched, ` +
+    `${contacts} of ${d.invoiceEmails?.length ?? 0} invoice email rows matched, ${distLists} distribution lists, ${pos} PO numbers, ${clerkContacts} clerk contact details, ` +
     `${unmatched.size} site names not matched (${((matched / Math.max(rows.length, 1)) * 100).toFixed(0)}% of days matched to a project)`;
 }
