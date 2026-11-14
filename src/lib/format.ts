@@ -7,7 +7,10 @@ export const fd = (s: string | null | undefined) =>
 export const fdy = (s: string | null | undefined) =>
   s ? new Date(s).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric", timeZone: "Europe/London" }) : "—";
 
-export const today = () => new Date().toISOString().slice(0, 10);
+export const fdt = (s: string | null | undefined) =>
+  s ? new Date(s).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", timeZone: "Europe/London" }) : "—";
+
+export const today =() => new Date().toISOString().slice(0, 10);
 
 export const daysBetween = (from: string, to: string) =>
   Math.round((new Date(to).getTime() - new Date(from).getTime()) / 86_400_000);

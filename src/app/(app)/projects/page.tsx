@@ -13,15 +13,28 @@ export default async function Projects({ searchParams }: { searchParams: Promise
   await requireProfile();
   const { stage = "live" } = await searchParams;
   const db = await createClient();
-  const [{ data: rows }, { data: counts }] = await Promise.all([
+  const [{ data: rows }, { data: counts }, { data: unmatched }] = await Promise.all([
     db.from("projects").select("id,display_name,stage,agreed_days_building,agreed_days_me,next_action,next_action_due,clients(name)").eq("stage", stage).order("name"),
     db.from("projects").select("stage"),
+    db.from("unmatched_invoice_refs").select("reference,last_invoice,client,invoices").order("reference"),
   ]);
   const n = (s: string) => (counts ?? []).filter((c) => c.stage === s).length;
 
   return (
     <>
-      <div className="head"><div><h1>Projects</h1><p>From the Cost Proposals Register. Money columns are on the director’s view only.</p></div></div>
+      <div className="head"><div><h1>Projects</h1><p>From the Cost Proposals Register, the diary and Xero. Money columns are on the director’s view only.</p></div></div>
+      {!!unmatched?.length && (
+        <details className="callout warn">
+          <summary>{unmatched.length} Xero invoice reference{unmatched.length > 1 ? "s" : ""} don’t match a project</summary>
+          <p className="small">These outstanding invoices aren’t linked to a project, so they’re left out of project totals. Usually the reference is spelt differently from the diary.</p>
+          <table><tbody>
+            {unmatched.map((u) => (
+              <tr key={u.reference}><td><b>{u.reference}</b><span className="two">{u.client}</span></td>
+                <td className="mono">{u.last_invoice}</td><td className="num">{u.invoices} invoice{u.invoices > 1 ? "s" : ""}</td></tr>
+            ))}
+          </tbody></table>
+        </details>
+      )}
       <nav className="row">
         {STAGES.map(([k, l]) => (
           <a key={k} href={`/projects?stage=${k}`} className={`btn ${k === stage ? "primary" : ""}`}>{l} <span className="small">{n(k)}</span></a>

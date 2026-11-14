@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { requireProfile } from "@/lib/auth";
 import { createClient } from "@/lib/supabase/server";
-import { gbp, fd, today } from "@/lib/format";
+import { gbp, fd, fdt, today } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
 
@@ -17,7 +17,7 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ d
     db.from("tasks").select("title,due,link,kind").eq("owner_id", me.id).is("done_at", null).order("due").limit(8),
     // RLS returns nothing here for admin accounts
     db.from("finance_snapshots").select("*").eq("period", "latest").order("taken_at", { ascending: false }).limit(1),
-    db.from("sync_runs").select("source,finished_at,ok").order("finished_at", { ascending: false }).limit(6),
+    db.from("sync_runs").select("source,finished_at,ok").eq("ok", true).order("finished_at", { ascending: false }).limit(6),
   ]);
 
   const od = overdue ?? [];
@@ -38,7 +38,7 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ d
           <h1>Good morning, {me.full_name?.split(" ")[0] ?? "there"}</h1>
           <p>{new Date().toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric" })}</p>
         </div>
-        <span className="small muted">{lastSync?.length ? `Last sync ${fd(lastSync[0].finished_at)}` : "No sync has run yet"}</span>
+        <span className="small muted">{lastSync?.length ? `Last sync ${fdt(lastSync[0].finished_at)}` : "No sync has run yet"}</span>
       </div>
       {denied && <p className="callout warn">That page is for the director only.</p>}
 

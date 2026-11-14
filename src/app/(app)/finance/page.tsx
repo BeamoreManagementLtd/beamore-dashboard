@@ -1,13 +1,21 @@
 import { requireDirector } from "@/lib/auth";
 import { createClient } from "@/lib/supabase/server";
-import { gbp, fd } from "@/lib/format";
+import { gbp, fdt } from "@/lib/format";
+import { syncNow } from "./actions";
 
 export const dynamic = "force-dynamic";
 
-export default async function Finance() {
+export default async function Finance({ searchParams }: { searchParams: Promise<{ xero?: string; reason?: string }> }) {
   await requireDirector(); // page guard; the tables themselves are director-only in the database too
+  const { xero, reason } = await searchParams;
   const db = await createClient();
-  const { data: snaps } = await db.from("finance_snapshots").select("*").order("taken_at", { ascending: false }).limit(12);
+  const [{ data: snaps }, { data: conn }, { data: runs }] = await Promise.all([
+    db.from("finance_snapshots").select("*").order("taken_at", { ascending: false }).limit(12),
+    db.rpc("xero_connection_status"),
+    db.from("sync_runs").select("finished_at,ok,message").eq("source", "xero").order("started_at", { ascending: false }).limit(1),
+  ]);
+  const c = (conn as { tenant_name: string; connected_at: string }[] | null)?.[0];
+  const last = runs?.[0];
   const latest = snaps?.find((s) => s.period === "latest");
   const month = snaps?.find((s) => /^\d{4}-\d{2}$/.test(s.period));
   const fytd = snaps?.find((s) => s.period.startsWith("FY"));
@@ -16,7 +24,27 @@ export default async function Finance() {
 
   return (
     <>
-      <div className="head"><div><h1>Finance</h1><p>From Xero{latest ? ` · ${fd(latest.taken_at)}` : ""}</p></div><span className="ronly">Director only</span></div>
+      <div className="head"><div><h1>Finance</h1><p>From Xero{latest ? ` · ${fdt(latest.taken_at)}` : ""}</p></div><span className="ronly">Director only</span></div>
+      {xero === "connected" && <p className="callout info">Xero is connected and the first sync has run. It now updates every hour.</p>}
+      {xero === "synced" && <p className="callout info">Synced with Xero just now.</p>}
+      {xero === "error" && <p className="callout warn">Xero: {reason ?? "something went wrong"}</p>}
+      <section className="panel">
+        <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
+          <div>
+            <b>Xero</b>{" "}
+            {c ? <span className="muted">connected to {c.tenant_name}. Updates every hour.</span> : <span className="muted">not connected yet.</span>}
+            {last && (
+              <span className="two">
+                Last sync {fdt(last.finished_at)}: {last.ok ? last.message : <span className="neg">failed: {last.message}</span>}
+              </span>
+            )}
+          </div>
+          <div className="row">
+            {c && <form action={syncNow}><button className="btn primary">Sync now</button></form>}
+            <a className={`btn ${c ? "" : "primary"}`} href="/api/xero/connect">{c ? "Reconnect" : "Connect Xero"}</a>
+          </div>
+        </div>
+      </section>
       {!snaps?.length ? <p className="callout info">No finance snapshot yet. It appears after the first Xero sync.</p> : (
         <>
           <div className="tiles">
