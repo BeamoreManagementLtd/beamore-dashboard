@@ -155,3 +155,10 @@ input,select,textarea{background:var(--surface);border:1px solid var(--line);bor
 .wb-card.w-you,.wb-card.w-us{border-left-color:var(--warn)} .wb-card.w-admin{border-left-color:var(--brand)} .wb-card.w-client{border-left-color:var(--neutral)}
 .wb-top{display:flex;justify-content:space-between;gap:8px;align-items:baseline}
 @media (max-width:900px){.wb{grid-template-columns:repeat(4,260px)}}
+/* clerk questionnaire */
+.join{align-items:flex-start;padding-block:24px}
+.join-card{max-width:640px;width:100%;text-align:left}
+.join-form{display:flex;flex-direction:column;gap:10px}
+.join-form h2{font-size:16px;margin-top:10px}
+.join-ppe{display:flex;flex-wrap:wrap;gap:8px 16px}
+.join-ppe label{display:inline-flex;gap:6px;align-items:center;font-size:14px}

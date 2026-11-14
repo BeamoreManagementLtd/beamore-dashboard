@@ -3,7 +3,8 @@ import { notFound } from "next/navigation";
 import { requireProfile } from "@/lib/auth";
 import { createClient } from "@/lib/supabase/server";
 import { fd, fdy, today } from "@/lib/format";
-import { saveCompliance, startOnboarding, tickOnboarding, setActive } from "../actions";
+import { saveCompliance, startOnboarding, tickOnboarding, setActive, makeJoinLink, draftJoin } from "../actions";
+import { joinLink } from "@/lib/join-link";
 import { buildOnboarding } from "@/lib/onboarding";
 
 export const dynamic = "force-dynamic";
@@ -15,11 +16,13 @@ type Compliance = {
   address: string | null; emergency_contact: string | null; business_type: string | null; company_name: string | null; bank_details_received: string | null;
   pi_insurance_expiry: string | null; pl_insurance_expiry: string | null; cscs_number: string | null; cscs_expiry: string | null;
   right_to_work_checked: string | null; terms_signed: string | null; onboarding_started: string | null; onboarding_project_id: string | null;
+  join_token: string | null; join_submitted_at: string | null; documents_folder_id: string | null;
 };
 
-export default async function Clerk({ params }: { params: Promise<{ id: string }> }) {
+export default async function Clerk({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ draft?: string }> }) {
   await requireProfile();
   const { id } = await params;
+  const { draft } = await searchParams;
   const db = await createClient();
   const t = today();
   const monthStart = `${t.slice(0, 7)}-01`;
@@ -120,6 +123,18 @@ export default async function Clerk({ params }: { params: Promise<{ id: string }
               <p>{onb.complete ? `Onboarding complete.` : `Started ${fd(c.onboarding_started!)}${forProject ? ` for ${forProject.display_name}` : ""}. Next: ${onb.next?.title.toLowerCase()}.`}
                 {forProject && <> <Link href={`/projects/${forProject.id}`}>Open project</Link></>}</p>
               <p className="small muted">Steps without a button tick themselves when the details above are filled in and saved.</p>
+            </div>
+            <div className="callout info">
+              <b>New clerk form.</b>{" "}
+              {c.join_submitted_at ? <>Filled in {fd(c.join_submitted_at)}. Their answers are in the record above{c.documents_folder_id ? <>; certificates are in <a href={`https://drive.google.com/drive/folders/${c.documents_folder_id}`} target="_blank" rel="noopener">their Drive folder ↗</a></> : ""}.</>
+                : c.join_token ? <>Not filled in yet.</> : <>Send them a private link to fill in their own details, insurance, DBS, CSCS and PPE.</>}
+              {c.join_token
+                ? <div className="row" style={{ marginTop: 8, alignItems: "center" }}>
+                    <input readOnly value={joinLink(c.join_token)} aria-label="Questionnaire link" style={{ flex: 1, minWidth: 0 }} />
+                    <form action={draftJoin.bind(null, id)}><button className="btn">Draft email with the link</button></form>
+                  </div>
+                : <form action={makeJoinLink.bind(null, id)} style={{ marginTop: 8 }}><button className="btn">Make their link</button></form>}
+              {draft && <p className="small" style={{ marginTop: 6 }}>{draft}</p>}
             </div>
             {onb.groups.map((g) => (
               <div key={g.id}>

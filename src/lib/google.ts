@@ -78,6 +78,12 @@ export async function driveClient(admin: SupabaseClient) {
   };
   return {
     connection: c,
+    /** Upload a file to Drive (multipart body built by the caller). */
+    upload: async (body: Buffer, contentType: string) => {
+      const res = await fetch("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id", { method: "POST", headers: { Authorization: `Bearer ${access}`, "Content-Type": contentType }, body: new Uint8Array(body), cache: "no-store" });
+      if (!res.ok) throw new Error(`Google Drive upload ${res.status}: ${(await res.text()).slice(0, 200)}`);
+      return res.json() as Promise<{ id: string }>;
+    },
     /** POST JSON to a Google API (creating Drive folders, saving Gmail drafts). Nothing in the dashboard sends or deletes. */
     post: async <T>(url: string, body: unknown) => {
       if (/\/send\b|\/delete\b|\/trash\b/.test(url)) throw new Error("The dashboard never sends, deletes or trashes anything");

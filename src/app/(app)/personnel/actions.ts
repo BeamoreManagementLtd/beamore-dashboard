@@ -70,6 +70,9 @@ export async function addNewClerk(form: FormData) {
   const { data: clerk, error } = await db.from("clerks").insert({ name, email: s(form, "email"), phone: s(form, "phone"), active: true }).select("id").single();
   if (error) throw new Error(error.message.includes("duplicate") ? `There's already a clerk called ${name}` : error.message);
   await db.from("clerk_compliance").upsert({ clerk_id: clerk.id, onboarding_started: new Date().toISOString().slice(0, 10), onboarding_project_id: project, updated_at: new Date().toISOString() });
+  const { createServiceClient } = await import("@/lib/supabase/server");
+  const { ensureJoinToken } = await import("@/lib/clerk-join");
+  await ensureJoinToken(createServiceClient(), clerk.id);
   if (project) {
     await db.from("projects").update({ clerk_id: clerk.id, clerk_status: "have" }).eq("id", project);
     await db.from("project_events").insert({ project_id: project, source: "team", kind: "Clerk of works", body: `${name} appointed (new to Beamore, onboarding started)` });
@@ -143,4 +146,24 @@ export async function setActive(clerkId: string, active: boolean) {
   await db.from("clerks").update({ active }).eq("id", clerkId);
   revalidatePath(`/personnel/${clerkId}`);
   revalidatePath("/personnel");
+}
+
+/** The clerk's private questionnaire link (made on first use). */
+export async function makeJoinLink(clerkId: string) {
+  await requireProfile();
+  const { createServiceClient } = await import("@/lib/supabase/server");
+  const { ensureJoinToken } = await import("@/lib/clerk-join");
+  await ensureJoinToken(createServiceClient(), clerkId);
+  revalidatePath(`/personnel/${clerkId}`);
+}
+
+/** A Gmail draft to the clerk with their questionnaire link. Only ever a draft; Ronan presses Send. */
+export async function draftJoin(clerkId: string) {
+  await requireProfile();
+  const { createServiceClient } = await import("@/lib/supabase/server");
+  const { draftJoinEmail } = await import("@/lib/clerk-join");
+  const admin = createServiceClient();
+  let msg: string;
+  try { msg = await draftJoinEmail(admin, clerkId); } catch (e) { msg = `Draft not saved: ${e instanceof Error ? e.message : String(e)}`; }
+  redirect(`/personnel/${clerkId}?draft=${encodeURIComponent(msg)}`);
 }
