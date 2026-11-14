@@ -1,12 +1,11 @@
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
-// Apps created after 2 March 2026 must ask for granular scopes. Read-only for now; drafting invoices later
-// needs accounting.invoices (without .read) and a reconnect.
+// Apps created after 2 March 2026 must ask for granular scopes. accounting.invoices (not just .read) lets the monthly
+// sign-off create DRAFT invoices; nothing is ever approved or sent from the dashboard.
 export const XERO_SCOPES =
   process.env.XERO_SCOPES ??
-  "openid profile email offline_access accounting.invoices.read accounting.reports.profitandloss.read accounting.reports.banksummary.read";
-
+  "openid profile email offline_access accounting.invoices accounting.reports.profitandloss.read accounting.reports.banksummary.read";
 const AUTH_URL = "https://login.xero.com/identity/connect/authorize";
 const TOKEN_URL = "https://identity.xero.com/connect/token";
 const API = "https://api.xero.com";
@@ -73,20 +72,26 @@ export async function xeroClient(admin: SupabaseClient) {
     }).eq("id", 1);
     if (e) throw new Error(`Saving the refreshed Xero token failed: ${e.message}`);
   }
-  return async function get<T>(path: string, params: Record<string, string | number> = {}): Promise<T> {
+  const call = async <T>(method: "GET" | "PUT", path: string, params: Record<string, string | number>, body?: unknown): Promise<T> => {
     const url = `${API}/api.xro/2.0/${path}?${new URLSearchParams(Object.entries(params).map(([k, v]) => [k, String(v)]))}`;
     for (let attempt = 0; ; attempt++) {
       const res = await fetch(url, {
-        headers: { Authorization: `Bearer ${access}`, "Xero-tenant-id": c.tenant_id, Accept: "application/json" },
+        method,
+        headers: { Authorization: `Bearer ${access}`, "Xero-tenant-id": c.tenant_id, Accept: "application/json", ...(body ? { "Content-Type": "application/json" } : {}) },
+        body: body ? JSON.stringify(body) : undefined,
         cache: "no-store",
       });
       if (res.status === 429 && attempt < 2) { // rate limit: wait as told, then retry
         await new Promise((r) => setTimeout(r, Number(res.headers.get("retry-after") ?? 5) * 1000));
         continue;
       }
-      if (!res.ok) throw new Error(`Xero ${path} failed (${res.status}): ${(await res.text()).slice(0, 200)}`);
+      if (!res.ok) throw new Error(`Xero ${path} failed (${res.status}): ${(await res.text()).slice(0, 400)}`);
       return res.json() as Promise<T>;
     }
   };
+  const get = <T>(path: string, params: Record<string, string | number> = {}) => call<T>("GET", path, params);
+  /** Creates records (e.g. draft invoices). Needs the write scope (accounting.invoices). */
+  const put = <T>(path: string, body: unknown, params: Record<string, string | number> = {}) => call<T>("PUT", path, params, body);
+  return Object.assign(get, { put });
 }
 export type XeroGet = Awaited<ReturnType<typeof xeroClient>>;

@@ -11,6 +11,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     ["/invoices", "Overdue invoices"],
     ["/reports", "Reports"],
     ["/personnel", "Personnel"],
+    ["/signoff", "Month sign-off"],
     ...(director ? ([["/finance", "Finance"]] as [string, string][]) : []),
   ];
   return (

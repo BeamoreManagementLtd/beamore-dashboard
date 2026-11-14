@@ -108,7 +108,7 @@ export async function buildDueList(db: SupabaseClient, me: Profile): Promise<Due
     if (!count) items.push({ key: `plan-${nextMonth}`, kind: "Diary", title: `Fill in the grey (planned) side for ${MONTH(nextMonth)}`, detail: "From the cost proposals", due: nextMonth, ...ownerOf(null, directorName) });
   }
   if (lastMonth >= "2026-11-01" && !(signoffs.data ?? []).some((s) => s.month === lastMonth))
-    items.push({ key: `signoff-${lastMonth}`, kind: "Diary", title: `Compare planned and charged for ${MONTH(lastMonth)}, then sign off invoicing`, due: addDays(monthStart, 2), ...ownerOf(null, directorName) });
+    items.push({ key: `signoff-${lastMonth}`, kind: "Diary", title: `Compare planned and charged for ${MONTH(lastMonth)}, then sign off invoicing`, due: addDays(monthStart, 2), link: `/signoff?month=${lastMonth.slice(0, 7)}`, ...ownerOf(null, directorName) });
   if (unmatchedSites.count)
     items.push({ key: "unmatched-sites", kind: "Diary", title: `${unmatchedSites.count} diary site name${unmatchedSites.count > 1 ? "s" : ""} not linked to a project`, due: null, link: "/projects", ...ownerOf(null, directorName) });
   if (unmatchedRefs.count)
