@@ -85,6 +85,20 @@ export async function buildDueList(db: SupabaseClient, me: Profile): Promise<Due
       items.push({ key: `reports-${c}`, kind: "Reports", title: `Check ${mine.length} report${mine.length > 1 ? "s" : ""}`, detail: late ? `${late} past due` : undefined, due: earliest, link: `/reports?checker=${encodeURIComponent(c)}`, ...ownerOf(null, c) });
   }
 
+  // ---- project information asked for over a week ago and not received (one line per project)
+  const { data: info } = await db.from("project_info").select("project_id,item,requested_on,projects(id,display_name)")
+    .not("requested_on", "is", null).is("received_on", null).lte("requested_on", addDays(t, -7));
+  const byProj = new Map<string, { name: string; items: string[]; since: string }>();
+  for (const i of info ?? []) {
+    const p = i.projects as unknown as { id: string; display_name: string } | null;
+    if (!p) continue;
+    const x = byProj.get(p.id) ?? { name: p.display_name, items: [] as string[], since: String(i.requested_on) };
+    x.items.push(String(i.item)); if (String(i.requested_on) < x.since) x.since = String(i.requested_on);
+    byProj.set(p.id, x);
+  }
+  for (const [pid, x] of byProj)
+    items.push({ key: `info-${pid}`, kind: "Projects", title: `${x.name}: chase the client for project information`, detail: x.items.join(", "), due: addDays(x.since, 7), link: `/projects/${pid}`, ...ownerOf(null, "Judy") });
+
   // ---- project next actions
   for (const p of projects.data ?? [])
     items.push({ key: `project-${p.id}`, kind: "Projects", title: `${p.display_name}: ${p.next_action ?? "next action"}`, due: p.next_action_due, link: "/projects", ...ownerOf(p.owner_id, null) });

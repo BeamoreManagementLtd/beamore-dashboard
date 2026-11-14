@@ -3,7 +3,7 @@ import { notFound } from "next/navigation";
 import { requireProfile } from "@/lib/auth";
 import { createClient } from "@/lib/supabase/server";
 import { gbp, fd, today, daysBetween, CHASE_STATUS } from "@/lib/format";
-import { saveProject, addAlias } from "../actions";
+import { saveProject, addAlias, startInfoChecklist, addInfoItem, requestOutstanding, setInfoReceived, removeInfoItem, addProjectEvent } from "../actions";
 
 export const dynamic = "force-dynamic";
 
@@ -21,6 +21,10 @@ export default async function Project({ params }: { params: Promise<{ id: string
   const monthStart = `${t.slice(0, 7)}-01`;
   const { data: p } = await db.from("projects").select("*,clients(name)").eq("id", id).maybeSingle();
   if (!p) notFound();
+  const [{ data: info }, { data: pevents }] = await Promise.all([
+    db.from("project_info").select("id,item,requested_on,received_on").eq("project_id", id).order("created_at"),
+    db.from("project_events").select("id,happened_at,source,kind,who,body").eq("project_id", id).order("happened_at", { ascending: false }).limit(40),
+  ]);
   const [months, { data: invoices }, { data: onSite }, { data: queue }, { data: log }, { data: contacts }, { data: staff }, { data: fin }] = await Promise.all([
     db.rpc("project_month_days", { p: id }),
     db.from("invoices").select("id,number,reference,due,amount_due,days_building,days_me,chase_state(status,next_action,next_action_due)").eq("project_id", id).gt("amount_due", 0).order("due"),
@@ -53,6 +57,16 @@ export default async function Project({ params }: { params: Promise<{ id: string
   const contact = (contacts ?? [])[0];
   const save = saveProject.bind(null, id);
   const owed = (invoices ?? []).reduce((s, i) => s + Number(i.amount_due), 0);
+  // ---- project information from the client: who has the next move
+  const items = info ?? [];
+  const waitingOn = items.filter((i) => i.requested_on && !i.received_on);
+  const notAsked = items.filter((i) => !i.requested_on && !i.received_on);
+  const oldest = waitingOn.map((i) => i.requested_on!).sort()[0];
+  const infoBanner = !items.length ? null
+    : waitingOn.length ? { tone: oldest && daysBetween(oldest, t) > 7 ? "bad" : "warn", title: "Waiting on the client", text: `for ${waitingOn.map((i) => i.item).join(", ")} (asked ${fd(oldest)}${daysBetween(oldest, t) > 7 ? `, ${daysBetween(oldest, t)} days ago: chase` : ""}).` }
+    : notAsked.length ? { tone: "bad", title: "Ball is in our court.", text: `${notAsked.length} item${notAsked.length > 1 ? "s" : ""} not asked for yet: ${notAsked.map((i) => i.item).join(", ")}.` }
+    : { tone: "good", title: "All project information received.", text: "" };
+  const look = (kind: string) => kind === "Email received" || kind === "Info received" ? "in" : kind === "Email sent" || kind === "Info requested" ? "out" : kind === "Phone call" || kind === "Note" ? "team" : "xero";
 
   return (
     <>
@@ -71,6 +85,70 @@ export default async function Project({ params }: { params: Promise<{ id: string
           {agreed ? <span className="sub">{charged > agreed ? `${charged - agreed} over` : `${agreed - charged} left`}</span> : null}</div>
         <div className="tile"><span className="label">This month: planned / charged</span><span className="big">{thisMonth?.planned ?? 0} / {(thisMonth?.b ?? 0) + (thisMonth?.me ?? 0)}</span></div>
         <div className={`tile ${owed ? "alert" : ""}`}><span className="label">Outstanding invoices</span><span className="big">{gbp(owed)}</span><span className="sub">{invoices?.length ?? 0} invoice{invoices?.length === 1 ? "" : "s"}</span></div>
+      </div>
+
+      {infoBanner && <p className={`callout ${infoBanner.tone}`}><b>{infoBanner.title}</b> {infoBanner.text}</p>}
+      <div className="grid2">
+        <section className="panel">
+          <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
+            <h2>Project information from the client</h2>
+            {!!notAsked.length && <form action={requestOutstanding.bind(null, id)}><button className="btn">Mark {notAsked.length} as requested today</button></form>}
+          </div>
+          {!items.length ? (
+            <div className="row">
+              <span className="muted small">No checklist yet.</span>
+              <form action={startInfoChecklist.bind(null, id, "dfe")}><button className="btn primary">Start DfE checklist</button></form>
+              <form action={startInfoChecklist.bind(null, id, "standard")}><button className="btn">Start standard checklist</button></form>
+            </div>
+          ) : (
+            <table><tbody>
+              {items.map((i) => (
+                <tr key={i.id}>
+                  <td>{i.item}</td>
+                  <td className="small">{i.received_on ? <span className="pill good">Received {fd(i.received_on)}</span>
+                    : i.requested_on ? <span className={`pill ${daysBetween(i.requested_on, t) > 7 ? "bad" : "warn"}`}>Asked {fd(i.requested_on)}</span>
+                    : <span className="pill neutral">Not asked yet</span>}</td>
+                  <td className="num" style={{ whiteSpace: "nowrap" }}>
+                    <form action={setInfoReceived.bind(null, id, i.id, !i.received_on)} style={{ display: "inline" }}><button className="btn sm">{i.received_on ? "Undo" : "Received"}</button></form>{" "}
+                    {!i.received_on && <form action={removeInfoItem.bind(null, id, i.id)} style={{ display: "inline" }}><button className="btn sm" title="Not needed for this project">✕</button></form>}
+                  </td>
+                </tr>
+              ))}
+            </tbody></table>
+          )}
+          {!!items.length && (
+            <form action={addInfoItem.bind(null, id)} className="row">
+              <div className="field"><input name="item" placeholder="Add something else we need, e.g. Fire strategy" /></div>
+              <button className="btn">Add</button>
+            </form>
+          )}
+        </section>
+        <section className="panel">
+          <h2>Project log</h2>
+          {!pevents?.length ? <p className="empty">Nothing logged yet.</p> : (
+            <ol className="timeline">
+              {pevents.map((e) => (
+                <li key={e.id}>
+                  <span className="when">{fd(e.happened_at)}</span>
+                  <span className={`dot ${look(e.kind)}`} />
+                  <div>
+                    <div className="ev-top"><b>{e.kind}</b><span className="src">{e.source === "team" ? "Logged" : "Dashboard"}</span></div>
+                    {e.body && <p>{e.body}</p>}
+                    {e.who && <p className="ev-who">By {e.who}</p>}
+                  </div>
+                </li>
+              ))}
+            </ol>
+          )}
+          <form action={addProjectEvent.bind(null, id)} className="form">
+            <div className="row">
+              <div className="field" style={{ flex: "0 1 160px" }}><label htmlFor="pk">What happened</label>
+                <select id="pk" name="kind"><option>Phone call</option><option>Email sent</option><option>Email received</option><option>Note</option></select></div>
+              <div className="field"><label htmlFor="pb">Details</label><input id="pb" name="body" required placeholder="e.g. Asked Sarah for the programme" /></div>
+              <button className="btn primary">Add to log</button>
+            </div>
+          </form>
+        </section>
       </div>
 
       <div className="grid2">

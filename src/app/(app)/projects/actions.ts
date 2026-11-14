@@ -35,6 +35,69 @@ export async function addAlias(id: string, form: FormData) {
   revalidatePath("/projects");
 }
 
+// ---- project information from the client, and the project log
+async function logEvent(projectId: string, kind: string, body: string | null, source = "dashboard") {
+  const me = await requireProfile();
+  const db = await createClient();
+  await db.from("project_events").insert({ project_id: projectId, kind, body, source, who: me.full_name ?? me.email, created_by: me.id });
+}
+
+/** Adds the standard list (DfE or other) of things we need from the client; anything already there is kept. */
+export async function startInfoChecklist(projectId: string, kind: "dfe" | "standard") {
+  await requireProfile();
+  const { INFO_DFE, INFO_STANDARD } = await import("@/lib/project-info");
+  const db = await createClient();
+  const { data: have } = await db.from("project_info").select("item").eq("project_id", projectId);
+  const items = (kind === "dfe" ? INFO_DFE : INFO_STANDARD).filter((i) => !(have ?? []).some((h) => h.item === i));
+  if (items.length) await db.from("project_info").insert(items.map((item) => ({ project_id: projectId, item })));
+  revalidatePath(`/projects/${projectId}`);
+}
+
+export async function addInfoItem(projectId: string, form: FormData) {
+  await requireProfile();
+  const item = s(form, "item");
+  if (!item) return;
+  const db = await createClient();
+  await db.from("project_info").insert({ project_id: projectId, item });
+  revalidatePath(`/projects/${projectId}`);
+}
+
+/** Marks everything not yet asked for as requested today, and logs it. */
+export async function requestOutstanding(projectId: string) {
+  await requireProfile();
+  const db = await createClient();
+  const today = new Date().toISOString().slice(0, 10);
+  const { data } = await db.from("project_info").select("id,item").eq("project_id", projectId).is("requested_on", null).is("received_on", null);
+  if (!data?.length) return;
+  await db.from("project_info").update({ requested_on: today }).in("id", data.map((d) => d.id));
+  await logEvent(projectId, "Info requested", data.map((d) => d.item).join(", "));
+  revalidatePath(`/projects/${projectId}`);
+  revalidatePath("/due");
+}
+
+export async function setInfoReceived(projectId: string, itemId: string, received: boolean) {
+  await requireProfile();
+  const db = await createClient();
+  const { data: it } = await db.from("project_info").update({ received_on: received ? new Date().toISOString().slice(0, 10) : null }).eq("id", itemId).select("item").single();
+  if (received && it) await logEvent(projectId, "Info received", it.item);
+  revalidatePath(`/projects/${projectId}`);
+  revalidatePath("/due");
+}
+
+export async function removeInfoItem(projectId: string, itemId: string) {
+  await requireProfile();
+  const db = await createClient();
+  await db.from("project_info").delete().eq("id", itemId);
+  revalidatePath(`/projects/${projectId}`);
+}
+
+export async function addProjectEvent(projectId: string, form: FormData) {
+  const kind = s(form, "kind"), body = s(form, "body");
+  if (!body || !kind || !["Phone call", "Email sent", "Email received", "Note"].includes(kind)) return;
+  await logEvent(projectId, kind, body, "team");
+  revalidatePath(`/projects/${projectId}`);
+}
+
 /** A one-off diary entry that isn't a project (e.g. a site measure): stop listing it as unlinked. */
 export async function ignoreSite(site: string) {
   await requireProfile();
