@@ -31,7 +31,8 @@ const stamp = (c) => {
   if (m) return `${m[3]}-${m[2].padStart(2, "0")}-${m[1].padStart(2, "0")}T${m[4].padStart(2, "0")}:${m[5]}:${m[6] ?? "00"}`;
   return /^\d{4}-\d{2}-\d{2}/.test(s) ? s.replace(" ", "T") : null;
 };
-const num = (c) => { const n = Number(val(c)); return Number.isFinite(n) ? n : null; };
+// a blank cell is "unknown", not 0 (blank working days are left out of averages, as in the workbook)
+const num = (c) => { const v = val(c); if (v == null || v === "") return null; const n = Number(v); return Number.isFinite(n) ? n : null; };
 
 /** Finds the header row (within the first 10) by a column name, and maps header → column number. */
 function headers(ws, mustHave) {
