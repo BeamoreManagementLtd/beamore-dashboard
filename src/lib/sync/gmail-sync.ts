@@ -30,8 +30,8 @@ export async function syncGmail(admin: SupabaseClient) {
 
     let added = 0, moved = 0, searched = 0;
     const list = invoices ?? [];
-    for (let i = 0; i < list.length; i += 8) {
-      await Promise.all(list.slice(i, i + 8).map(async (inv) => {
+    for (let i = 0; i < list.length; i += 3) { // gently: new Google projects have low per-minute limits
+      await Promise.all(list.slice(i, i + 3).map(async (inv) => {
         searched++;
         const after = (inv.issued ?? "2026-01-01").replace(/-/g, "/");
         const res = await g.gmail<{ threads?: { id: string }[] }>("threads", { q: `"${inv.number}" after:${after}`, maxResults: "10" });
@@ -77,7 +77,8 @@ export async function syncGmail(admin: SupabaseClient) {
     return { ok: true, message: msg };
   } catch (e) {
     const raw = e instanceof Error ? e.message : String(e);
-    const msg = / 403/.test(raw) && /gmail/i.test(raw) ? `Gmail access not granted yet: reconnect Google on the Finance page. (${raw.slice(0, 120)})` : raw;
+    const msg = / 403/.test(raw) && /insufficient|scope|permission/i.test(raw) && !/quota/i.test(raw)
+      ? `Gmail access not granted yet: reconnect Google on the Finance page. (${raw.slice(0, 120)})` : raw;
     await finish(false, msg);
     return { ok: false, message: msg };
   }

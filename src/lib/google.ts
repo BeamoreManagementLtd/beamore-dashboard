@@ -59,9 +59,17 @@ export async function driveClient(admin: SupabaseClient) {
     }).eq("id", 1);
   }
   const call = async (url: string) => {
-    const res = await fetch(url, { headers: { Authorization: `Bearer ${access}` }, cache: "no-store" });
-    if (!res.ok) throw new Error(`Google Drive ${res.status}: ${(await res.text()).slice(0, 200)}`);
-    return res;
+    for (let attempt = 0; ; attempt++) {
+      const res = await fetch(url, { headers: { Authorization: `Bearer ${access}` }, cache: "no-store" });
+      if (res.ok) return res;
+      const text = await res.text();
+      // rate limits come back as 429, or 403 "Quota exceeded"/"rateLimitExceeded": wait and try again
+      if ((res.status === 429 || (res.status === 403 && /quota|rate ?limit/i.test(text))) && attempt < 5) {
+        await new Promise((r) => setTimeout(r, 2000 * 2 ** attempt));
+        continue;
+      }
+      throw new Error(`Google ${url.includes("gmail") ? "Gmail" : "Drive"} ${res.status}: ${text.slice(0, 200)}`);
+    }
   };
   return {
     connection: c,
