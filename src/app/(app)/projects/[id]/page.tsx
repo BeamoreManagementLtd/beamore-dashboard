@@ -105,6 +105,24 @@ export default async function Project({ params }: { params: Promise<{ id: string
 
       {p.clerk_status === "finding" && !p.clerk_id && <FindClerk db={db} project={p} today={t} />}
 
+      {(() => {
+        const d = (p.details ?? {}) as Record<string, string>;
+        const rowsD: [string, string | null | undefined][] = [
+          ["DfE project number", p.dfe_project_number ?? d.dfe_project_number], ["DfE project director", d.dfe_project_director], ["DfE project manager", d.dfe_project_manager],
+          ["Technical adviser", d.ta_name && `${d.ta_name}${d.ta_firm ? ` (${d.ta_firm})` : ""}`], ["Principal contractor", d.principal_contractor && `${d.principal_contractor}${d.pc_project_manager ? `, PM ${d.pc_project_manager}` : ""}${d.pc_project_number && !/tbc|not known/i.test(d.pc_project_number) ? `, no. ${d.pc_project_number}` : ""}`],
+          ["Site address", d.site_address], ["PO number", p.po_number], ["Reports go to", p.report_to && `${p.report_to}${p.report_cc ? ` (cc ${p.report_cc})` : ""}`],
+          ["Inspections / reports", [p.inspection_frequency, p.reporting_frequency].filter(Boolean).join(" / ") || null],
+        ];
+        const shown = rowsD.filter(([, v]) => v);
+        return shown.length ? (
+          <section className="panel">
+            <h2>Key details</h2>
+            <table><tbody>{shown.map(([k, v]) => <tr key={k}><td className="muted small" style={{ width: 190 }}>{k}</td><td>{v}</td></tr>)}</tbody></table>
+            {d._file && <p className="small muted">From the diary’s Report emails and Invoice POs tabs, and the newest CoW diary ({d._file}). Updated daily.</p>}
+          </section>
+        ) : null;
+      })()}
+
       {infoBanner && <p className={`callout ${infoBanner.tone}`}><b>{infoBanner.title}</b> {infoBanner.text}</p>}
       <div className="grid2">
         <section className="panel">

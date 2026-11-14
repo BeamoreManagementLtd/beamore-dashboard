@@ -6,6 +6,7 @@
     { "path": "/api/sync/reports", "schedule": "*/30 * * * *" },
     { "path": "/api/sync/gmail", "schedule": "40 * * * *" },
     { "path": "/api/sync/intake", "schedule": "50 * * * *" },
-    { "path": "/api/sync/proposals", "schedule": "15 5 * * *" }
+    { "path": "/api/sync/proposals", "schedule": "15 5 * * *" },
+    { "path": "/api/sync/details", "schedule": "35 5 * * *" }
   ]
 }
