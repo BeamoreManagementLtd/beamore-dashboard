@@ -49,8 +49,12 @@ async function profitAndLoss(get: XeroGet, from: string, to: string) {
   const find = (re: RegExp) => v.find((x) => re.test(x.label))?.value ?? 0;
   const sales = find(/^Total (Trading )?Income$/i);
   const costTotal = find(/^Total Cost of Sales$/i);
-  const subs = v.filter((x) => /cost of sales/i.test(x.section) && /subcontract/i.test(x.label)).reduce((s, x) => s + x.value, 0);
-  return { sales, subcontractors: subs, cogs: costTotal - subs, net_profit: find(/^Net Profit$/i) };
+  // Beamore books clerks to "Subcontractors" under Operating Expenses, not Cost of Sales: count it wherever it sits,
+  // and only take it off cost of sales if it was inside that section.
+  const subRows = v.filter((x) => /^subcontract/i.test(x.label));
+  const subs = subRows.reduce((s, x) => s + x.value, 0);
+  const subsInCos = subRows.filter((x) => /cost of sales/i.test(x.section)).reduce((s, x) => s + x.value, 0);
+  return { sales, subcontractors: subs, cogs: costTotal - subsInCos, net_profit: find(/^Net Profit$/i) };
 }
 
 export async function syncXero(admin: SupabaseClient) {
@@ -149,11 +153,14 @@ export async function syncXero(admin: SupabaseClient) {
       await admin.from("unmatched_invoice_refs").insert([...unmatched].map(([reference_key, u]) => ({ reference_key, ...u, last_seen: today })));
 
     // ---- finance (director-only table)
-    // BankSummary rows are [account, opening, received, spent, closing]; the "Total" summary row's last cell is cash at bank
+    // BankSummary rows are [account, opening, received, spent, closing]. Cash at bank = closing balances of the bank
+    // accounts, leaving out charge/credit cards (as Xero's own cash figure does).
     const bankRep = await get<Report>("Reports/BankSummary", { fromDate: today, toDate: today });
-    const totals = (rows: ReportRow[]): number[] => rows.flatMap((r) =>
-      r.Rows ? totals(r.Rows) : r.RowType === "SummaryRow" && r.Cells ? [parseFloat(r.Cells.at(-1)!.Value)] : []);
-    const cashClosing = totals(bankRep.Reports[0].Rows).find((n) => !Number.isNaN(n)) ?? null;
+    const accounts = (rows: ReportRow[]): { name: string; closing: number }[] => rows.flatMap((r) =>
+      r.Rows ? accounts(r.Rows) : r.RowType === "Row" && r.Cells ? [{ name: r.Cells[0].Value, closing: parseFloat(r.Cells.at(-1)!.Value) }] : []);
+    const cashClosing = accounts(bankRep.Reports[0].Rows)
+      .filter((a) => !Number.isNaN(a.closing) && !/card|amex|credit/i.test(a.name))
+      .reduce((s, a) => s + a.closing, 0);
 
     const owed = open.reduce((s, i) => s + i.AmountDue, 0);
     const overdue = open.filter((i) => day(i.DueDateString)! < today).reduce((s, i) => s + i.AmountDue, 0);
