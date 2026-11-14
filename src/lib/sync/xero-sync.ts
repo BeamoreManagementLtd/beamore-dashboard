@@ -113,6 +113,27 @@ export async function syncXero(admin: SupabaseClient) {
       return hits.size === 1 ? [...hits][0]! : null;
     };
 
+    // A project name inside free text (an invoice line description): the longest known name that appears, if only one project has it
+    const projectInText = (text: string) => {
+      const t = siteKey(text);
+      const found = keys.filter((k) => k.length >= 6 && t.includes(k)).sort((a, b) => b.length - a.length);
+      if (!found.length) return null;
+      const best = new Set(found.filter((k) => k.length === found[0].length).map((k) => projByKey.get(k)));
+      return best.size === 1 ? [...best][0]! : null;
+    };
+    // Invoices whose reference doesn't name a project: read their line descriptions (needs the full invoice)
+    const fromLines = new Map<string, string>();
+    const needLines = [...open, ...closed].filter((i) => !knownBy.get(i.InvoiceNumber)?.project_id && !projectFor(i.Reference));
+    for (let i = 0; i < needLines.length; i += 40) {
+      const full = await get<{ Invoices: (XInvoice & { LineItems?: { Description?: string }[] })[] }>("Invoices", {
+        IDs: needLines.slice(i, i + 40).map((x) => x.InvoiceID).join(","), page: 1,
+      });
+      for (const f of full.Invoices) {
+        const pid = (f.LineItems ?? []).map((l) => (l.Description ? projectFor(l.Description) ?? projectInText(l.Description) : null)).find(Boolean);
+        if (pid) fromLines.set(f.InvoiceNumber, pid);
+      }
+    }
+
     const rows = [...open, ...closed].map((i) => ({
       inv: i,
       row: {
@@ -120,7 +141,7 @@ export async function syncXero(admin: SupabaseClient) {
         reference: i.Reference ?? null, issued: day(i.DateString), due: day(i.DueDateString), total: i.Total,
         amount_due: i.Status === "AUTHORISED" ? i.AmountDue : 0, status: i.Status, synced_at: new Date().toISOString(),
       },
-      project: knownBy.get(i.InvoiceNumber)?.project_id ?? projectFor(i.Reference),
+      project: knownBy.get(i.InvoiceNumber)?.project_id ?? projectFor(i.Reference) ?? fromLines.get(i.InvoiceNumber) ?? null,
     }));
     const withProject = rows.filter((r) => r.project).map((r) => ({ ...r.row, project_id: r.project }));
     const without = rows.filter((r) => !r.project).map((r) => r.row);
