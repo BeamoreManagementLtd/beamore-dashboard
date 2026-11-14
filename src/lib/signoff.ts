@@ -144,6 +144,11 @@ export async function prepareDrafts(admin: SupabaseClient, m: string, { test = f
     const lines: XLine[] = [];
     for (const l of tpl.LineItems ?? []) {
       if (!priced(l)) { lines.push({ Description: retext(l.Description, m) }); continue; }
+      // expenses (e.g. Northumberland's hotel stays) change month to month: don't copy them, flag them
+      if (/hotel|accommodation|travel|mileage|expense|parking|subsistence|train|fuel/i.test(l.Description ?? "")) {
+        warnings.push(`Last invoice included "${(l.Description ?? "").split("\n")[0]}" £${Math.round(l.Quantity! * l.UnitAmount!)}: add this month's if needed`);
+        continue;
+      }
       const kind = isMe(l.Description) ? "me" : "b";
       if (used[kind] || want[kind] === 0) continue;
       used[kind] = true;
