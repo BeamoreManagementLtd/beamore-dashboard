@@ -29,7 +29,7 @@ export default async function Projects({ searchParams }: { searchParams: Promise
 
   return (
     <>
-      <div className="head"><div><h1>Projects</h1><p>From the Cost Proposals Register, the diary and Xero. Money columns are on the director’s view only. <Link href="/projects/dfe">DfE or other: quick check</Link></p></div></div>
+      <div className="head"><div><h1>Projects</h1><p>From the Cost Proposals Register, the diary and Xero. Money columns are on the director’s view only. <Link href="/projects/dfe">DfE or other: quick check</Link> · <Link href="/projects/requests">Pricing requests</Link></p></div></div>
       {!!unmatched?.length && (
         <details className="callout warn">
           <summary>{unmatched.length} Xero invoice reference{unmatched.length > 1 ? "s" : ""} don’t match a project</summary>

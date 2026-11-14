@@ -72,7 +72,7 @@ export async function draftInfoRequest(admin: SupabaseClient, projectId: string)
   const { data: p } = await admin.from("projects").select("id,name,client_id,is_dfe").eq("id", projectId).single();
   if (!p) throw new Error("project not found");
   const [{ data: items }, { data: reply }, { data: contacts }] = await Promise.all([
-    admin.from("project_info").select("item").eq("project_id", projectId).is("received_on", null).order("created_at"),
+    admin.from("project_info").select("item,requested_on").eq("project_id", projectId).is("received_on", null).order("created_at"),
     admin.from("project_steps").select("note").eq("project_id", projectId).eq("step", "P4").maybeSingle(),
     admin.from("invoice_contacts").select("to_emails").or(`project_id.eq.${projectId}${p.client_id ? `,client_id.eq.${p.client_id}` : ""}`).limit(1),
   ]);
@@ -87,7 +87,10 @@ export async function draftInfoRequest(admin: SupabaseClient, projectId: string)
   }
   if (!to) to = ((contacts?.[0]?.to_emails as string[] | undefined) ?? []).join(", ");
   const list = (items ?? []).map((i) => `- ${i.item}`).join("\n") || "- (add the items needed)";
-  const body = `Hello,\n\nThank you for appointing Beamore on ${p.name}. So we can get set up, could you please send us the following:\n\n${list}\n\nMany thanks,\nRonan\n\nRonan O'Boyle\nBeamore Management Ltd`;
+  const chasing = (items ?? []).some((i) => i.requested_on);
+  const body = chasing
+    ? `Hello,\n\nJust following up on the information for ${p.name}. We're still waiting on:\n\n${list}\n\nCould you send these over when you get a moment?\n\nMany thanks,\nRonan\n\nRonan O'Boyle\nBeamore Management Ltd`
+    : `Hello,\n\nThank you for appointing Beamore on ${p.name}. So we can get set up, could you please send us the following:\n\n${list}\n\nMany thanks,\nRonan\n\nRonan O'Boyle\nBeamore Management Ltd`;
   const headers = [to && `To: ${to}`, `Subject: ${subject}`, inReplyTo && `In-Reply-To: ${inReplyTo}`, inReplyTo && `References: ${inReplyTo}`,
     "MIME-Version: 1.0", "Content-Type: text/plain; charset=UTF-8"].filter(Boolean);
   const raw = `${headers.join("\r\n")}\r\n\r\n${body.replace(/\n/g, "\r\n")}`;
@@ -121,4 +124,75 @@ export async function onWon(admin: SupabaseClient, projectId: string) {
   await attempt("Info request draft", () => draftInfoRequest(admin, projectId));
   await attempt("Xero tracking", async () => { const r = await setupProjectTracking(admin); if (!r.ok) throw new Error(r.message); return r.message; });
   return out;
+}
+
+/** P4: a Gmail draft following up a cost proposal, as a reply in the thread it went out in. Only ever a draft. */
+export async function draftProposalFollowUp(admin: SupabaseClient, projectId: string) {
+  const { data: p } = await admin.from("projects").select("name,stage_changed_at").eq("id", projectId).single();
+  if (!p) throw new Error("project not found");
+  const g = await driveClient(admin);
+  const found = await g.gmail<{ messages?: { id: string; threadId: string }[] }>("messages", { q: `in:sent subject:"${p.name.replace(/"/g, "")}" (proposal OR fee OR quote OR quotation)`, maxResults: "1" });
+  const m = found.messages?.[0];
+  if (!m) throw new Error(`no sent proposal for "${p.name}" found in your sent email`);
+  const full = await g.gmail<{ internalDate: string; payload: { headers: { name: string; value: string }[] } }>(`messages/${m.id}`, { format: "metadata", metadataHeaders: ["To", "Cc", "Subject", "Message-ID"] });
+  const h = (n: string) => full.payload.headers.find((x) => x.name.toLowerCase() === n.toLowerCase())?.value ?? "";
+  const sent = new Date(Number(full.internalDate)).toLocaleDateString("en-GB", { day: "numeric", month: "long" });
+  const body = `Hello,\n\nJust following up on our fee proposal for ${p.name}, sent on ${sent}. Please let me know if you have any questions, or if you'd like us to go ahead.\n\nMany thanks,\nRonan\n\nRonan O'Boyle\nBeamore Management Ltd`;
+  const headers = [h("To") && `To: ${h("To")}`, h("Cc") && `Cc: ${h("Cc")}`, `Subject: Re: ${h("Subject").replace(/^re:\s*/i, "")}`,
+    h("Message-ID") && `In-Reply-To: ${h("Message-ID")}`, h("Message-ID") && `References: ${h("Message-ID")}`, "MIME-Version: 1.0", "Content-Type: text/plain; charset=UTF-8"].filter(Boolean);
+  const raw = `${headers.join("\r\n")}\r\n\r\n${body.replace(/\n/g, "\r\n")}`;
+  await g.post("https://gmail.googleapis.com/gmail/v1/users/me/drafts", { message: { raw: Buffer.from(raw).toString("base64url"), threadId: m.threadId } });
+  const msg = `Follow-up draft saved in your Gmail Drafts to ${h("To")}. It is not sent until you press Send`;
+  await admin.from("project_events").insert({ project_id: projectId, source: "dashboard", kind: "Follow-up drafted", who: "Dashboard", body: msg });
+  return msg;
+}
+
+type Part = { filename?: string; mimeType?: string; body?: { attachmentId?: string; size?: number }; parts?: Part[] };
+const flatten = (p?: Part): Part[] => (p ? [p, ...(p.parts ?? []).flatMap(flatten)] : []);
+
+/**
+ * S5: attachments the client emails about the project are saved into its Drive folder (CPs into "CPs",
+ * photos into "Photos", everything else at the top of the project folder). Only for projects won since
+ * the workflows began, only emails from outside Beamore since then, each attachment once. Logos, signature
+ * images and calendar invites are skipped. Never deletes or moves anything.
+ */
+export async function saveProjectAttachments(admin: SupabaseClient, projectId: string) {
+  const { data: p } = await admin.from("projects").select("name,drive_folder_id,stage_changed_at").eq("id", projectId).single();
+  if (!p?.drive_folder_id || !p.stage_changed_at) return 0;
+  const g = await driveClient(admin);
+  const since = Math.floor(Date.parse(p.stage_changed_at) / 1000);
+  const found = await g.gmail<{ messages?: { id: string }[] }>("messages", { q: `subject:"${p.name.replace(/"/g, "")}" has:attachment -from:me after:${since}`, maxResults: "10" });
+  if (!found.messages?.length) return 0;
+  const { data: done } = await admin.from("saved_attachments").select("message_id,attachment_name").eq("project_id", projectId);
+  const have = new Set((done ?? []).map((d) => `${d.message_id}|${d.attachment_name}`));
+  const subs = await children(g, p.drive_folder_id);
+  const sub = (name: string) => subs.find((s) => same(s.name, name))?.id ?? p.drive_folder_id!;
+  let saved = 0;
+  for (const m of found.messages) {
+    const full = await g.gmail<{ payload: Part & { headers: { name: string; value: string }[] } }>(`messages/${m.id}`, { format: "full" });
+    const from = full.payload.headers.find((h) => h.name.toLowerCase() === "from")?.value ?? "";
+    if (/beamore\.co\.uk/i.test(from)) continue;
+    const names: string[] = [];
+    for (const part of flatten(full.payload)) {
+      const name = part.filename?.trim();
+      const aid = part.body?.attachmentId;
+      if (!name || !aid || have.has(`${m.id}|${name}`)) continue;
+      const image = /^image\//.test(part.mimeType ?? "");
+      if ((image && (part.body?.size ?? 0) < 40_000) || /\.ics$|^image0\d+\./i.test(name)) continue; // logos, signatures, invites
+      const att = await g.gmail<{ data: string }>(`messages/${m.id}/attachments/${aid}`, {});
+      const folder = /\bCPs?\b|contractor.?s? proposal/i.test(name) ? sub("CPs") : image ? sub("Photos") : p.drive_folder_id;
+      const boundary = `b${Date.now().toString(36)}${Math.random().toString(36).slice(2)}`;
+      const body = Buffer.concat([
+        Buffer.from(`--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify({ name, parents: [folder] })}\r\n--${boundary}\r\nContent-Type: ${part.mimeType || "application/octet-stream"}\r\n\r\n`),
+        Buffer.from(att.data, "base64url"),
+        Buffer.from(`\r\n--${boundary}--`),
+      ]);
+      const up = await g.upload(body, `multipart/related; boundary=${boundary}`);
+      await admin.from("saved_attachments").insert({ message_id: m.id, attachment_name: name, project_id: projectId, drive_file_id: up.id });
+      names.push(name);
+      saved++;
+    }
+    if (names.length) await log(admin, projectId, "Files saved", `Saved ${names.length} attachment${names.length > 1 ? "s" : ""} from ${from.replace(/<.*>/, "").trim()} into the Drive folder: ${names.join(", ").slice(0, 250)}`);
+  }
+  return saved;
 }

@@ -143,6 +143,13 @@ export async function buildDueList(db: SupabaseClient, me: Profile): Promise<Due
     }
   }
 
+  // ---- P1: pricing requests spotted in email, waiting for a yes or no
+  {
+    const { data: reqs } = await db.from("price_requests").select("id,subject,from_name,received_at").eq("status", "new").order("received_at");
+    for (const q of reqs ?? [])
+      items.push({ key: `pricereq-${q.id}`, kind: "Projects", title: `Pricing request? ${q.subject ?? ""}`.slice(0, 120), detail: `From ${q.from_name ?? "?"}. Create the enquiry or mark it as not a request`, due: q.received_at?.slice(0, 10) ?? t, link: "/projects/requests", ...(director ? ownerOf(me.id, null) : ownerOf(null, directorName)) });
+  }
+
   // ---- the DfE check couldn't decide: ask the director rather than guess
   if (director) {
     const { data: unsure } = await db.from("projects").select("id,display_name,dfe_evidence").is("is_dfe", null).like("dfe_evidence", "Unsure%");

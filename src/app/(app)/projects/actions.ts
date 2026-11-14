@@ -266,3 +266,45 @@ export async function appointCandidate(projectId: string, candidateId: string) {
   const { redirect } = await import("next/navigation");
   redirect(`/personnel?project=${projectId}&name=${encodeURIComponent(c.name)}#new`);
 }
+
+// ---- P1: pricing requests spotted in email
+export async function createFromRequest(requestId: string, form: FormData) {
+  const me = await requireProfile();
+  const db = await createClient();
+  const name = String(form.get("name") ?? "").trim();
+  const client = String(form.get("client_id") ?? "") || null;
+  if (!name) return;
+  const { data: req } = await db.from("price_requests").select("from_name,subject,received_at,status").eq("id", requestId).single();
+  if (!req || req.status !== "new") return;
+  const { data: last } = await db.from("projects").select("number").order("number", { ascending: false }).limit(1);
+  const number = (last?.[0]?.number ?? 1000) + 1;
+  const { data: p, error } = await db.from("projects").insert({ number, name, client_id: client, stage: "pricing" }).select("id").single();
+  if (error) throw new Error(error.message);
+  await db.from("price_requests").update({ status: "created", project_id: p.id }).eq("id", requestId);
+  await db.from("project_events").insert({ project_id: p.id, source: "gmail", kind: "Email received", who: req.from_name,
+    body: `Asked to price: "${req.subject}". Enquiry created by ${me.full_name ?? me.email}` });
+  revalidatePath("/projects/requests");
+  revalidatePath("/workflows");
+  const { redirect } = await import("next/navigation");
+  redirect(`/projects/${p.id}`);
+}
+
+export async function ignoreRequest(requestId: string) {
+  await requireProfile();
+  const db = await createClient();
+  await db.from("price_requests").update({ status: "ignored" }).eq("id", requestId);
+  revalidatePath("/projects/requests");
+  revalidatePath("/due");
+}
+
+/** P4: draft a follow-up to a proposal with no reply. Only ever a draft. */
+export async function draftFollowUp(projectId: string) {
+  await requireProfile();
+  const { draftProposalFollowUp } = await import("@/lib/project-setup");
+  const { createServiceClient } = await import("@/lib/supabase/server");
+  const admin = createServiceClient();
+  try { await draftProposalFollowUp(admin, projectId); } catch (e) {
+    await admin.from("project_events").insert({ project_id: projectId, source: "dashboard", kind: "Set-up problem", who: "Dashboard", body: `Follow-up draft not done: ${e instanceof Error ? e.message : String(e)}`.slice(0, 300) });
+  }
+  revalidatePath(`/projects/${projectId}`);
+}

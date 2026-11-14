@@ -1,5 +1,5 @@
 import type { Stage, Status, Step } from "@/lib/workflow";
-import { markStep, setOutcome, setClerk, setPo, closeOutAnswer, setFolderKind, redraftInfoRequest } from "../actions";
+import { markStep, setOutcome, setClerk, setPo, closeOutAnswer, setFolderKind, redraftInfoRequest, draftFollowUp } from "../actions";
 import { FOLDER_KINDS } from "@/lib/folder-kinds";
 
 /** The project's workflow: stages across the top, then the current stage's steps (green done, amber waiting, grey to come). */
@@ -42,6 +42,20 @@ export function WorkflowPanel({ projectId, stages, current, clerks, ticked, stat
             </select>
             <button className="btn">{folder.id ? "Fix folders" : "Make folder"}</button>
           </form>
+        </span>
+      );
+    if (st.id === "P4" && st.state !== "done" && stages[0].steps.find((x) => x.id === "P3")?.state === "done")
+      return (
+        <span className="wf-ctl">
+          <form action={draftFollowUp.bind(null, projectId)}><button className="btn">Draft follow-up</button></form>
+          <form action={markStep.bind(null, projectId, "P4", true)}><button className="btn">They replied</button></form>
+        </span>
+      );
+    if (st.id === "S5" && st.state !== "done")
+      return (
+        <span className="wf-ctl">
+          <form action={redraftInfoRequest.bind(null, projectId)}><button className="btn">Draft chaser</button></form>
+          <form action={markStep.bind(null, projectId, "S5", true)}><button className="btn">Mark done</button></form>
         </span>
       );
     if (st.id === "S2" && st.state !== "done")

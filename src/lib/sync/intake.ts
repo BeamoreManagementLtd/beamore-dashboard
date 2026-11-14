@@ -3,7 +3,7 @@ import JSZip from "jszip";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { driveClient } from "@/lib/google";
 import { INFO_DFE, INFO_STANDARD } from "@/lib/project-info";
-import { ensureProjectFolder } from "@/lib/project-setup";
+import { ensureProjectFolder, saveProjectAttachments } from "@/lib/project-setup";
 
 /**
  * Project intake (hourly, read only):
@@ -185,6 +185,38 @@ export async function runIntake(admin: SupabaseClient) {
       requestsSent++;
     }
 
+    // ---- 3d. S5: client attachments into the project's Drive folder
+    let filesSaved = 0;
+    {
+      const { data: withFolder } = await admin.from("projects").select("id").in("stage", ["won_arranging", "won_preparing", "live"]).not("stage_changed_at", "is", null).not("drive_folder_id", "is", null);
+      for (const p of withFolder ?? []) { try { filesSaved += await saveProjectAttachments(admin, p.id); } catch { /* try again next hour */ } }
+    }
+
+    // ---- 5. P1: emails that look like a request to price; the director is asked before anything is created
+    let priceRequests = 0;
+    {
+      const asks = await q('-from:me -in:chats newer_than:3d (subject:("fee proposal" OR "fee request" OR "request for fee" OR quote OR quotation OR "pricing" OR "tender" OR "expression of interest" OR "clerk of works" OR "CoW" OR "CQM") OR "please provide a fee" OR "provide a quote" OR "fee proposal for" OR "could you price" OR "can you price")', 25);
+      const { data: known } = await admin.from("price_requests").select("message_id,thread_id");
+      const seen = new Set((known ?? []).flatMap((k) => [k.message_id, k.thread_id]));
+      const { data: contacts } = await admin.from("invoice_contacts").select("client_id,to_emails").not("client_id", "is", null);
+      const domainClient = new Map<string, string>();
+      for (const c of contacts ?? []) for (const e of (c.to_emails as string[]) ?? []) { const d = e.split("@")[1]?.toLowerCase(); if (d && !/gmail|outlook|hotmail|yahoo|icloud/.test(d)) domainClient.set(d, c.client_id as string); }
+      for (const m of asks.messages ?? []) {
+        if (seen.has(m.id) || seen.has(m.threadId)) continue;
+        const full = await msg(m.id);
+        const subj = header(full, "Subject"), from = header(full, "From");
+        if (/^(automatic reply|out of office|undeliverable|accepted:|declined:)/i.test(subj) || /noreply|no-reply|mailer-daemon|beamore\.co\.uk/i.test(from)) continue;
+        // about a job we already have (report, invoice, chaser) rather than a new one to price
+        if (/\b(report|diary|invoice|remittance|payment|timesheet)\b/i.test(subj)) continue;
+        if ((projects ?? []).some((p) => p.name.length > 4 && subj.toLowerCase().includes(p.name.toLowerCase()) && !["enquiry", "pricing"].includes(p.stage))) continue;
+        const email = (/<([^>]+)>/.exec(from)?.[1] ?? from).trim().toLowerCase();
+        await admin.from("price_requests").insert({ message_id: m.id, thread_id: m.threadId, from_name: who(from), from_email: email, subject: subj.slice(0, 300),
+          snippet: (full.snippet ?? "").slice(0, 400), received_at: new Date(Number(full.internalDate)).toISOString(), client_id: domainClient.get(email.split("@")[1] ?? "") ?? null });
+        seen.add(m.threadId);
+        priceRequests++;
+      }
+    }
+
     // ---- 4. replies to cost proposals that look like a go-ahead (logged once per message)
     const replies = await q('(subject:proposal OR subject:"fee") (instruct OR "go ahead" OR "pleased to confirm" OR "happy to proceed" OR appoint OR "purchase order") -from:me newer_than:14d', 20);
     for (const m of replies.messages ?? []) {
@@ -199,7 +231,7 @@ export async function runIntake(admin: SupabaseClient) {
       goAheads++;
     }
 
-    const msgText = `${classified} projects checked for DfE, ${started} checklists started, ${hinted} checklist items found in email, ${sentFound} proposals found sent, ${replies4} client replies, ${setupDone} folders made, ${requestsSent} info requests seen sent, ${goAheads} possible go-aheads`;
+    const msgText = `${classified} projects checked for DfE, ${started} checklists started, ${hinted} checklist items found in email, ${sentFound} proposals found sent, ${replies4} client replies, ${setupDone} folders made, ${requestsSent} info requests seen sent, ${filesSaved} attachments saved to Drive, ${goAheads} possible go-aheads, ${priceRequests} possible pricing requests`;
     await finish(true, msgText);
     return { ok: true, message: msgText };
   } catch (e) {
