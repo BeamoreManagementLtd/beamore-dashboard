@@ -67,5 +67,8 @@ export async function driveClient(admin: SupabaseClient) {
     json: async <T>(path: string, params: Record<string, string>) =>
       (await call(`https://www.googleapis.com/drive/v3/${path}?${new URLSearchParams(params)}`)).json() as Promise<T>,
     download: async (fileId: string) => (await call(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media&supportsAllDrives=true`)).arrayBuffer(),
+    /** A Google Sheet saved as .xlsx (Sheets can't be downloaded directly). */
+    exportXlsx: async (fileId: string) =>
+      (await call(`https://www.googleapis.com/drive/v3/files/${fileId}/export?mimeType=${encodeURIComponent("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")}`)).arrayBuffer(),
   };
 }
