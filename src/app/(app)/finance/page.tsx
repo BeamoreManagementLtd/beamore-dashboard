@@ -1,23 +1,25 @@
 import { requireDirector } from "@/lib/auth";
 import { createClient } from "@/lib/supabase/server";
 import { gbp, fdt } from "@/lib/format";
-import { syncNow, syncDiaryNow } from "./actions";
+import { syncNow, syncDiaryNow, syncGmailNow } from "./actions";
 
 export const dynamic = "force-dynamic";
-export const maxDuration = 120; // "Read diary now" downloads and parses the whole diary
+export const maxDuration = 300; // "Read diary now" / "Read Gmail now" can take a minute or two
 
 export default async function Finance({ searchParams }: { searchParams: Promise<{ xero?: string; diary?: string; reason?: string }> }) {
   await requireDirector(); // page guard; the tables themselves are director-only in the database too
   const { xero, diary, reason } = await searchParams;
   const db = await createClient();
-  const [{ data: snaps }, { data: conn }, { data: runs }, { data: gconn }, { data: druns }] = await Promise.all([
+  const [{ data: snaps }, { data: conn }, { data: runs }, { data: gconn }, { data: druns }, { data: gmruns }] = await Promise.all([
     db.from("finance_snapshots").select("*").order("taken_at", { ascending: false }).limit(12),
     db.rpc("xero_connection_status"),
     db.from("sync_runs").select("finished_at,ok,message").eq("source", "xero").order("started_at", { ascending: false }).limit(1),
     db.rpc("google_connection_status"),
     // the last diary read that did something (hourly checks that find no change are skipped here)
     db.from("sync_runs").select("finished_at,ok,message").eq("source", "diary").neq("message", "Diary unchanged since last read").order("started_at", { ascending: false }).limit(1),
+    db.from("sync_runs").select("finished_at,ok,message").eq("source", "gmail").order("started_at", { ascending: false }).limit(1),
   ]);
+  const glast = gmruns?.[0];
   const c = (conn as { tenant_name: string; connected_at: string }[] | null)?.[0];
   const last = runs?.[0];
   const g = (gconn as { email: string; connected_at: string; diary_modified_time: string | null }[] | null)?.[0];
@@ -68,6 +70,24 @@ export default async function Finance({ searchParams }: { searchParams: Promise<
           <div className="row">
             {g && <form action={syncDiaryNow}><button className="btn primary">Read diary now</button></form>}
             <a className={`btn ${g ? "" : "primary"}`} href="/api/google/connect">{g ? "Reconnect" : "Connect Google Drive"}</a>
+          </div>
+        </div>
+      </section>
+      {diary === "gmail" && <p className="callout info">Gmail read just now.</p>}
+      <section className="panel">
+        <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
+          <div>
+            <b>Gmail</b>{" "}
+            <span className="muted">chase emails that mention an outstanding invoice number are added to that invoice’s timeline every hour (read only).</span>
+            {glast && (
+              <span className="two">
+                Last read {fdt(glast.finished_at)}: {glast.ok ? glast.message : <span className="neg">failed: {glast.message}</span>}
+              </span>
+            )}
+          </div>
+          <div className="row">
+            {g && <form action={syncGmailNow}><button className="btn primary">Read Gmail now</button></form>}
+            <a className="btn" href="/api/google/connect">{glast && !glast.ok ? "Reconnect Google to allow Gmail" : "Reconnect"}</a>
           </div>
         </div>
       </section>

@@ -1,8 +1,9 @@
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
-// Read-only Drive access: the dashboard downloads Diary 2026.xlsx and never changes it.
-export const GOOGLE_SCOPES = process.env.GOOGLE_SCOPES ?? "openid email https://www.googleapis.com/auth/drive.readonly";
+// Read-only Drive (the diary and report files) and read-only Gmail (chase emails for each invoice). Nothing is changed or sent.
+export const GOOGLE_SCOPES = process.env.GOOGLE_SCOPES ??
+  "openid email https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/gmail.readonly";
 
 type Tokens = { access_token: string; refresh_token?: string; expires_in: number; id_token?: string };
 
@@ -64,6 +65,12 @@ export async function driveClient(admin: SupabaseClient) {
   };
   return {
     connection: c,
+    /** Gmail API (users/me), e.g. gmail("threads", { q }) */
+    gmail: async <T>(path: string, params: Record<string, string | string[]>) => {
+      const q = new URLSearchParams();
+      for (const [k, v] of Object.entries(params)) for (const x of [v].flat()) q.append(k, x);
+      return (await call(`https://gmail.googleapis.com/gmail/v1/users/me/${path}?${q}`)).json() as Promise<T>;
+    },
     json: async <T>(path: string, params: Record<string, string>) =>
       (await call(`https://www.googleapis.com/drive/v3/${path}?${new URLSearchParams(params)}`)).json() as Promise<T>,
     download: async (fileId: string) => (await call(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media&supportsAllDrives=true`)).arrayBuffer(),
