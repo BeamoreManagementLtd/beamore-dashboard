@@ -3,6 +3,7 @@ import { requireProfile } from "@/lib/auth";
 import { createClient } from "@/lib/supabase/server";
 import { fd, today } from "@/lib/format";
 import { addAbsence, cancelAbsence, addNewClerk } from "./actions";
+import { dismissApplication } from "../projects/actions";
 
 export const dynamic = "force-dynamic";
 
@@ -31,6 +32,7 @@ export default async function Personnel({ searchParams }: { searchParams: Promis
   const comp = (raw: unknown) => (Array.isArray(raw) ? raw[0] : raw) as
     { dbs_status?: string; dbs_recheck?: string; chartership_body?: string; chartership_grade?: string; chartership_renewal?: string; onboarding_complete?: boolean; onboarding_started?: string } | null;
   const onboarding = all.filter((c) => comp(c.clerk_compliance)?.onboarding_started && !comp(c.clerk_compliance)?.onboarding_complete);
+  const { data: applicants } = await db.from("job_applications").select("id,name,role,location,source,received_at,thread_id,projects(id,display_name)").eq("status", "new").order("received_at", { ascending: false }).limit(30);
   const { data: wonProjects } = await db.from("projects").select("id,display_name").in("stage", ["won_arranging", "won_preparing", "live"]).order("name");
   const missingDbs = all.filter(working).filter((c) => !comp(c.clerk_compliance)?.dbs_status).length;
   // a diary holiday that a dashboard entry already covers is shown once (as the dashboard entry)
@@ -47,6 +49,25 @@ export default async function Personnel({ searchParams }: { searchParams: Promis
         <h2>New clerks</h2>
         {onboarding.length > 0 && (
           <p className="small">Being onboarded: {onboarding.map((c, i) => <span key={c.id}>{i ? ", " : ""}<Link href={`/personnel/${c.id}`}>{c.name}</Link></span>)}. They’re not ready for site until every step is green.</p>
+        )}
+        {(applicants ?? []).length > 0 && (
+          <details>
+            <summary className="small">{(applicants ?? []).length} people have applied to work for us (Indeed and email)</summary>
+            <table><tbody>
+              {(applicants ?? []).map((a) => {
+                const job = a.projects as unknown as { id: string; display_name: string } | null;
+                return (
+                  <tr key={a.id}>
+                    <td>{a.name}<span className="two">{[a.role, a.location, a.source, a.received_at && fd(a.received_at.slice(0, 10))].filter(Boolean).join(" · ")}</span></td>
+                    <td className="small">{job ? <Link href={`/projects/${job.id}`}>{job.display_name}</Link> : <span className="muted">no job named</span>}</td>
+                    <td className="small"><a href={`https://mail.google.com/mail/u/0/#all/${a.thread_id}`} target="_blank" rel="noopener">application ↗</a></td>
+                    <td className="num"><form action={dismissApplication.bind(null, a.id)}><button className="linklike small">dismiss</button></form></td>
+                  </tr>
+                );
+              })}
+            </tbody></table>
+            <p className="small muted">To shortlist someone for a job, open the job and use Find a clerk.</p>
+          </details>
         )}
         <form action={addNewClerk} className="row">
           <div className="field"><label htmlFor="nn">Name (as it will appear in the diary)</label><input id="nn" name="name" required defaultValue={name ?? ""} /></div>

@@ -1,9 +1,9 @@
 import Link from "next/link";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { saveClerkNeeds, addCandidate, setCandidateStatus, appointCandidate } from "../actions";
+import { saveClerkNeeds, addCandidate, setCandidateStatus, appointCandidate, addApplicant } from "../actions";
 
 const STATUS: Record<string, string> = {
-  approached: "Approached", interested: "Interested", interviewed: "Interviewed", references: "References checked", declined: "Declined", appointed: "Appointed",
+  applied: "Applied", approached: "Approached", interested: "Interested", interviewed: "Interviewed", references: "References checked", declined: "Declined", appointed: "Appointed",
 };
 const addDays = (d: string, n: number) => new Date(Date.parse(d + "T00:00:00Z") + n * 864e5).toISOString().slice(0, 10);
 
@@ -21,10 +21,14 @@ export async function FindClerk({ db, project, today }: {
   }
   const [{ data: clerks }, { data: candidates }, { data: clientProjects }, { data: activity }] = await Promise.all([
     db.from("clerks").select("id,name,active,clerk_compliance(onboarding_complete,dbs_status)").eq("active", true).order("name"),
-    db.from("clerk_candidates").select("id,clerk_id,name,status,note,updated_at").eq("project_id", project.id).order("updated_at", { ascending: false }),
+    db.from("clerk_candidates").select("id,clerk_id,name,status,note,updated_at,application_id").eq("project_id", project.id).order("updated_at", { ascending: false }),
     project.client_id ? db.from("projects").select("id").eq("client_id", project.client_id) : Promise.resolve({ data: [] as { id: string }[] }),
     db.from("clerk_activity").select("clerk_id,last_visit"),
   ]);
+  const { data: applicants } = await db.from("job_applications").select("id,name,role,location,source,received_at,thread_id,project_id")
+    .eq("status", "new").or(`project_id.eq.${project.id},project_id.is.null`).gte("received_at", addDays(today, -60)).order("received_at", { ascending: false });
+  const { data: appRows } = await db.from("clerk_candidates").select("application_id,job_applications(thread_id)").eq("project_id", project.id).not("application_id", "is", null);
+  const appThread = new Map((appRows ?? []).map((a) => [a.application_id as string, (a.job_applications as unknown as { thread_id: string } | null)?.thread_id]));
   const { data: clientVisits } = (clientProjects ?? []).length
     ? await db.from("project_visit_summary").select("clerk_names").in("project_id", (clientProjects ?? []).map((p) => p.id))
     : { data: [] as { clerk_names: string[] | null }[] };
@@ -73,12 +77,26 @@ export async function FindClerk({ db, project, today }: {
         <button className="btn">Add</button>
       </form>
 
+      {(applicants ?? []).length > 0 && <>
+        <h3 className="small" style={{ margin: "8px 0 0" }}>Applied to us</h3>
+        <p className="small muted">From Indeed and direct emails in the last 60 days{(applicants ?? []).some((a) => a.project_id) ? "; ones for this job first" : ""}.</p>
+        <table><tbody>
+          {[...(applicants ?? [])].sort((a, b) => Number(!!b.project_id) - Number(!!a.project_id)).map((a) => (
+            <tr key={a.id}>
+              <td>{a.name}<span className="two">{[a.role, a.location, a.source].filter(Boolean).join(" · ")}</span></td>
+              <td className="small muted"><a href={`https://mail.google.com/mail/u/0/#all/${a.thread_id}`} target="_blank" rel="noopener">application ↗</a></td>
+              <td className="num"><form action={addApplicant.bind(null, project.id, a.id)}><button className="btn">Add to shortlist</button></form></td>
+            </tr>
+          ))}
+        </tbody></table>
+      </>}
+
       <h3 className="small" style={{ margin: "8px 0 0" }}>C3 · Approached</h3>
       {!(candidates ?? []).length ? <p className="empty">Nobody yet.</p> : (
         <table><tbody>
           {(candidates ?? []).map((c) => (
             <tr key={c.id}>
-              <td>{c.name}{!c.clerk_id && <span className="two">New to Beamore</span>}{c.note && <span className="two">{c.note}</span>}</td>
+              <td>{c.name}{!c.clerk_id && <span className="two">New to Beamore</span>}{c.note && <span className="two">{c.note}{c.application_id && appThread.get(c.application_id) && <> · <a href={`https://mail.google.com/mail/u/0/#all/${appThread.get(c.application_id)}`} target="_blank" rel="noopener">application ↗</a></>}</span>}</td>
               <td>
                 <form action={setCandidateStatus.bind(null, project.id, c.id)} className="wf-inline">
                   <select name="status" defaultValue={c.status} aria-label={`Status for ${c.name}`}>

@@ -308,3 +308,21 @@ export async function draftFollowUp(projectId: string) {
   }
   revalidatePath(`/projects/${projectId}`);
 }
+
+/** An applicant from email/Indeed onto a job's Find a clerk list. */
+export async function addApplicant(projectId: string, applicationId: string) {
+  const { db } = await workflowLog(projectId, "Clerk search", "Applicant added to the shortlist");
+  const { data: a } = await db.from("job_applications").select("name,source").eq("id", applicationId).single();
+  if (!a) return;
+  await db.from("clerk_candidates").insert({ project_id: projectId, name: a.name, status: "applied", application_id: applicationId, note: `Applied via ${a.source ?? "email"}` });
+  await db.from("job_applications").update({ status: "added", project_id: projectId }).eq("id", applicationId);
+  revalidatePath(`/projects/${projectId}`);
+  revalidatePath("/personnel");
+}
+
+export async function dismissApplication(applicationId: string) {
+  await requireProfile();
+  const db = await createClient();
+  await db.from("job_applications").update({ status: "dismissed" }).eq("id", applicationId);
+  revalidatePath("/personnel");
+}

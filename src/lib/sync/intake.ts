@@ -192,6 +192,38 @@ export async function runIntake(admin: SupabaseClient) {
       for (const p of withFolder ?? []) { try { filesSaved += await saveProjectAttachments(admin, p.id); } catch { /* try again next hour */ } }
     }
 
+    // ---- 3e. people applying to work for us (Indeed adverts, direct emails) → Find a clerk
+    let applicants = 0;
+    {
+      const apps = await q('-from:me newer_than:30d (subject:"new application for" OR subject:(application ("clerk of works" OR CoW OR CQM OR inspector)))', 40);
+      const { data: known } = await admin.from("job_applications").select("message_id");
+      const have = new Set((known ?? []).map((k) => k.message_id));
+      const { data: all } = await admin.from("projects").select("id,name,stage,clerk_id,clerk_status").not("stage", "in", "(lost,complete)");
+      for (const m of apps.messages ?? []) {
+        if (have.has(m.id)) continue;
+        const full = await msg(m.id);
+        const subj = header(full, "Subject"), from = header(full, "From");
+        if (/^re:/i.test(subj) && !/indeed/i.test(from)) continue; // a reply in a conversation, not a new application
+        const indeed = /indeed/i.test(from);
+        const name = (indeed ? /^(.+?) applied/.exec(full.snippet ?? "")?.[1] : who(from))?.replace(/\s+/g, " ").trim();
+        if (!name) continue;
+        const ad = /new application for (.+?),\s*(.+)$/i.exec(subj);
+        const role = ad?.[1] ?? (/clerk of works/i.test(subj) ? "Clerk of Works" : /CQM/i.test(subj) ? "CQM" : null);
+        const location = ad?.[2]?.trim() ?? null;
+        const where = `${location ?? ""} ${subj}`.toLowerCase();
+        const job = (all ?? []).filter((p) => p.name.length > 3 && where.includes(p.name.toLowerCase())).sort((a, b) => b.name.length - a.name.length)[0];
+        const replyTo = (/<([^>]+)>/.exec(header(full, "Reply-To") || from)?.[1] ?? from).trim();
+        const { data: row } = await admin.from("job_applications").insert({ message_id: m.id, thread_id: m.threadId, name: name.slice(0, 120), reply_to: replyTo,
+          role, location, source: indeed ? "Indeed" : "email", received_at: new Date(Number(full.internalDate)).toISOString(), project_id: job?.id ?? null }).select("id").single();
+        // the job is already looking for a clerk: straight onto its list as "applied"
+        if (row && job && job.clerk_status === "finding" && !job.clerk_id) {
+          await admin.from("clerk_candidates").insert({ project_id: job.id, name: name.slice(0, 120), status: "applied", application_id: row.id, note: `Applied via ${indeed ? "Indeed" : "email"}` });
+          await admin.from("job_applications").update({ status: "added" }).eq("id", row.id);
+        }
+        applicants++;
+      }
+    }
+
     // ---- 5. P1: emails that look like a request to price; the director is asked before anything is created
     let priceRequests = 0;
     {
@@ -232,7 +264,7 @@ export async function runIntake(admin: SupabaseClient) {
       goAheads++;
     }
 
-    const msgText = `${classified} projects checked for DfE, ${started} checklists started, ${hinted} checklist items found in email, ${sentFound} proposals found sent, ${replies4} client replies, ${setupDone} folders made, ${requestsSent} info requests seen sent, ${filesSaved} attachments saved to Drive, ${goAheads} possible go-aheads, ${priceRequests} possible pricing requests`;
+    const msgText = `${classified} projects checked for DfE, ${started} checklists started, ${hinted} checklist items found in email, ${sentFound} proposals found sent, ${replies4} client replies, ${setupDone} folders made, ${requestsSent} info requests seen sent, ${filesSaved} attachments saved to Drive, ${applicants} job applications, ${goAheads} possible go-aheads, ${priceRequests} possible pricing requests`;
     await finish(true, msgText);
     return { ok: true, message: msgText };
   } catch (e) {
