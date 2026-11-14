@@ -63,7 +63,7 @@ export async function syncProjectDetails(admin: SupabaseClient) {
       const prev = (p.details ?? {}) as Record<string, string>;
       if (prev._file_id === newest.id && prev._modified === newest.modifiedTime) { unchanged++; continue; }
       let front: Record<string, string>;
-      try { front = await readDiaryFront(Buffer.from(await g.download(newest.id))); } catch { continue; }
+      try { front = (await readDiaryFront(Buffer.from(await g.download(newest.id)))) as Record<string, string>; } catch { continue; }
       if (!Object.keys(front).length) continue;
       await admin.from("projects").update({ details: { ...prev, ...front, _file: newest.name, _file_id: newest.id, _modified: newest.modifiedTime } }).eq("id", p.id);
       read++;
