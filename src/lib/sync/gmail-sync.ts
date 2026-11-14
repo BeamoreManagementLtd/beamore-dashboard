@@ -15,6 +15,10 @@ const displayName = (from: string) => (/^"?([^"<]+?)"?\s*</.exec(from)?.[1] ?? f
  * "We owe a reply". Reads only; never sends or changes email.
  */
 export async function syncGmail(admin: SupabaseClient) {
+  // one run at a time: two together trip Gmail's per-minute limit
+  const { data: running } = await admin.from("sync_runs").select("id").eq("source", "gmail").is("finished_at", null)
+    .gte("started_at", new Date(Date.now() - 6 * 60000).toISOString()).limit(1);
+  if (running?.length) return { ok: true, message: "A Gmail read is already running; it will finish on its own." };
   const { data: run } = await admin.from("sync_runs").insert({ source: "gmail" }).select("id").single();
   const finish = (ok: boolean, message: string) =>
     admin.from("sync_runs").update({ finished_at: new Date().toISOString(), ok, message }).eq("id", run?.id);
@@ -44,13 +48,17 @@ export async function syncGmail(admin: SupabaseClient) {
             const from = header(m, "From");
             const ours = /@beamore\.co\.uk/i.test(from) || (m.labelIds ?? []).includes("SENT");
             const viaXero = /xero/i.test(from);
-            if (!viaXero) { if (ours) lastOut = when > lastOut ? when : lastOut; else lastIn = when > lastIn ? when : lastIn; }
+            const text = `${from} ${header(m, "Subject")} ${m.snippet ?? ""}`;
+            const bounced = !ours && /mailer-daemon|mail delivery|delivery status notification|undeliverable|address not found/i.test(text);
+            // automatic acknowledgements and out-of-office replies don't need an answer
+            const automatic = !ours && !bounced && /no-?reply|do-?not-?reply|invoice has been received|has been received and|automatic reply|auto-?reply|out of (the )?office/i.test(text);
+            if (!viaXero && !automatic) { if (ours) lastOut = when > lastOut ? when : lastOut; else lastIn = when > lastIn ? when : lastIn; }
             if (have.has(`${inv.id}|${m.id}`)) continue;
             if ((summarisedUntil.get(t.id) ?? "") >= when) continue;
             have.add(`${inv.id}|${m.id}`);
             rows.push({
               invoice_id: inv.id, happened_at: when, source: "gmail",
-              kind: viaXero ? "Invoice emailed (Xero)" : ours ? "Email sent" : "Email received",
+              kind: viaXero ? "Invoice emailed (Xero)" : ours ? "Email sent" : bounced ? "Email bounced" : automatic ? "Auto-acknowledgement" : "Email received",
               who: displayName(from), body: `${header(m, "Subject")}${m.snippet ? ` — ${decode(m.snippet).slice(0, 220)}` : ""}`,
               gmail_thread_id: t.id, gmail_message_id: m.id,
             });
@@ -58,8 +66,11 @@ export async function syncGmail(admin: SupabaseClient) {
         }
         if (rows.length) {
           const { error } = await admin.from("chase_events").insert(rows);
-          if (error) throw new Error(`${inv.number}: ${error.message}`);
-          added += rows.length;
+          if (error?.code === "23505") {
+            // another run added some of these already: insert one by one and skip the duplicates
+            for (const r of rows) if (!(await admin.from("chase_events").insert(r)).error) added++;
+          } else if (error) throw new Error(`${inv.number}: ${error.message}`);
+          else added += rows.length;
         }
         // client wrote last, after the chase was last updated, and we were waiting on them → our move
         if (lastIn && lastIn > lastOut) {
