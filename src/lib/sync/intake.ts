@@ -80,7 +80,8 @@ export async function runIntake(admin: SupabaseClient) {
       texts.push({ source: "report names", text: [...(rq ?? []), ...(rl ?? [])].map((r) => r.report_name).join(" ") });
       let c = classifyDfe(texts);
       if (!c.dfe) { // your email about the project
-        const found = await q(`${quoted(p.name)} newer_than:2y`, 4);
+        // name in the subject only: a body match on a generic name ("Manchester", "Costs") pulls in other jobs' emails
+        const found = await q(`subject:${quoted(p.name)} newer_than:2y`, 4);
         for (const m of found.messages ?? []) {
           const full = await msg(m.id);
           texts.push({ source: `email "${header(full, "Subject").slice(0, 60)}"`, text: `${header(full, "To")} ${header(full, "Cc")} ${header(full, "From")} ${header(full, "Subject")} ${full.snippet ?? ""}` });
