@@ -20,18 +20,22 @@ export function WorkflowPanel({ projectId, stages, current, clerks, ticked, stat
             <input name="reason" placeholder="Reason (optional)" aria-label="Reason lost" /><button className="btn">Lost</button></form>
         </span>
       );
-    if (st.id === "S3" && st.state !== "done")
+    if (st.id === "S3" || st.id === "S3M") {
+      const me = st.id === "S3M";
       return (
         <form action={setClerk.bind(null, projectId)} className="wf-ctl wf-inline">
-          <select name="clerk" aria-label="Clerk of works" defaultValue="">
-            <option value="" disabled>Choose clerk…</option>
+          <input type="hidden" name="role" value={me ? "me" : "building"} />
+          <select name="clerk" aria-label={me ? "M&E clerk of works" : "Building clerk of works"} defaultValue="">
+            <option value="" disabled>{st.state === "done" ? "Change…" : "Choose clerk…"}</option>
             {clerks.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
             <option value="finding">We need to find one</option>
+            {me && <option value="none">No M&amp;E on this job</option>}
           </select>
           <button className="btn">Save</button>
-          <a className="small" href={`/personnel?project=${projectId}#new`}>New to Beamore?</a>
+          {st.state !== "done" && <a className="small" href={`/personnel?project=${projectId}&role=${me ? "me" : "building"}#new`}>New to Beamore?</a>}
         </form>
       );
+    }
     if (st.id === "T1")
       return (
         <form action={setStartDate.bind(null, projectId)} className="wf-ctl wf-inline">

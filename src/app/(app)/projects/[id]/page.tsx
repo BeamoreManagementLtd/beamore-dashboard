@@ -103,11 +103,14 @@ export default async function Project({ params }: { params: Promise<{ id: string
 
       <WorkflowPanel projectId={p.id} stages={wf.stages} current={wf.current} clerks={clerkList ?? []} ticked={new Set(wf.ticked)} status={wf.status} folder={{ id: p.drive_folder_id ?? null, kind: p.folder_kind ?? guessFolderKind(p) }} startDate={p.start_date ?? null} />
 
-      {p.clerk_status === "finding" && !p.clerk_id && <FindClerk db={db} project={p} today={t} />}
+      {((p.clerk_status === "finding" && !p.clerk_id) || (p.clerk_me_status === "finding" && !p.clerk_me_id)) && <FindClerk db={db} project={p} today={t} />}
 
       {(() => {
         const d = (p.details ?? {}) as Record<string, string>;
+        const cname = (id: string | null) => (clerkList ?? []).find((c) => c.id === id)?.name;
         const rowsD: [string, string | null | undefined][] = [
+          ["Building clerk of works", cname(p.clerk_id) ?? (p.clerk_status === "finding" ? "Finding one" : null)],
+          ["M&E clerk of works", cname(p.clerk_me_id) ?? (p.clerk_me_status === "finding" ? "Finding one" : p.clerk_me_status === "none" ? "None on this job" : null)],
           ["DfE project number", p.dfe_project_number ?? d.dfe_project_number], ["DfE project director", d.dfe_project_director], ["DfE project manager", d.dfe_project_manager],
           ["Technical adviser", d.ta_name && `${d.ta_name}${d.ta_firm ? ` (${d.ta_firm})` : ""}`], ["Principal contractor", d.principal_contractor && `${d.principal_contractor}${d.pc_project_manager ? `, PM ${d.pc_project_manager}` : ""}${d.pc_project_number && !/tbc|not known/i.test(d.pc_project_number) ? `, no. ${d.pc_project_number}` : ""}`],
           ["Site address", d.site_address], ["PO number", p.po_number], ["Reports go to", p.report_to && `${p.report_to}${p.report_cc ? ` (cc ${p.report_cc})` : ""}`],

@@ -17,8 +17,9 @@ export type WorkflowProject = {
   id: string; stage: string; is_dfe: boolean | null; dfe_evidence: string | null; created_at: string; stage_changed_at: string | null;
   clerk_id: string | null; clerk_status: string | null; po_number: string | null; drive_folder_id: string | null; lost_reason: string | null;
   next_action?: string | null; with_whom?: string | null; next_action_due?: string | null; start_date?: string | null;
+  clerk_me_id?: string | null; clerk_me_status?: string | null;
 };
-export const WORKFLOW_COLUMNS = "id,stage,is_dfe,dfe_evidence,created_at,stage_changed_at,clerk_id,clerk_status,po_number,drive_folder_id,lost_reason,next_action,with_whom,next_action_due,start_date";
+export const WORKFLOW_COLUMNS = "id,stage,is_dfe,dfe_evidence,created_at,stage_changed_at,clerk_id,clerk_status,po_number,drive_folder_id,lost_reason,next_action,with_whom,next_action_due,start_date,clerk_me_id,clerk_me_status";
 
 type ManualStep = { step: string; done_at: string; done_by: string | null; note: string | null };
 type Facts = {
@@ -28,6 +29,8 @@ type Facts = {
   reports?: { last_report: string | null; reports: number };
   invoices: { issued: string | null; amount_due: number | null; status: string | null }[]; // newest first
   clerkName?: string | null;
+  clerkMeName?: string | null;
+  mePlanned?: boolean;      // the cost sheet plans M&E days
   hasContacts: boolean;
   goAhead?: { happened_at: string; who: string | null };
 };
@@ -63,12 +66,15 @@ export function buildWorkflow(p: WorkflowProject, f: Facts): Workflow {
     step("P5", "Won or lost", pastPricing, !pastPricing ? undefined : p.stage === "lost" ? `Lost${p.lost_reason ? `: ${p.lost_reason}` : ""}` : "Won", { how: "button" }),
   ];
 
+  // most jobs have an M&E clerk too: DfE jobs, ones with M&E days in the cost sheet, or one already named
+  const meNeeded = !!p.clerk_me_id || p.clerk_me_status === "finding" || (p.clerk_me_status !== "none" && (p.is_dfe === true || !!f.mePlanned));
   const s = (id: string, title: string, done: boolean, note?: string, opts: Partial<Step> = {}) =>
     step(id, title, done || (legacy && !!opts.manual), done ? note : legacy && opts.manual ? "Before workflows started" : note, opts);
   const setup: Step[] = [
     s("S1", `${p.is_dfe ? "DfE" : "Standard"} checklist`, info.length > 0, `${info.length} items`, { how: "auto", manual: true }),
     s("S2", "Information requested from client", info.some((i) => i.requested_on), `requested ${fmt(info.find((i) => i.requested_on)?.requested_on)}`, { manual: true, how: "task" }),
-    s("S3", "Clerk of works", !!p.clerk_id || (f.visits?.charged_visits ?? 0) > 0, f.clerkName ?? (clerkNames.join(", ") || undefined), { how: "button" }),
+    s("S3", "Building clerk of works", !!p.clerk_id || (f.visits?.charged_visits ?? 0) > 0, f.clerkName ?? (clerkNames.join(", ") || undefined), { how: "button" }),
+    ...(meNeeded ? [s("S3M", "M&E clerk of works", !!p.clerk_me_id, f.clerkMeName ?? undefined, { how: "button" })] : []),
     s("S4", "Google Drive folder", !!p.drive_folder_id, "created", { manual: true, how: "auto" }),
     s("S5", "Information received", info.length > 0 && infoIn === info.length, info.length ? `${infoIn} of ${info.length} received` : undefined, { manual: true, how: "auto" }),
     s("S6", "PO number", !!p.po_number || !!poItem?.received_on, p.po_number ?? "received", { manual: true, how: "auto" }),
@@ -84,8 +90,10 @@ export function buildWorkflow(p: WorkflowProject, f: Facts): Workflow {
     step("T2", "Clerk booked in the diary", plannedInDiary || onSite, plannedInDiary ? "in the diary" : undefined, { how: "task" }),
     step("T3", "Started on site", onSite, undefined, { how: "button" }),
   ];
-  if (setup[2].state !== "done" && p.clerk_status === "finding") setup[2].note = "Finding a clerk";
-  if (setup[4].state !== "done" && info.length) setup[4].note = `${infoIn} of ${info.length} received`;
+  const byId = (id: string) => setup.find((x) => x.id === id);
+  if (byId("S3")?.state !== "done" && p.clerk_status === "finding") byId("S3")!.note = "Finding a clerk";
+  if (byId("S3M") && byId("S3M")!.state !== "done" && p.clerk_me_status === "finding") byId("S3M")!.note = "Finding an M&E clerk";
+  if (byId("S5")?.state !== "done" && info.length) byId("S5")!.note = `${infoIn} of ${info.length} received`;
 
   const lastVisit = f.visits?.last_visit;
   const lastReport = f.reports?.last_report;
@@ -152,8 +160,11 @@ export function buildWorkflow(p: WorkflowProject, f: Facts): Workflow {
     const id = waitingStep?.id;
     if (id === "S1" || id === "S2") status = { text: `Won${changed ? ` ${ago(daysSince(changed))}` : ""}. Waiting on us to ask the client for the project information.`, waitingOn: "us", days: daysSince(changed) };
     else if (id === "S3") status = p.clerk_status === "finding"
-      ? { text: "Waiting on us to find a clerk of works.", waitingOn: "us" }
-      : { text: "Waiting on us to choose the clerk of works.", waitingOn: "us" };
+      ? { text: "Waiting on us to find a building clerk of works.", waitingOn: "us" }
+      : { text: "Waiting on us to choose the building clerk of works.", waitingOn: "us" };
+    else if (id === "S3M") status = p.clerk_me_status === "finding"
+      ? { text: "Waiting on us to find an M&E clerk of works.", waitingOn: "us" }
+      : { text: "Waiting on us to choose the M&E clerk of works (or mark the job as having no M&E).", waitingOn: "us" };
     else if (id === "S5" && missing.length) status = { text: `Waiting on the client for ${missing.length} item${missing.length === 1 ? "" : "s"}: ${list(missing.map((i) => i.item))}.${asked ? ` Asked ${ago(daysSince(asked))}.` : " Not asked yet."}`, waitingOn: "client", days: daysSince(asked) };
     else if (id === "S6") status = { text: "Waiting on the client for a PO number.", waitingOn: "client" };
     else if (id === "S8") status = { text: "Waiting on the admin team to add it to the diary (clerk rows, Invoice emails and Report emails tabs).", waitingOn: "admin" };
@@ -172,7 +183,9 @@ export function buildWorkflow(p: WorkflowProject, f: Facts): Workflow {
       : { text: "Finished and paid.", waitingOn: null };
     else status = { text: `No invoice since ${fmt(lastInv)}. Waiting on you to say whether it's finished, paused or still going.`, waitingOn: "you" };
   } else {
-    const who = f.clerkName ?? (clerkNames.slice(0, 2).join(" and ") || undefined);
+    const who = f.clerkName || f.clerkMeName
+      ? [f.clerkName && `${f.clerkName} (building)`, f.clerkMeName && `${f.clerkMeName} (M&E)`].filter(Boolean).join(" and ")
+      : clerkNames.slice(0, 2).join(" and ") || undefined;
     status = { text: `Live${who ? ` with ${who}` : ""}. Last visit ${fmt(lastVisit) || "none yet"}, last report ${fmt(lastReport) || "none yet"}, last invoice ${fmt(lastInv) || "none yet"}.`, waitingOn: null };
   }
   const extra: string[] = [];
@@ -208,9 +221,9 @@ async function many<T>(db: SupabaseClient, table: string, cols: string, ids: str
 /** Everything for many projects (the Workflows board), in a fixed number of queries. */
 export async function loadWorkflows(db: SupabaseClient, projects: WorkflowProject[]): Promise<Map<string, Workflow>> {
   const ids = projects.map((p) => p.id);
-  const clerkIds = [...new Set(projects.map((p) => p.clerk_id).filter(Boolean))] as string[];
+  const clerkIds = [...new Set(projects.flatMap((p) => [p.clerk_id, p.clerk_me_id]).filter(Boolean))] as string[];
   type Row = { project_id: string };
-  const [steps, info, visits, reports, invoices, contacts, events, clerks] = await Promise.all([
+  const [steps, info, visits, reports, invoices, contacts, events, clerks, mePlan] = await Promise.all([
     many<Row & ManualStep>(db, "project_steps", "project_id,step,done_at,done_by,note", ids),
     many<Row & Facts["info"][number]>(db, "project_info", "project_id,item,requested_on,received_on", ids, (q) => q.order("created_at")),
     many<Row & NonNullable<Facts["visits"]>>(db, "project_visit_summary", "project_id,last_visit,visits,charged_visits,clerk_names", ids),
@@ -219,7 +232,9 @@ export async function loadWorkflows(db: SupabaseClient, projects: WorkflowProjec
     many<Row>(db, "invoice_contacts", "project_id", ids),
     many<Row & { happened_at: string; who: string | null }>(db, "project_events", "project_id,happened_at,who", ids, (q) => q.eq("kind", "Possible go-ahead").order("happened_at", { ascending: false })),
     clerkIds.length ? db.from("clerks").select("id,name").in("id", clerkIds).then((r) => r.data ?? []) : Promise.resolve([] as { id: string; name: string }[]),
+    many<Row>(db, "project_planned_months", "project_id", ids, (q) => q.gt("me", 0)),
   ]);
+  const mePlanned = new Set(mePlan.map((m) => m.project_id));
   const group = <T extends Row>(rows: T[]) => { const m = new Map<string, T[]>(); for (const r of rows) m.set(r.project_id, [...(m.get(r.project_id) ?? []), r]); return m; };
   const g = { steps: group(steps), info: group(info), visits: group(visits), reports: group(reports), invoices: group(invoices), contacts: group(contacts), events: group(events) };
   const clerkName = new Map(clerks.map((c) => [c.id, c.name]));
@@ -232,6 +247,8 @@ export async function loadWorkflows(db: SupabaseClient, projects: WorkflowProjec
       reports: g.reports.get(p.id)?.[0],
       invoices: g.invoices.get(p.id) ?? [],
       clerkName: p.clerk_id ? clerkName.get(p.clerk_id) : null,
+      clerkMeName: p.clerk_me_id ? clerkName.get(p.clerk_me_id) : null,
+      mePlanned: mePlanned.has(p.id),
       hasContacts: (g.contacts.get(p.id) ?? []).length > 0,
       goAhead: g.events.get(p.id)?.[0],
     }));

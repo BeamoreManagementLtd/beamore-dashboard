@@ -11,9 +11,9 @@ const DBS: Record<string, [string, string]> = {
   verified: ["good", "Verified"], in_progress: ["neutral", "In progress"], action_needed: ["warn", "Action needed"], none: ["bad", "No check on file"],
 };
 
-export default async function Personnel({ searchParams }: { searchParams: Promise<{ show?: string; project?: string; name?: string }> }) {
+export default async function Personnel({ searchParams }: { searchParams: Promise<{ show?: string; project?: string; name?: string; role?: string }> }) {
   await requireProfile();
-  const { show, project, name } = await searchParams;
+  const { show, project, name, role } = await searchParams;
   const db = await createClient();
   const t = today();
   const cutoff = new Date(Date.parse(t + "T00:00:00Z") - 60 * 86400000).toISOString().slice(0, 10);
@@ -78,6 +78,8 @@ export default async function Personnel({ searchParams }: { searchParams: Promis
               <option value="">No particular project</option>
               {(wonProjects ?? []).map((p) => <option key={p.id} value={p.id}>{p.display_name}</option>)}
             </select></div>
+          <div className="field"><label htmlFor="nr">As</label>
+            <select id="nr" name="role" defaultValue={role === "me" ? "me" : "building"}><option value="building">Building clerk</option><option value="me">M&amp;E clerk</option></select></div>
           <button className="btn primary">Add and start onboarding</button>
         </form>
       </section>

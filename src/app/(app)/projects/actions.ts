@@ -161,19 +161,26 @@ export async function setOutcome(projectId: string, form: FormData) {
   revalidatePath("/projects");
 }
 
-/** S3: pick the clerk, or say we need to find one. */
+/** S3 / S3M: pick the building or M&E clerk, say we need to find one, or (M&E) that the job has none. */
 export async function setClerk(projectId: string, form: FormData) {
   const v = String(form.get("clerk") ?? "");
+  const me = form.get("role") === "me";
+  const label = me ? "M&E clerk of works" : "Clerk of works";
+  const f = me ? { id: "clerk_me_id", status: "clerk_me_status", source: "clerk_me_source" } : { id: "clerk_id", status: "clerk_status", source: "clerk_source" };
   const db = await createClient();
   if (v === "finding") {
-    await workflowLog(projectId, "Clerk of works", "No clerk yet, finding one");
-    await db.from("projects").update({ clerk_status: "finding", clerk_id: null }).eq("id", projectId);
+    await workflowLog(projectId, label, `No ${me ? "M&E " : ""}clerk yet, finding one`);
+    await db.from("projects").update({ [f.status]: "finding", [f.id]: null, [f.source]: "manual" }).eq("id", projectId);
+  } else if (v === "none" && me) {
+    await workflowLog(projectId, label, "No M&E clerk on this job");
+    await db.from("projects").update({ clerk_me_status: "none", clerk_me_id: null, clerk_me_source: "manual" }).eq("id", projectId);
   } else if (v) {
     const { data: c } = await db.from("clerks").select("name").eq("id", v).maybeSingle();
-    await workflowLog(projectId, "Clerk of works", `${c?.name ?? "Clerk"} allocated`);
-    await db.from("projects").update({ clerk_status: "have", clerk_id: v }).eq("id", projectId);
+    await workflowLog(projectId, label, `${c?.name ?? "Clerk"} allocated${me ? " (M&E)" : ""}`);
+    await db.from("projects").update({ [f.status]: "have", [f.id]: v, [f.source]: "manual" }).eq("id", projectId);
   }
   revalidatePath(`/projects/${projectId}`);
+  revalidatePath("/workflows");
 }
 
 export async function setPo(projectId: string, form: FormData) {
@@ -236,8 +243,9 @@ export async function saveClerkNeeds(projectId: string, form: FormData) {
 export async function addCandidate(projectId: string, clerkId: string | null, name: string, form: FormData) {
   const n = name || String(form.get("name") ?? "").trim();
   if (!n) return;
-  const { db } = await workflowLog(projectId, "Clerk search", `Approached ${n}`);
-  await db.from("clerk_candidates").insert({ project_id: projectId, clerk_id: clerkId, name: n, note: String(form.get("note") ?? "").trim() || null });
+  const role = form.get("role") === "me" ? "me" : "building";
+  const { db } = await workflowLog(projectId, "Clerk search", `Approached ${n}${role === "me" ? " (M&E)" : ""}`);
+  await db.from("clerk_candidates").insert({ project_id: projectId, clerk_id: clerkId, name: n, role, note: String(form.get("note") ?? "").trim() || null });
   revalidatePath(`/projects/${projectId}`);
 }
 
@@ -245,8 +253,9 @@ export async function setCandidateStatus(projectId: string, candidateId: string,
   await requireProfile();
   const db = await createClient();
   const status = String(form.get("status") ?? "");
-  if (!["approached", "interested", "interviewed", "references", "declined"].includes(status)) return;
-  await db.from("clerk_candidates").update({ status, updated_at: new Date().toISOString() }).eq("id", candidateId).eq("project_id", projectId);
+  const role = form.get("role") === "me" ? "me" : "building";
+  if (!["applied", "approached", "interested", "interviewed", "references", "declined"].includes(status)) return;
+  await db.from("clerk_candidates").update({ status, role, updated_at: new Date().toISOString() }).eq("id", candidateId).eq("project_id", projectId);
   revalidatePath(`/projects/${projectId}`);
 }
 
@@ -254,17 +263,18 @@ export async function setCandidateStatus(projectId: string, candidateId: string,
 export async function appointCandidate(projectId: string, candidateId: string) {
   await requireProfile();
   const db = await createClient();
-  const { data: c } = await db.from("clerk_candidates").select("clerk_id,name").eq("id", candidateId).single();
+  const { data: c } = await db.from("clerk_candidates").select("clerk_id,name,role").eq("id", candidateId).single();
   if (!c) return;
   await db.from("clerk_candidates").update({ status: "appointed", updated_at: new Date().toISOString() }).eq("id", candidateId);
+  const me = c.role === "me";
   if (c.clerk_id) {
-    await workflowLog(projectId, "Clerk of works", `${c.name} appointed`);
-    await db.from("projects").update({ clerk_id: c.clerk_id, clerk_status: "have" }).eq("id", projectId);
+    await workflowLog(projectId, me ? "M&E clerk of works" : "Clerk of works", `${c.name} appointed${me ? " (M&E)" : ""}`);
+    await db.from("projects").update(me ? { clerk_me_id: c.clerk_id, clerk_me_status: "have", clerk_me_source: "manual" } : { clerk_id: c.clerk_id, clerk_status: "have", clerk_source: "manual" }).eq("id", projectId);
     revalidatePath(`/projects/${projectId}`);
     return;
   }
   const { redirect } = await import("next/navigation");
-  redirect(`/personnel?project=${projectId}&name=${encodeURIComponent(c.name)}#new`);
+  redirect(`/personnel?project=${projectId}&role=${me ? "me" : "building"}&name=${encodeURIComponent(c.name)}#new`);
 }
 
 // ---- P1: pricing requests spotted in email

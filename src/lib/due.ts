@@ -156,10 +156,12 @@ export async function buildDueList(db: SupabaseClient, me: Profile): Promise<Due
 
   // ---- finding a clerk (workflow 3): daily once the job starts within three weeks
   {
-    const { data: finding } = await db.from("projects").select("id,display_name,start_date").eq("clerk_status", "finding").is("clerk_id", null).in("stage", ["won_arranging", "won_preparing", "live"]);
-    for (const p of finding ?? []) {
+    const { data: findB } = await db.from("projects").select("id,display_name,start_date").eq("clerk_status", "finding").is("clerk_id", null).in("stage", ["won_arranging", "won_preparing", "live"]);
+    const { data: findM } = await db.from("projects").select("id,display_name,start_date").eq("clerk_me_status", "finding").is("clerk_me_id", null).in("stage", ["won_arranging", "won_preparing", "live"]);
+    const finding = [...(findB ?? []).map((p) => ({ ...p, role: "" })), ...(findM ?? []).map((p) => ({ ...p, role: "M&E " }))];
+    for (const p of finding) {
       const soon = !p.start_date || p.start_date <= addDays(t, 21);
-      items.push({ key: `findclerk-${p.id}`, kind: "Projects", title: `Find a clerk for ${p.display_name}`, detail: p.start_date ? `Starts ${p.start_date}` : "No start date yet: add one on the project", due: soon ? t : addDays(p.start_date!, -21), link: `/projects/${p.id}`, ...(director ? ownerOf(me.id, null) : ownerOf(null, directorName)) });
+      items.push({ key: `findclerk-${p.role}${p.id}`, kind: "Projects", title: `Find ${p.role ? "an M&E" : "a"} clerk for ${p.display_name}`, detail: p.start_date ? `Starts ${p.start_date}` : "No start date yet: add one on the project", due: soon ? t : addDays(p.start_date!, -21), link: `/projects/${p.id}`, ...(director ? ownerOf(me.id, null) : ownerOf(null, directorName)) });
     }
   }
 

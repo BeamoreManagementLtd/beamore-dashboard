@@ -53,6 +53,33 @@ export async function writeDiary(admin, d, label) {
   }
   for (let i = 0; i < costs.length; i += 1000) must(await admin.from("clerk_costs").insert(costs.slice(i, i + 1000)), "clerk costs");
 
+  // ---- each project's building and M&E clerk: whoever has the most days of that kind in the diary over the last
+  // 3 months and the next month (sites typed "Stanmore(M&E)" are M&E). A clerk chosen by hand is never replaced.
+  {
+    const from = new Date(Date.now() - 92 * 864e5).toISOString().slice(0, 10), to = new Date(Date.now() + 31 * 864e5).toISOString().slice(0, 10);
+    const tally = new Map(); // project|kind → clerk → days
+    for (const v of rows) {
+      if (!v.project_id || !v.clerk_id || v.visit_date < from || v.visit_date > to) continue;
+      const k = `${v.project_id}|${v.kind}`;
+      const m = tally.get(k) ?? new Map();
+      m.set(v.clerk_id, (m.get(v.clerk_id) ?? 0) + 0.5);
+      tally.set(k, m);
+    }
+    const top = (k) => { const m = tally.get(k); return m ? [...m].sort((a, b) => b[1] - a[1])[0][0] : null; };
+    const projIds = [...new Set(rows.map((v) => v.project_id).filter(Boolean))];
+    const cur = [];
+    for (let i = 0; i < projIds.length; i += 200) cur.push(...must(await admin.from("projects").select("id,clerk_id,clerk_source,clerk_me_id,clerk_me_source,clerk_me_status").in("id", projIds.slice(i, i + 200)), "clerks now"));
+    const jobs = [];
+    for (const p of cur) {
+      const b = top(`${p.id}|building`), m = top(`${p.id}|me`);
+      const upd = {};
+      if (b && p.clerk_source !== "manual" && p.clerk_id !== b) Object.assign(upd, { clerk_id: b, clerk_source: "diary", clerk_status: "have" });
+      if (m && p.clerk_me_source !== "manual" && p.clerk_me_id !== m) Object.assign(upd, { clerk_me_id: m, clerk_me_source: "diary", clerk_me_status: "have" });
+      if (Object.keys(upd).length) jobs.push(() => admin.from("projects").update(upd).eq("id", p.id));
+    }
+    for (let i = 0; i < jobs.length; i += 12) await Promise.all(jobs.slice(i, i + 12).map((j) => j()));
+  }
+
   // ---- site names that match no project (any hand-made link is kept)
   const unmatched = new Map();
   for (const v of d.visits) {

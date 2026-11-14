@@ -10,8 +10,11 @@ const addDays = (d: string, n: number) => new Date(Date.parse(d + "T00:00:00Z") 
 /** Workflow 3, Find a clerk: shown on the project while it has no clerk (S3 "We need to find one"). */
 export async function FindClerk({ db, project, today }: {
   db: SupabaseClient; today: string;
-  project: { id: string; client_id: string | null; start_date: string | null; visits_per_week: number | null; clerk_needed: string | null };
+  project: { id: string; client_id: string | null; start_date: string | null; visits_per_week: number | null; clerk_needed: string | null; clerk_status?: string | null; clerk_me_status?: string | null; clerk_id?: string | null; clerk_me_id?: string | null };
 }) {
+  const roles = [!project.clerk_id && project.clerk_status === "finding" && "building", !project.clerk_me_id && project.clerk_me_status === "finding" && "me"].filter(Boolean) as ("building" | "me")[];
+  const seeking = roles.length ? roles : (["building"] as const);
+  const ROLE = { building: "Building", me: "M&E" } as const;
   const until = addDays(today, 28);
   const planned: { clerk_id: string; days: number }[] = [];
   for (let from = 0; ; from += 1000) { // the next four weeks of the diary's grey (planned) side
@@ -21,7 +24,7 @@ export async function FindClerk({ db, project, today }: {
   }
   const [{ data: clerks }, { data: candidates }, { data: clientProjects }, { data: activity }] = await Promise.all([
     db.from("clerks").select("id,name,active,clerk_compliance(onboarding_complete,dbs_status)").eq("active", true).order("name"),
-    db.from("clerk_candidates").select("id,clerk_id,name,status,note,updated_at,application_id").eq("project_id", project.id).order("updated_at", { ascending: false }),
+    db.from("clerk_candidates").select("id,clerk_id,name,status,note,updated_at,application_id,role").eq("project_id", project.id).order("updated_at", { ascending: false }),
     project.client_id ? db.from("projects").select("id").eq("client_id", project.client_id) : Promise.resolve({ data: [] as { id: string }[] }),
     db.from("clerk_activity").select("clerk_id,last_visit"),
   ]);
@@ -49,7 +52,7 @@ export async function FindClerk({ db, project, today }: {
   return (
     <section className="panel">
       <div className="row" style={{ justifyContent: "space-between", alignItems: "baseline" }}>
-        <h2>Finding a clerk of works</h2>
+        <h2>Finding {seeking.map((x) => ROLE[x]).join(" and ")} clerk{seeking.length > 1 ? "s" : ""} of works</h2>
         {daysLeft != null && <span className={`pill ${daysLeft <= 21 ? "warn" : "neutral"}`}>{daysLeft < 0 ? `Started ${-daysLeft} days ago` : `Starts in ${daysLeft} days`}</span>}
       </div>
 
@@ -67,13 +70,17 @@ export async function FindClerk({ db, project, today }: {
           <tr key={c.id}>
             <td><Link href={`/personnel/${c.id}`}>{c.name}</Link>{c.knows ? " ★" : ""}</td>
             <td className="small muted">{busy.get(c.id) ?? 0} days planned</td>
-            <td className="num"><form action={addCandidate.bind(null, project.id, c.id, c.name)}><button className="btn">Approach</button></form></td>
+            <td className="num">{seeking.map((role) => (
+              <form key={role} action={addCandidate.bind(null, project.id, c.id, c.name)} style={{ display: "inline-block", marginLeft: 4 }}>
+                <input type="hidden" name="role" value={role} /><button className="btn">Approach{seeking.length > 1 ? ` (${ROLE[role]})` : ""}</button>
+              </form>))}</td>
           </tr>
         ))}
       </tbody></table>
       <form action={addCandidate.bind(null, project.id, null, "")} className="row">
         <div className="field"><label htmlFor="cn">Someone new to Beamore</label><input id="cn" name="name" placeholder="Name" required /></div>
         <div className="field"><label htmlFor="cnn">Note</label><input id="cnn" name="note" placeholder="Where from, phone…" /></div>
+        <div className="field"><label htmlFor="cnr">For</label><select id="cnr" name="role" defaultValue={seeking[0]}><option value="building">Building</option><option value="me">M&amp;E</option></select></div>
         <button className="btn">Add</button>
       </form>
 
@@ -99,6 +106,7 @@ export async function FindClerk({ db, project, today }: {
               <td>{c.name}{!c.clerk_id && <span className="two">New to Beamore</span>}{c.note && <span className="two">{c.note}{c.application_id && appThread.get(c.application_id) && <> · <a href={`https://mail.google.com/mail/u/0/#all/${appThread.get(c.application_id)}`} target="_blank" rel="noopener">application ↗</a></>}</span>}</td>
               <td>
                 <form action={setCandidateStatus.bind(null, project.id, c.id)} className="wf-inline">
+                  <select name="role" defaultValue={c.role ?? "building"} aria-label={`Role for ${c.name}`}><option value="building">Building</option><option value="me">M&amp;E</option></select>
                   <select name="status" defaultValue={c.status} aria-label={`Status for ${c.name}`}>
                     {Object.entries(STATUS).filter(([k]) => k !== "appointed").map(([k, v]) => <option key={k} value={k}>{v}</option>)}
                   </select>
