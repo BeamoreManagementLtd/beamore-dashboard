@@ -116,7 +116,7 @@ export async function prepareDrafts(admin: SupabaseClient, m: string) {
     const history = (byProject.get(r.projectId) ?? []).sort((a, b) => (b.DateString ?? "").localeCompare(a.DateString ?? ""));
     const dated = (i: XInv) => (i.DateString ?? "").slice(0, 10);
     const already = history.find((i) => (dated(i) >= m && dated(i) <= addDays(end, 20)) || (i.Reference ?? "").includes(monthLabel(m)));
-    const base = { month: m, project_id: r.projectId, days_building: r.chargedB, days_me: r.chargedMe };
+    const base = { month: m, project_id: r.projectId, days_building: r.chargedB, days_me: r.chargedMe, warnings: [] as string[] };
     if (already) { drafts.push({ ...base, status: "skipped", invoice_number: already.InvoiceNumber, contact_name: already.Contact.Name, reference: already.Reference, note: `Already in Xero (${already.Status.toLowerCase()})` }); continue; }
     const tpl = history.find((i) => dated(i) < m && i.Status !== "DRAFT" && (i.LineItems ?? []).some(priced));
     if (!tpl) { drafts.push({ ...base, status: "skipped", note: "No earlier invoice in the last 5 months to copy: raise this one by hand" }); continue; }
