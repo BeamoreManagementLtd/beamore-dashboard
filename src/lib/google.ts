@@ -8,7 +8,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 export const GOOGLE_SCOPES = process.env.GOOGLE_SCOPES ??
   "openid email https://www.googleapis.com/auth/drive https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.compose";
 /** Connections made before this lack drive.file and gmail.compose (project folders, drafts). */
-export const GOOGLE_SCOPES_CHANGED_AT = "2026-11-14T21:30:00Z";
+export const GOOGLE_SCOPES_CHANGED_AT = "2026-11-14T20:45:00Z";
 
 type Tokens = { access_token: string; refresh_token?: string; expires_in: number; id_token?: string };
 
