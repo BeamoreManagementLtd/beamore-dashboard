@@ -6,18 +6,21 @@ import type { SupabaseClient } from "@supabase/supabase-js";
  */
 export type StepState = "done" | "now" | "todo" | "skip";
 export type Step = { id: string; title: string; state: StepState; note?: string; manual?: boolean; how?: "auto" | "button" | "task" };
+/** One plain sentence on where the project is and who it's waiting on. */
+export type Status = { text: string; waitingOn: "us" | "client" | "you" | "admin" | "clerk" | null; days?: number; extra?: string[] };
 export type Stage = { key: "pricing" | "setup" | "live" | "closeout"; title: string; steps: Step[]; state: StepState };
 
 type P = {
   id: string; stage: string; is_dfe: boolean | null; dfe_evidence: string | null; created_at: string; stage_changed_at: string | null;
   clerk_id: string | null; clerk_status: string | null; po_number: string | null; drive_folder_id: string | null; lost_reason: string | null;
+  next_action?: string | null; with_whom?: string | null; next_action_due?: string | null;
 };
 
 const PRICING = ["enquiry", "pricing", "sent"];
 const WON = ["won_arranging", "won_preparing"];
 const fmt = (d?: string | null) => (d ? new Date(d).toLocaleDateString("en-GB", { day: "numeric", month: "short" }) : "");
 
-export async function loadWorkflow(db: SupabaseClient, p: P): Promise<{ stages: Stage[]; current: Stage["key"] | "lost" | "complete"; ticked: string[] }> {
+export async function loadWorkflow(db: SupabaseClient, p: P): Promise<{ stages: Stage[]; current: Stage["key"] | "lost" | "complete"; ticked: string[]; status: Status }> {
   const [{ data: steps }, { data: info }, { data: visits }, { data: inv }, { data: rq }, { data: rl }, { data: clerk }, { data: contacts }] = await Promise.all([
     db.from("project_steps").select("step,done_at,done_by,note").eq("project_id", p.id),
     db.from("project_info").select("item,requested_on,received_on").eq("project_id", p.id),
@@ -28,6 +31,7 @@ export async function loadWorkflow(db: SupabaseClient, p: P): Promise<{ stages: 
     p.clerk_id ? db.from("clerks").select("name").eq("id", p.clerk_id).maybeSingle() : Promise.resolve({ data: null }),
     db.from("invoice_contacts").select("label").eq("project_id", p.id).limit(1),
   ]);
+  const { data: goAhead } = await db.from("project_events").select("happened_at,who").eq("project_id", p.id).eq("kind", "Possible go-ahead").order("happened_at", { ascending: false }).limit(1);
   const manual = new Map((steps ?? []).map((s) => [s.step, s]));
   const by = (id: string) => { const m = manual.get(id); return m ? `${m.done_by ?? "ticked"}, ${fmt(m.done_at)}` : undefined; };
   // projects already running before workflows existed: hand-only set-up steps count as done
@@ -111,5 +115,49 @@ export async function loadWorkflow(db: SupabaseClient, p: P): Promise<{ stages: 
     if (st.state === "now") { const f = st.steps.find((x) => x.state === "todo"); if (f) f.state = "now"; }
   });
   if (current === "lost") stages.slice(1).forEach((st) => st.steps.forEach((x) => (x.state = "skip")));
-  return { stages, current, ticked: [...manual.keys()] };
+
+  // ---- the written status
+  const daysSince = (d?: string | null) => (d ? Math.max(0, Math.floor((Date.now() - Date.parse(d)) / 864e5)) : undefined);
+  const ago = (n?: number) => (n == null ? "" : n === 0 ? "today" : n === 1 ? "yesterday" : `${n} days ago`);
+  const money = (n: number) => `£${n.toLocaleString("en-GB", { maximumFractionDigits: 0 })}`;
+  const missing = (info ?? []).filter((i) => !i.received_on);
+  const asked = (info ?? []).filter((i) => i.requested_on).map((i) => i.requested_on as string).sort()[0];
+  const list = (xs: string[]) => (xs.length <= 3 ? xs.join(", ") : `${xs.slice(0, 3).join(", ")} and ${xs.length - 3} more`);
+  const changed = p.stage_changed_at ?? p.created_at;
+  const waitingStep = stages.flatMap((s) => s.steps).find((x) => x.state === "now");
+  let status: Status;
+  if (current === "lost") status = { text: `Lost${p.lost_reason ? `: ${p.lost_reason}` : "."}`, waitingOn: null };
+  else if (current === "complete") status = { text: "Complete.", waitingOn: null };
+  else if (current === "pricing") {
+    if (p.is_dfe == null && p.dfe_evidence?.startsWith("Unsure")) status = { text: "Waiting on you to say whether this is a DfE project.", waitingOn: "you" };
+    else if (p.stage !== "sent") status = { text: `Waiting on us to price it. The enquiry came in ${ago(daysSince(changed))}.`, waitingOn: "us", days: daysSince(changed) };
+    else if (goAhead?.[0]) status = { text: `${goAhead[0].who ?? "The client"} may have given the go-ahead ${ago(daysSince(goAhead[0].happened_at))}. Waiting on you to confirm Won or Lost.`, waitingOn: "you" };
+    else status = { text: `Proposal sent ${ago(daysSince(changed))}. Waiting on the client to reply.`, waitingOn: "client", days: daysSince(changed) };
+  } else if (current === "setup") {
+    const id = waitingStep?.id;
+    if (id === "S1" || id === "S2") status = { text: `Won ${ago(daysSince(changed))}. Waiting on us to ask the client for the project information.`, waitingOn: "us", days: daysSince(changed) };
+    else if (id === "S3") status = p.clerk_status === "finding"
+      ? { text: "Waiting on us to find a clerk of works.", waitingOn: "us" }
+      : { text: "Waiting on us to choose the clerk of works.", waitingOn: "us" };
+    else if (id === "S5" && missing.length) status = { text: `Waiting on the client for ${missing.length} item${missing.length === 1 ? "" : "s"}: ${list(missing.map((i) => i.item))}. Asked ${ago(daysSince(asked))}.`, waitingOn: "client", days: daysSince(asked) };
+    else if (id === "S6") status = { text: "Waiting on the client for a PO number.", waitingOn: "client" };
+    else if (id === "S8") status = { text: "Waiting on the admin team to add it to the diary (clerk rows, Invoice emails and Report emails tabs).", waitingOn: "admin" };
+    else if (id === "S9") status = { text: "Waiting on the admin team to add it to the report tracker.", waitingOn: "admin" };
+    else status = { text: waitingStep ? `Setting up. Next: ${waitingStep.title.toLowerCase()}.` : "Set-up done, ready to go live.", waitingOn: waitingStep ? "us" : null };
+  } else if (current === "closeout") {
+    if (p.stage === "on_hold") status = { text: `Paused since ${fmt(changed)}.`, waitingOn: null };
+    else if (x2?.note === "finished") status = outstanding > 0
+      ? { text: `Finished. Waiting on the client to pay ${money(outstanding)}.`, waitingOn: "client" }
+      : { text: "Finished and paid.", waitingOn: null };
+    else status = { text: `No invoice since ${fmt(lastInv)}. Waiting on you to say whether it's finished, paused or still going.`, waitingOn: "you" };
+  } else {
+    const who = clerk?.name ?? clerkNames[0];
+    status = { text: `Live${who ? ` with ${who}` : ""}. Last visit ${fmt(lastVisit) || "none yet"}, last report ${fmt(rl?.[0]?.report_date) || "none yet"}, last invoice ${fmt(lastInv) || "none yet"}.`, waitingOn: null };
+  }
+  const extra: string[] = [];
+  if (current === "live" && missing.length) extra.push(`Still waiting on the client for ${list(missing.map((i) => i.item))}.`);
+  if (current === "live" && outstanding > 0) extra.push(`${money(outstanding)} outstanding on invoices.`);
+  if (p.next_action) extra.push(`Next action: ${p.next_action}${p.with_whom ? ` (with ${p.with_whom})` : ""}${p.next_action_due ? `, due ${fmt(p.next_action_due)}` : ""}.`);
+  status.extra = extra;
+  return { stages, current, ticked: [...manual.keys()], status };
 }

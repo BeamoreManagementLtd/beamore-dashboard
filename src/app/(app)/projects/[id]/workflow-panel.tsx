@@ -1,9 +1,11 @@
-import type { Stage, Step } from "@/lib/workflow";
+import type { Stage, Status, Step } from "@/lib/workflow";
 import { markStep, setOutcome, setClerk, setPo, closeOutAnswer } from "../actions";
 
 /** The project's workflow: stages across the top, then the current stage's steps (green done, amber waiting, grey to come). */
-export function WorkflowPanel({ projectId, stages, current, clerks, ticked }: {
-  projectId: string; stages: Stage[]; current: string; clerks: { id: string; name: string }[]; ticked: Set<string>;
+const WHO = { us: "Waiting on us", client: "Waiting on the client", you: "Waiting on you", admin: "Waiting on the admin team", clerk: "Waiting on the clerk" } as const;
+
+export function WorkflowPanel({ projectId, stages, current, clerks, ticked, status }: {
+  projectId: string; status: Status; stages: Stage[]; current: string; clerks: { id: string; name: string }[]; ticked: Set<string>;
 }) {
   const open = stages.find((s) => s.state === "now") ?? stages[stages.length - 1];
   const count = (s: Stage) => `${s.steps.filter((x) => x.state === "done").length} of ${s.steps.length}`;
@@ -51,6 +53,11 @@ export function WorkflowPanel({ projectId, stages, current, clerks, ticked }: {
 
   return (
     <section className="panel wf">
+      <div className="wf-status">
+        {status.waitingOn && <span className={`pill ${status.waitingOn === "client" ? "neutral" : "warn"}`}>{WHO[status.waitingOn]}{status.days ? ` · ${status.days} day${status.days === 1 ? "" : "s"}` : ""}</span>}
+        <p>{status.text}</p>
+        {status.extra?.map((e) => <p key={e} className="small muted">{e}</p>)}
+      </div>
       <div className="wf-stages">
         {stages.map((s) => (
           <span key={s.key} className={`wf-stage ${s.state}`}>{s.title}{s.state === "done" ? " ✓" : s.state === "now" ? ` · ${count(s)}` : ""}</span>

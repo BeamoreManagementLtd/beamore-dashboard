@@ -137,3 +137,5 @@ input,select,textarea{background:var(--surface);border:1px solid var(--line);bor
 .wf-inline input,.wf-inline select{padding:6px 8px;font-size:13px}
 .wf-all{margin-top:10px} .wf-all summary{cursor:pointer;font-size:13px;color:var(--link)}
 .wf-all h3{font-size:14px;margin:12px 0 6px}
+.wf-status{border-bottom:1px solid var(--line);padding-bottom:12px;margin-bottom:12px}
+.wf-status p{margin:6px 0 0;font-size:15px;max-width:80ch} .wf-status p.small{font-size:13px;margin-top:4px}
