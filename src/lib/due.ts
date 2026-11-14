@@ -1,6 +1,7 @@
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Profile } from "@/lib/auth";
+import { SCOPES_CHANGED_AT } from "@/lib/xero";
 
 /**
  * The team due list. Most items are worked out from live data each time (they disappear once the underlying thing is
@@ -136,6 +137,14 @@ export async function buildDueList(db: SupabaseClient, me: Profile): Promise<Due
     items.push({ key: "unmatched-sites", kind: "Diary", title: `${unmatchedSites.count} diary site name${unmatchedSites.count > 1 ? "s" : ""} not linked to a project`, due: null, link: "/projects", ...ownerOf(null, directorName) });
   if (unmatchedRefs.count)
     items.push({ key: "unmatched-refs", kind: "Xero", title: `${unmatchedRefs.count} Xero invoice reference${unmatchedRefs.count > 1 ? "s" : ""} not linked to a project`, due: null, link: "/projects", ...ownerOf(null, directorName) });
+
+  // ---- Xero connection made before the tracking permission was added (director only)
+  if (director) {
+    const { data: xc } = await db.rpc("xero_connection_status");
+    const conn = (xc as { connected_at: string }[] | null)?.[0];
+    if (conn && conn.connected_at < SCOPES_CHANGED_AT)
+      items.push({ key: "xero-reconnect", kind: "Xero", title: "Reconnect Xero so draft invoices can be tagged by project", detail: "Finance → Xero → Reconnect (reads the Project tracking options)", due: addDays(nextMonth, -3), link: "/finance", ...ownerOf(me.id, null) });
+  }
 
   // ---- a sync that's failing (director only: it's about the connections)
   if (director)

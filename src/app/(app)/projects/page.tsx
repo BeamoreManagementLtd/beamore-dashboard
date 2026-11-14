@@ -1,4 +1,6 @@
+import Link from "next/link";
 import { requireProfile } from "@/lib/auth";
+import { linkSite } from "./actions";
 import { createClient } from "@/lib/supabase/server";
 import { fd } from "@/lib/format";
 
@@ -13,12 +15,13 @@ export default async function Projects({ searchParams }: { searchParams: Promise
   await requireProfile();
   const { stage = "live" } = await searchParams;
   const db = await createClient();
-  const [{ data: rows }, { data: counts }, { data: unmatched }, { data: diaryDays }, { data: unmatchedSites }] = await Promise.all([
+  const [{ data: rows }, { data: counts }, { data: unmatched }, { data: diaryDays }, { data: unmatchedSites }, { data: allProjects }] = await Promise.all([
     db.from("projects").select("id,display_name,stage,agreed_days_building,agreed_days_me,next_action,next_action_due,clients(name)").eq("stage", stage).order("name"),
     db.from("projects").select("stage"),
     db.from("unmatched_invoice_refs").select("reference,last_invoice,client,invoices").order("reference"),
     db.from("project_diary_days").select("*"),
     db.from("unmatched_diary_sites").select("site_as_typed,last_seen,days").is("resolved_project_id", null).order("days", { ascending: false }),
+    db.from("projects").select("id,display_name").order("name"),
   ]);
   const n = (s: string) => (counts ?? []).filter((c) => c.stage === s).length;
   const dd = new Map((diaryDays ?? []).map((d) => [d.project_id as string, d]));
@@ -45,7 +48,17 @@ export default async function Projects({ searchParams }: { searchParams: Promise
           <p className="small">Visits under these names aren’t counted against any project. Usually a new spelling in the diary; the diary’s own check flags typos too.</p>
           <table><tbody>
             {unmatchedSites.map((u) => (
-              <tr key={u.site_as_typed}><td><b>{u.site_as_typed}</b></td><td className="num">{u.days} days</td><td className="num">last {fd(u.last_seen)}</td></tr>
+              <tr key={u.site_as_typed}><td><b>{u.site_as_typed}</b></td><td className="num">{u.days} days</td><td className="num">last {fd(u.last_seen)}</td>
+                <td>
+                  <form action={linkSite} className="row" style={{ flexWrap: "nowrap" }}>
+                    <input type="hidden" name="site" value={u.site_as_typed} />
+                    <select name="project_id" required defaultValue="" style={{ minWidth: 200 }}>
+                      <option value="" disabled>Link to project…</option>
+                      {(allProjects ?? []).map((p) => <option key={p.id} value={p.id}>{p.display_name}</option>)}
+                    </select>
+                    <button className="btn">Link</button>
+                  </form>
+                </td></tr>
             ))}
           </tbody></table>
         </details>
@@ -66,7 +79,7 @@ export default async function Projects({ searchParams }: { searchParams: Promise
                 const used = Number(d?.charged_to_date ?? 0);
                 return (
                   <tr key={p.id}>
-                    <td><b>{p.display_name}</b>{d?.last_visit && <span className="two">last visit {fd(d.last_visit)}</span>}</td>
+                    <td><Link href={`/projects/${p.id}`}><b>{p.display_name}</b></Link>{d?.last_visit && <span className="two">last visit {fd(d.last_visit)}</span>}</td>
                     <td>{(p.clients as unknown as { name: string } | null)?.name}</td>
                     <td className="num">{days ?? "—"}</td>
                     <td className={`num ${days && used > days ? "neg" : ""}`}>{used || "—"}
