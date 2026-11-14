@@ -97,11 +97,20 @@ export function parseDiary(wb, { year = 2026, fileLabel = "Diary 2026.xlsx" } = 
     }
   }
 
+  // "Invoice emails" tab: who invoices and chasers go to (decision 14). Rows without an email are section headings.
+  const invoiceEmails = [];
+  const ie = wb.getWorksheet("Invoice emails");
+  const emails = (s) => String(s ?? "").split(/[;,\s]+/).map((e) => e.trim()).filter((e) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e));
+  if (ie) for (let r = 2; r <= ie.rowCount; r++) {
+    const row = ie.getRow(r), label = str(row.getCell(1)), to = emails(str(row.getCell(2)));
+    if (label && to.length) invoiceEmails.push({ label, to, cc: emails(str(row.getCell(3))), notes: str(row.getCell(4)) || null });
+  }
+
   const rates = [];
   const rs = wb.getWorksheet("Rates");
   if (rs) for (let r = 3; r <= rs.rowCount; r++) {
     const row = rs.getRow(r), site = str(row.getCell(1));
     if (site) rates.push({ site, charge: num(row.getCell(2)), pay: num(row.getCell(3)) });
   }
-  return { visits, absences, invoiceLines, rates, clerks: [...clerks] };
+  return { visits, absences, invoiceLines, rates, invoiceEmails, clerks: [...clerks] };
 }

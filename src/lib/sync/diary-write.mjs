@@ -102,6 +102,41 @@ export async function writeDiary(admin, d, label) {
     must(await admin.from("invoices").update({ days_building: p.b, days_me: p.me, ...(i.project_id || !p.project ? {} : { project_id: p.project }) }).eq("id", i.id), "invoice days");
   }
 
+  // ---- chase / invoice contacts from the "Invoice emails" tab: matched to a project by any part of the label after the
+  // client ("Mott MacDonald - Sheffield - St Peters Batley"), otherwise to the client by its Xero name ("… - General")
+  let contacts = 0;
+  if (d.invoiceEmails?.length) {
+    const keys = [...byKey.keys()];
+    const loose = (k) => {
+      if (byKey.has(k)) return byKey.get(k);
+      if (k.length < 5) return null;
+      const hits = new Set(keys.filter((x) => x.length >= 5 && (x.startsWith(k) || k.startsWith(x))).map((x) => byKey.get(x)));
+      return hits.size === 1 ? [...hits][0] : null;
+    };
+    const clients = must(await admin.from("clients").select("id,name"), "clients");
+    // every client whose Xero name and the label start the same way ("Mott MacDonald - Newcastle" ↔ "Mott MacDonald - (Newcastle projects)")
+    const clientsFor = (label) => {
+      const k = siteKey(label.replace(/\bgeneral\b/i, ""));
+      // …but not a bare "Mott MacDonald" against every Mott label: the shorter name must be most of the longer one
+      return clients.filter((c) => {
+        const ck = siteKey(c.name);
+        return ck.length >= 4 && k.length >= 4 && (k.startsWith(ck) || ck.startsWith(k)) && Math.min(ck.length, k.length) / Math.max(ck.length, k.length) >= 0.6;
+      }).map((c) => c.id);
+    };
+    const rows = d.invoiceEmails.flatMap((e) => {
+      // "WSP- St Marks", "Springstead - Bellway": split on a dash with a space on either side; try later parts first
+      const parts = e.label.split(/\s*[-–]\s+|\s+[-–]\s*/);
+      const project = /general/i.test(e.label) ? null : [...parts.slice(1).reverse(), parts[0]].map((p) => loose(siteKey(p))).find(Boolean) ?? null;
+      const base = { label: e.label, to_emails: e.to, cc_emails: e.cc, notes: e.notes };
+      if (project) return [{ ...base, project_id: project, client_id: null }];
+      const cs = clientsFor(e.label);
+      return cs.length ? cs.map((client_id) => ({ ...base, project_id: null, client_id })) : [{ ...base, project_id: null, client_id: null }];
+    });
+    must(await admin.from("invoice_contacts").delete().neq("label", ""), "clear contacts");
+    must(await admin.from("invoice_contacts").insert(rows), "contacts");
+    contacts = new Set(rows.filter((r) => r.project_id || r.client_id).map((r) => r.label)).size;
+  }
+
   // ---- second spellings of a clerk from the first import, once nothing points at them
   const dupes = existing.filter((c) => c.name_key == null && clerkId.get(clerkKey(c.name)) !== c.id).map((c) => c.id);
   if (dupes.length) await admin.from("clerks").delete().in("id", dupes);
@@ -109,5 +144,6 @@ export async function writeDiary(admin, d, label) {
   const matched = rows.filter((r) => r.project_id).length;
   const planned = d.visits.filter((v) => v.side === "planned").length / 2;
   return `${d.visits.length / 2 - planned} days charged and ${planned} planned, ${latest.size} clerks, ${abs.length} holidays, ` +
+    `${contacts} of ${d.invoiceEmails?.length ?? 0} invoice email rows matched, ` +
     `${unmatched.size} site names not matched (${((matched / Math.max(rows.length, 1)) * 100).toFixed(0)}% of days matched to a project)`;
 }

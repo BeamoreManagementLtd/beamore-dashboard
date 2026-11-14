@@ -12,13 +12,22 @@ export default async function InvoiceLog({ params }: { params: Promise<{ number:
   const { number } = await params;
   const num = decodeURIComponent(number);
   const db = await createClient();
-  const { data: inv } = await db.from("invoices").select("id,number,reference,issued,due,amount_due,clients(name),projects(display_name)").eq("number", num).maybeSingle();
+  const { data: inv } = await db.from("invoices").select("id,number,reference,issued,due,amount_due,project_id,client_id,clients(name),projects(display_name)").eq("number", num).maybeSingle();
   if (!inv) notFound();
-  const [{ data: cs }, { data: events }, { data: staff }] = await Promise.all([
+  const [{ data: cs }, { data: events }, { data: staff }, { data: contacts }] = await Promise.all([
     db.from("chase_state").select("*").eq("invoice_id", inv.id).maybeSingle(),
     db.from("chase_events").select("*").eq("invoice_id", inv.id).order("happened_at", { ascending: false }),
     db.from("profiles").select("id,full_name,email").order("full_name"),
+    db.from("invoice_contacts").select("*").or(`project_id.eq.${inv.project_id ?? "00000000-0000-0000-0000-000000000000"},client_id.eq.${inv.client_id ?? "00000000-0000-0000-0000-000000000000"}`),
   ]);
+  // the project's own row wins over the client-wide ("General") one
+  const contact = (contacts ?? []).find((c) => c.project_id && c.project_id === inv.project_id) ?? (contacts ?? [])[0] ?? null;
+  const days = inv.due ? daysBetween(inv.due, today()) : 0;
+  const mailto = contact ? `mailto:${contact.to_emails.join(",")}?${new URLSearchParams({
+    ...(contact.cc_emails.length ? { cc: contact.cc_emails.join(",") } : {}),
+    subject: `Overdue invoice ${inv.number} – ${inv.reference ?? ""}`,
+    body: `Hello,\n\nOur invoice ${inv.number} (${inv.reference ?? ""}) for ${gbp(inv.amount_due)} was due on ${fdy(inv.due)} and is now ${days} days overdue.${contact.notes ? `\n${contact.notes}` : ""}\n\nCould you let us know when it will be paid, or if anything is holding it up?\n\nKind regards,\nBeamore Management`,
+  }).toString().replace(/\+/g, "%20")}` : "";
   const client = inv.clients as unknown as { name: string } | null;
   const project = inv.projects as unknown as { display_name: string } | null;
   const save = saveChaseState.bind(null, inv.id, inv.number);
@@ -54,6 +63,21 @@ export default async function InvoiceLog({ params }: { params: Promise<{ number:
           ) : <p className="empty">No chase history yet.</p>}
         </section>
         <div style={{ display: "grid", gap: 16 }}>
+          <section className="panel">
+            <h2>Chase contacts</h2>
+            {!contact ? (
+              <p className="empty">No row for this project or client on the diary’s “Invoice emails” tab yet. Add one there and it appears here within the hour.</p>
+            ) : (
+              <>
+                <p className="small"><b>To:</b> {contact.to_emails.join("; ")}</p>
+                {!!contact.cc_emails.length && <p className="small"><b>CC:</b> {contact.cc_emails.join("; ")}</p>}
+                {contact.notes && <p className="small muted">{contact.notes}</p>}
+                <p className="small muted">From the diary’s Invoice emails tab: “{contact.label}”{contact.project_id ? "" : " (client-wide)"}.</p>
+                <a className="btn primary" href={mailto}>Email chaser</a>{" "}
+                <span className="small muted">Opens a pre-filled email. Log it below once sent.</span>
+              </>
+            )}
+          </section>
           <section className="panel">
             <h2>Where it stands</h2>
             <form action={save} className="form">

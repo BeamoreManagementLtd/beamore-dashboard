@@ -5,4 +5,5 @@ export type DiaryInvoiceLine = { month: string; number: string; site: string; ki
 export declare function parseDiary(wb: ExcelJS.Workbook, opts?: { year?: number; fileLabel?: string }): {
   visits: DiaryVisit[]; absences: DiaryAbsence[]; invoiceLines: DiaryInvoiceLine[];
   rates: { site: string; charge: number | null; pay: number | null }[]; clerks: string[];
+  invoiceEmails: { label: string; to: string[]; cc: string[]; notes: string | null }[];
 };
