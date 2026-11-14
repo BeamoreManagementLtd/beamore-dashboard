@@ -6,7 +6,7 @@ import { refreshReports } from "./actions";
 export const dynamic = "force-dynamic";
 export const maxDuration = 120;
 
-type Turn = { month: string; clerk: string; reports: number; avg_days: number; over_two_days: number; review_required: number };
+type Turn = { month: string; clerk: string; reports: number; avg_days: number; over_two_days: number; review_required: number; total_days: number; timed: number };
 
 export default async function Reports({ searchParams }: { searchParams: Promise<{ checker?: string; month?: string; refreshed?: string; error?: string }> }) {
   await requireProfile();
@@ -32,7 +32,8 @@ export default async function Reports({ searchParams }: { searchParams: Promise<
   const months = [...new Set(tr.map((x) => x.month))].sort().reverse();
   const cur = tr.filter((x) => x.month === m).sort((x, y) => y.avg_days - x.avg_days);
   const sum = (k: keyof Turn) => cur.reduce((s, x) => s + Number(x[k]), 0);
-  const teamAvg = cur.length ? cur.reduce((s, x) => s + x.avg_days * x.reports, 0) / Math.max(sum("reports"), 1) : null;
+  // reports with a blank "Working Days" are left out of the average, as in the turnaround workbook
+  const teamAvg = sum("timed") ? sum("total_days") / sum("timed") : null;
   const label = (d: string) => new Date(d + "T00:00:00Z").toLocaleDateString("en-GB", { month: "long", year: "numeric", timeZone: "UTC" });
 
   return (

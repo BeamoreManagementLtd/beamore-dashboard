@@ -23,7 +23,9 @@ select
   count(*) as reports,
   round(avg(working_days), 1) as avg_days,
   count(*) filter (where working_days > 2) as over_two_days,
-  count(*) filter (where status = 'Review Required') as review_required
+  count(*) filter (where status = 'Review Required') as review_required,
+  sum(working_days) as total_days,   -- with "timed", for a team average that leaves out blank working days
+  count(working_days) as timed
 from report_log l left join clerks c on c.id = l.clerk_id
 where report_date is not null
 group by 1, 2;
