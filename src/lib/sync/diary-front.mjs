@@ -15,6 +15,7 @@ export const FRONT_FIELDS = {
   pc_project_manager: /^Principal Contractor Project Manager/i,
   site_address: /^Site Address/i,
   project_name: /^Project Name/i,
+  cow_name: /^CoW name/i,
 };
 
 export async function readDiaryFront(buf) {

@@ -3,6 +3,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { driveClient } from "@/lib/google";
 import { siteKey } from "@/lib/site-key.mjs";
 import { readDiaryFront } from "@/lib/sync/diary-front.mjs";
+import { clerkKey } from "@/lib/site-key.mjs";
 
 /**
  * Project details from the front page of the newest CoW diary in each active project's folder
@@ -34,7 +35,12 @@ export async function syncProjectDetails(admin: SupabaseClient) {
     for (const top of await list(`'${work.id}' in parents and (name = 'Schools' or name = 'Others') and mimeType = '${FOLDER}' and trashed = false`))
       folders.push(...await list(`'${top.id}' in parents and mimeType = '${FOLDER}' and trashed = false`));
 
-    const { data: projects } = await admin.from("projects").select("id,name,display_name,diary_aliases,drive_folder_id,details")
+    const { data: clerkRows } = await admin.from("clerks").select("id,name");
+    const clerkByKey = new Map((clerkRows ?? []).map((c) => [clerkKey(c.name), c.id as string]));
+    // "Gareth Mayoh – Beamore Management Ltd" → the clerk
+    const clerkFrom = (v?: string) => (v ? clerkByKey.get(clerkKey(v.split(/\s+[–-]\s+/)[0])) ?? null : null);
+    let meFound = 0;
+    const { data: projects } = await admin.from("projects").select("id,name,display_name,diary_aliases,drive_folder_id,details,clerk_me_id,clerk_me_source,clerk_me_status")
       .in("stage", ["won_arranging", "won_preparing", "live", "on_hold"]);
     const { data: infoRows } = await admin.from("project_info").select("id,project_id,item,received_on,note").in("project_id", (projects ?? []).map((p) => p.id));
     let linked = 0, read = 0, unchanged = 0, ticked = 0;
@@ -52,7 +58,24 @@ export async function syncProjectDetails(admin: SupabaseClient) {
       }
       // the newest diary: in "Diaries" (or a sub-folder whose name says diary/report), else the folder itself
       const subs = await list(`'${folderId}' in parents and mimeType = '${FOLDER}' and trashed = false`);
-      const places = [...subs.filter((s) => /diar/i.test(s.name)), ...subs.filter((s) => /report/i.test(s.name) && !/monthly/i.test(s.name)), { id: folderId } as F];
+      // the M&E clerk from the newest report in the M&E folder, when the diary hasn't given one
+      if (!p.clerk_me_id && p.clerk_me_source !== "manual" && p.clerk_me_status !== "none") {
+        for (const meDir of subs.filter((s) => /M\s*&\s*E/i.test(s.name) && !/photo/i.test(s.name))) {
+          const docs = (await list(`'${meDir.id}' in parents and mimeType = '${DOCX}' and trashed = false`)).sort((a, b) => b.modifiedTime.localeCompare(a.modifiedTime));
+          if (!docs[0]) continue;
+          try {
+            const front = (await readDiaryFront(Buffer.from(await g.download(docs[0].id)))) as Record<string, string>;
+            const id = clerkFrom(front.cow_name);
+            if (id) {
+              await admin.from("projects").update({ clerk_me_id: id, clerk_me_source: "diary", clerk_me_status: "have" }).eq("id", p.id);
+              await admin.from("project_events").insert({ project_id: p.id, source: "dashboard", kind: "M&E clerk of works", who: "Dashboard", body: `${front.cow_name.split(/\s+[–-]\s+/)[0]} (from the M&E report "${docs[0].name.slice(0, 70)}")` });
+              meFound++;
+              break;
+            }
+          } catch { /* unreadable report: try the next folder */ }
+        }
+      }
+      const places = [...subs.filter((s) => /diar/i.test(s.name) && !/M\s*&\s*E/i.test(s.name)), ...subs.filter((s) => /report/i.test(s.name) && !/monthly|M\s*&\s*E/i.test(s.name)), { id: folderId } as F];
       let newest: F | undefined;
       for (const pl of places) {
         const docs = (await list(`'${pl.id}' in parents and mimeType = '${DOCX}' and trashed = false`)).filter((f) => /diar|report|cow/i.test(f.name));
@@ -127,7 +150,7 @@ export async function syncProjectDetails(admin: SupabaseClient) {
       }
     }
 
-    const msg = `${linked} projects linked to their Drive folder, ${read} CoW diaries read, ${unchanged} unchanged, ${pos} PO numbers found in email, ${ticked} checklist items filled in`;
+    const msg = `${linked} projects linked to their Drive folder, ${read} CoW diaries read, ${meFound} M&E clerks from M&E reports, ${unchanged} unchanged, ${pos} PO numbers found in email, ${ticked} checklist items filled in`;
     await finish(true, msg);
     return { ok: true, message: msg };
   } catch (e) {
