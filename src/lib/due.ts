@@ -29,7 +29,6 @@ const MONTH = (iso: string) => new Date(iso + "T00:00:00Z").toLocaleDateString("
 
 export async function buildDueList(db: SupabaseClient, me: Profile): Promise<DueItem[]> {
   const t = londonToday();
-  const soon = addDays(t, 7);
   const director = me.role === "director";
 
   const [profiles, chases, queue, projects, compliance, tasks, unmatchedSites, unmatchedRefs, runs, signoffs, planned] = await Promise.all([
@@ -57,19 +56,36 @@ export async function buildDueList(db: SupabaseClient, me: Profile): Promise<Due
 
   // ---- chasing (Judy unless someone else owns the chase)
   type Chase = { status: string; next_action: string | null; next_action_due: string | null; promised_date: string | null; owner_id: string | null };
+  // Weekly rhythm: an overdue invoice comes back 7 days after its last chase (a chase email seen in Gmail, or a phone
+  // call / email logged by the team), so it isn't on the list every day. A next-action date typed by hand wins if later.
   let notChased = 0, oldestNew: string | null = null;
+  const overdueIds = (chases.data ?? []).map((i) => i.id);
+  const lastChase = new Map<string, string>();
+  for (let k = 0; k < overdueIds.length; k += 150) {
+    const { data: ev } = await db.from("chase_events").select("invoice_id,happened_at").in("invoice_id", overdueIds.slice(k, k + 150)).in("kind", ["Email sent", "Phone call"]);
+    for (const e of ev ?? []) if ((lastChase.get(e.invoice_id) ?? "") < e.happened_at) lastChase.set(e.invoice_id, e.happened_at);
+  }
   for (const i of chases.data ?? []) {
     const raw = i.chase_state as unknown;
     const cs = (Array.isArray(raw) ? raw[0] : raw) as Chase | null;
     const client = (i.clients as unknown as { name: string } | null)?.name ?? "";
     const link = `/invoices/${encodeURIComponent(i.number)}`;
-    if (!cs || cs.status === "new") { notChased++; if (!oldestNew || i.due < oldestNew) oldestNew = i.due; continue; }
-    if (cs.promised_date && cs.promised_date < t)
-      items.push({ key: `promise-${i.id}`, kind: "Chasing", title: `${i.number}: promised payment hasn't arrived`, detail: `${client} promised ${cs.promised_date}`, due: cs.promised_date, link, ...ownerOf(cs.owner_id, "Judy") });
-    else if (cs.next_action_due && cs.next_action_due <= soon)
-      items.push({ key: `chase-${i.id}`, kind: "Chasing", title: `${i.number}: ${cs.next_action ?? "chase"}`, detail: client, due: cs.next_action_due, link, ...ownerOf(cs.owner_id, "Judy") });
-    else if (!cs.next_action_due && cs.status === "our_move")
+    const last = lastChase.get(i.id)?.slice(0, 10);
+    if (cs?.status === "our_move") { // the client has written back: answer them, no weekly wait
       items.push({ key: `ourmove-${i.id}`, kind: "Chasing", title: `${i.number}: we owe ${client} a reply`, due: t, link, ...ownerOf(cs.owner_id, "Judy") });
+      continue;
+    }
+    if (cs?.promised_date && cs.promised_date >= t) continue; // payment promised: wait for the date
+    if (cs?.promised_date && cs.promised_date < t) {
+      items.push({ key: `promise-${i.id}`, kind: "Chasing", title: `${i.number}: promised payment hasn't arrived`, detail: `${client} promised ${cs.promised_date}`, due: cs.promised_date, link, ...ownerOf(cs.owner_id, "Judy") });
+      continue;
+    }
+    if (!last && (!cs || cs.status === "new")) { notChased++; if (!oldestNew || i.due < oldestNew) oldestNew = i.due; continue; }
+    const weekly = last ? addDays(last, 7) : t;
+    const next = cs?.next_action_due && cs.next_action_due > weekly ? cs.next_action_due : weekly;
+    if (next > t) continue; // chased in the last week: back on the list on `next`
+    const ago = last ? Math.round((Date.parse(t) - Date.parse(last)) / 864e5) : null;
+    items.push({ key: `chase-${i.id}`, kind: "Chasing", title: `Chase ${i.number} again`, detail: `${client}${ago != null ? ` · last chased ${ago} days ago (${last})` : ""}${cs?.next_action ? ` · ${cs.next_action}` : ""}`, due: next, link, ...ownerOf(cs?.owner_id, "Judy") });
   }
   if (notChased)
     items.push({ key: "not-chased", kind: "Chasing", title: `${notChased} overdue invoice${notChased > 1 ? "s" : ""} not chased yet`, detail: "Start with the oldest", due: t, link: "/invoices", ...ownerOf(null, "Judy") });

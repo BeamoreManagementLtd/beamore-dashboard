@@ -58,6 +58,8 @@ export default async function InvoiceLog({ params, searchParams }: { params: Pro
   // ---- "ball is in our court": who has the next move, from the status and the latest emails
   const latest = (kinds: string[]) => all.find((e) => kinds.includes(e.kind));
   const lastIn = latest(["Email received", "Email bounced"]);
+  // weekly rhythm (same as the due list): 7 days after the last chase, or a later date typed by hand
+  const nextChase = (last: string, typed: string | null) => { const w = new Date(Date.parse(last) + 7 * 864e5).toISOString().slice(0, 10); return typed && typed > w ? typed : w; };
   const lastOut = all.find((e) => e.kind === "Email sent" || (e.source === "team" && e.kind !== "Note"));
   const t = today();
   const banner =
@@ -72,7 +74,7 @@ export default async function InvoiceLog({ params, searchParams }: { params: Pro
         ? { tone: "bad", title: "Promise missed.", text: `Payment was promised for ${fd(cs.promised_date)} and hasn't arrived.` }
         : { tone: "good", title: "Payment promised", text: `for ${fd(cs.promised_date)}.` }
     : cs?.status === "waiting"
-      ? { tone: "info", title: "Waiting on them.", text: lastOut ? `Last chased ${fd(lastOut.happened_at)}${cs.next_action_due ? `; next chase ${fd(cs.next_action_due)}` : ""}.` : "Waiting for the client." }
+      ? { tone: "info", title: "Waiting on them.", text: lastOut ? `Last chased ${fd(lastOut.happened_at)}; next chase ${fd(nextChase(lastOut.happened_at, cs.next_action_due))} (weekly).` : "Waiting for the client." }
     : overdue > 0
       ? { tone: "bad", title: "Not chased yet.", text: `${overdue} days overdue and nothing logged.` }
       : null;
