@@ -152,29 +152,41 @@ export async function writeDiary(admin, d, label) {
     contacts = new Set(rows.filter((r) => r.project_id || r.client_id).map((r) => r.label)).size;
   }
 
-  // ---- checklist items the diary answers: ticked with the actual value (replacing "assumed received")
+  // ---- checklist items the diary answers: ticked with the actual value (replacing "assumed received").
+  // Everything is worked out in memory first, then written in parallel batches (the sync has a time limit).
   const today = new Date().toISOString().slice(0, 10);
-  const tick = async (projectId, itemRe, note) => {
-    const items = must(await admin.from("project_info").select("id,item,received_on,note").eq("project_id", projectId), "info");
-    for (const i of items.filter((x) => itemRe.test(x.item)))
+  const parallel = async (jobs, n = 12) => { for (let i = 0; i < jobs.length; i += n) await Promise.all(jobs.slice(i, i + n).map((j) => j())); };
+  const info = [];
+  for (let from = 0; ; from += 1000) {
+    const page = must(await admin.from("project_info").select("id,project_id,item,received_on,note").range(from, from + 999), "info");
+    info.push(...page);
+    if (page.length < 1000) break;
+  }
+  const infoTicks = new Map(); // project_info id → update
+  const tick = (projectId, itemRe, note) => {
+    for (const i of info.filter((x) => x.project_id === projectId && itemRe.test(x.item)))
       if (!i.received_on || !i.note || /^Assumed/.test(i.note) || /^From the diary/.test(i.note))
-        must(await admin.from("project_info").update({ received_on: i.received_on ?? today, note: note.slice(0, 500) }).eq("id", i.id), "tick");
+        infoTicks.set(i.id, { received_on: i.received_on ?? today, note: note.slice(0, 500) });
   };
   const siteProject = (site) => projectFor(site) ?? (() => { const k = siteKey(site); if (byKey.has(k)) return byKey.get(k); if (k.length < 5) return null;
     const hits = new Set([...byKey.keys()].filter((x) => x.length >= 5 && (x.startsWith(k) || k.startsWith(x))).map((x) => byKey.get(x))); return hits.size === 1 ? [...hits][0] : null; })();
+  const projUpd = new Map(); // project id → fields
+  const setP = (pid, fields) => projUpd.set(pid, { ...(projUpd.get(pid) ?? {}), ...fields });
+  const current = new Map(must(await admin.from("projects").select("id,po_number,dfe_project_number"), "projects").map((p) => [p.id, p]));
 
   // "Report emails" → distribution list
-  let distLists = 0;
+  const distProjects = new Set();
   for (const e of d.reportEmails ?? []) {
     const pid = siteProject(e.site);
     if (!pid) continue;
-    must(await admin.from("projects").update({ report_to: e.to.join("; "), report_cc: e.cc.join("; ") || null, inspection_frequency: e.inspection, reporting_frequency: e.reporting }).eq("id", pid), "report emails");
-    await tick(pid, /distribution list/i, `From the diary (Report emails): to ${e.to.join(", ")}${e.cc.length ? `; cc ${e.cc.join(", ")}` : ""}`);
-    distLists++;
+    setP(pid, { report_to: e.to.join("; "), report_cc: e.cc.join("; ") || null, inspection_frequency: e.inspection, reporting_frequency: e.reporting });
+    tick(pid, /distribution list/i, `From the diary (Report emails): to ${e.to.join(", ")}${e.cc.length ? `; cc ${e.cc.join(", ")}` : ""}`);
+    distProjects.add(pid);
   }
+  const distLists = distProjects.size;
 
   // "Invoice POs" → PO number and the DfE (SRP) project number
-  let pos = 0;
+  const poProjects = new Set();
   for (const p of d.invoicePOs ?? []) {
     const pid = siteProject(p.site);
     if (!pid) continue;
@@ -183,25 +195,32 @@ export async function writeDiary(admin, d, label) {
     const poNo = /\b(MM\d{6,}|PO[\s:#-]*([A-Z0-9-]{4,})|\d{5,})\b/i.exec(p.poText.replace(/SRP\s?\d+/gi, ""));
     const value = poNo ? (poNo[2] ?? poNo[1]) : null;
     if (value) {
-      must(await admin.from("projects").update({ po_number: value }).eq("id", pid).is("po_number", null), "po");
-      await tick(pid, /\bPO\b/, `From the diary (Invoice POs): ${p.poText}`);
-      pos++;
+      if (!current.get(pid)?.po_number) setP(pid, { po_number: value });
+      tick(pid, /\bPO\b/, `From the diary (Invoice POs): ${p.poText}`);
+      poProjects.add(pid);
     }
     if (srp) {
-      must(await admin.from("projects").update({ dfe_project_number: `SRP${srp[1]}` }).eq("id", pid).is("dfe_project_number", null), "srp");
-      await tick(pid, /DfE project number/i, `From the diary (Invoice POs): SRP${srp[1]}`);
+      if (!current.get(pid)?.dfe_project_number) setP(pid, { dfe_project_number: `SRP${srp[1]}` });
+      tick(pid, /DfE project number/i, `From the diary (Invoice POs): SRP${srp[1]}`);
     }
   }
+  const pos = poProjects.size;
 
   // "Contact details" → clerks' phone and email where the dashboard has none
-  let clerkContacts = 0;
+  const clerkRows = new Map(must(await admin.from("clerks").select("id,email,phone"), "clerks").map((c) => [c.id, c]));
+  const clerkUpd = [];
   for (const c of d.contactDetails ?? []) {
     const id = clerkId.get(clerkKey(c.name));
-    if (!id) continue;
-    const cur = must(await admin.from("clerks").select("email,phone").eq("id", id).single(), "clerk");
+    const cur = id && clerkRows.get(id);
+    if (!cur) continue;
     const upd = { ...(!cur.email && (c.email || c.email2) ? { email: c.email ?? c.email2 } : {}), ...(!cur.phone && c.phone ? { phone: c.phone } : {}) };
-    if (Object.keys(upd).length) { must(await admin.from("clerks").update(upd).eq("id", id), "clerk contact"); clerkContacts++; }
+    if (Object.keys(upd).length) clerkUpd.push([id, upd]);
   }
+  const clerkContacts = clerkUpd.length;
+
+  await parallel([...projUpd].map(([id, fields]) => async () => must(await admin.from("projects").update(fields).eq("id", id), "project details")));
+  await parallel([...infoTicks].map(([id, fields]) => async () => must(await admin.from("project_info").update(fields).eq("id", id), "tick")));
+  await parallel(clerkUpd.map(([id, upd]) => async () => must(await admin.from("clerks").update(upd).eq("id", id), "clerk contact")));
 
   // ---- second spellings of a clerk from the first import, once nothing points at them
   const dupes = existing.filter((c) => c.name_key == null && clerkId.get(clerkKey(c.name)) !== c.id).map((c) => c.id);

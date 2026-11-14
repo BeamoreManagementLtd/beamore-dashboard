@@ -2,7 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { createServiceClient } from "@/lib/supabase/server";
 import { syncDiary } from "@/lib/sync/diary-sync";
 
-export const maxDuration = 120;
+export const maxDuration = 300;
 export const dynamic = "force-dynamic";
 
 /** Hourly Vercel cron (vercel.json). Skips quickly when the diary hasn't changed since the last read. */
