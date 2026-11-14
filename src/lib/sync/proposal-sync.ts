@@ -49,7 +49,9 @@ export async function syncProposalPlans(admin: SupabaseClient, opts: { limit?: n
         // same name, or one name contains the other; the project's client folder wins a tie
         const keys = [p.name, ...(p.diary_aliases ?? [])].map((n: string) => siteKey(n)).filter((k: string) => k.length >= 4);
         const client = siteKey((p.clients as unknown as { name: string } | null)?.name ?? "");
-        const hits = folders.filter((f) => { const k = siteKey(f.name); return keys.some((x: string) => k === x || (k.length >= 5 && (k.includes(x) || x.includes(k)))); });
+        // a partial name match (folder "Bristol" for "Airbus Bristol") only counts inside the project's own client's folder
+        const sameClient = (f: { client: string }) => client.length >= 4 && siteKey(f.client).slice(0, 5) === client.slice(0, 5);
+        const hits = folders.filter((f) => { const k = siteKey(f.name); return keys.some((x: string) => k === x || (k.length >= 5 && (k.includes(x) || x.includes(k)) && sameClient(f))); });
         const best = hits.sort((a, b) => Number(siteKey(b.client).includes(client.slice(0, 5))) - Number(siteKey(a.client).includes(client.slice(0, 5))) || Number(siteKey(b.name) === keys[0]) - Number(siteKey(a.name) === keys[0]))[0];
         if (!best) { missing.push(p.display_name); continue; }
         folderId = best.id;
