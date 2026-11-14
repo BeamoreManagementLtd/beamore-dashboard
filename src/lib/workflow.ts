@@ -50,12 +50,12 @@ export async function loadWorkflow(db: SupabaseClient, p: P): Promise<{ stages: 
     ({ id, title, state: done || manual.has(id) ? "done" : "todo", note: done ? note : by(id) ?? note, ...opts });
 
   const pricing: Step[] = [
-    step("P1", "Request to price received", true, legacy ? undefined : fmt(p.created_at), { how: "auto" }),
+    step("P1", "Request to price received", true, p.stage_changed_at ? fmt(p.created_at) : undefined, { how: "auto" }),
     { ...step("P2", "DfE or not", p.is_dfe != null, p.is_dfe == null ? undefined : p.is_dfe ? "DfE" : "Not DfE", { how: "auto" }),
       note: p.is_dfe == null && p.dfe_evidence?.startsWith("Unsure") ? "Question waiting for you" : p.is_dfe == null ? undefined : p.is_dfe ? "DfE" : "Not DfE" },
     step("P3", "Cost proposal sent", p.stage === "sent" || pastPricing, undefined, { manual: true, how: "button" }),
     step("P4", "Client replied", pastPricing, undefined, { manual: true, how: "auto" }),
-    step("P5", "Won or lost", pastPricing, p.stage === "lost" ? `Lost${p.lost_reason ? `: ${p.lost_reason}` : ""}` : "Won", { how: "button" }),
+    step("P5", "Won or lost", pastPricing, !pastPricing ? undefined : p.stage === "lost" ? `Lost${p.lost_reason ? `: ${p.lost_reason}` : ""}` : "Won", { how: "button" }),
   ];
 
   const s = (id: string, title: string, done: boolean, note?: string, opts: Partial<Step> = {}) =>
@@ -123,29 +123,29 @@ export async function loadWorkflow(db: SupabaseClient, p: P): Promise<{ stages: 
   const missing = (info ?? []).filter((i) => !i.received_on);
   const asked = (info ?? []).filter((i) => i.requested_on).map((i) => i.requested_on as string).sort()[0];
   const list = (xs: string[]) => (xs.length <= 3 ? xs.join(", ") : `${xs.slice(0, 3).join(", ")} and ${xs.length - 3} more`);
-  const changed = p.stage_changed_at ?? p.created_at;
+  const changed = p.stage_changed_at; // null for projects imported before workflows: date unknown
   const waitingStep = stages.flatMap((s) => s.steps).find((x) => x.state === "now");
   let status: Status;
   if (current === "lost") status = { text: `Lost${p.lost_reason ? `: ${p.lost_reason}` : "."}`, waitingOn: null };
   else if (current === "complete") status = { text: "Complete.", waitingOn: null };
   else if (current === "pricing") {
     if (p.is_dfe == null && p.dfe_evidence?.startsWith("Unsure")) status = { text: "Waiting on you to say whether this is a DfE project.", waitingOn: "you" };
-    else if (p.stage !== "sent") status = { text: `Waiting on us to price it. The enquiry came in ${ago(daysSince(changed))}.`, waitingOn: "us", days: daysSince(changed) };
+    else if (p.stage !== "sent") status = { text: `Waiting on us to price it.${changed ? ` The enquiry came in ${ago(daysSince(changed))}.` : ""}`, waitingOn: "us", days: daysSince(changed) };
     else if (goAhead?.[0]) status = { text: `${goAhead[0].who ?? "The client"} may have given the go-ahead ${ago(daysSince(goAhead[0].happened_at))}. Waiting on you to confirm Won or Lost.`, waitingOn: "you" };
-    else status = { text: `Proposal sent ${ago(daysSince(changed))}. Waiting on the client to reply.`, waitingOn: "client", days: daysSince(changed) };
+    else status = { text: `Proposal sent${changed ? ` ${ago(daysSince(changed))}` : ""}. Waiting on the client to reply.`, waitingOn: "client", days: daysSince(changed) };
   } else if (current === "setup") {
     const id = waitingStep?.id;
-    if (id === "S1" || id === "S2") status = { text: `Won ${ago(daysSince(changed))}. Waiting on us to ask the client for the project information.`, waitingOn: "us", days: daysSince(changed) };
+    if (id === "S1" || id === "S2") status = { text: `Won${changed ? ` ${ago(daysSince(changed))}` : ""}. Waiting on us to ask the client for the project information.`, waitingOn: "us", days: daysSince(changed) };
     else if (id === "S3") status = p.clerk_status === "finding"
       ? { text: "Waiting on us to find a clerk of works.", waitingOn: "us" }
       : { text: "Waiting on us to choose the clerk of works.", waitingOn: "us" };
-    else if (id === "S5" && missing.length) status = { text: `Waiting on the client for ${missing.length} item${missing.length === 1 ? "" : "s"}: ${list(missing.map((i) => i.item))}. Asked ${ago(daysSince(asked))}.`, waitingOn: "client", days: daysSince(asked) };
+    else if (id === "S5" && missing.length) status = { text: `Waiting on the client for ${missing.length} item${missing.length === 1 ? "" : "s"}: ${list(missing.map((i) => i.item))}.${asked ? ` Asked ${ago(daysSince(asked))}.` : " Not asked yet."}`, waitingOn: "client", days: daysSince(asked) };
     else if (id === "S6") status = { text: "Waiting on the client for a PO number.", waitingOn: "client" };
     else if (id === "S8") status = { text: "Waiting on the admin team to add it to the diary (clerk rows, Invoice emails and Report emails tabs).", waitingOn: "admin" };
     else if (id === "S9") status = { text: "Waiting on the admin team to add it to the report tracker.", waitingOn: "admin" };
     else status = { text: waitingStep ? `Setting up. Next: ${waitingStep.title.toLowerCase()}.` : "Set-up done, ready to go live.", waitingOn: waitingStep ? "us" : null };
   } else if (current === "closeout") {
-    if (p.stage === "on_hold") status = { text: `Paused since ${fmt(changed)}.`, waitingOn: null };
+    if (p.stage === "on_hold") status = { text: changed ? `Paused since ${fmt(changed)}.` : "Paused.", waitingOn: null };
     else if (x2?.note === "finished") status = outstanding > 0
       ? { text: `Finished. Waiting on the client to pay ${money(outstanding)}.`, waitingOn: "client" }
       : { text: "Finished and paid.", waitingOn: null };

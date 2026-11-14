@@ -67,7 +67,7 @@ export async function runIntake(admin: SupabaseClient) {
 
     // ---- 1. DfE or not, for live/won projects not yet decided
     // newly started projects first; the backlog of existing live jobs is spread over a few hourly runs
-    const undecided = (projects ?? []).filter((p) => STARTING.includes(p.stage) && p.is_dfe == null && !p.dfe_evidence?.startsWith("Unsure"))
+    const undecided = (projects ?? []).filter((p) => p.is_dfe == null && !p.dfe_evidence?.startsWith("Unsure"))
       .sort((a, b) => (b.stage_changed_at ? 1 : 0) - (a.stage_changed_at ? 1 : 0)).slice(0, 25);
     for (const p of undecided) {
       const texts: { source: string; text: string }[] = [{ source: "project name", text: `${p.name} ${p.diary_aliases.join(" ")}` }];
