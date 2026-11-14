@@ -12,10 +12,13 @@ export default async function Personnel() {
   await requireProfile();
   const db = await createClient();
   const t = today();
-  const [{ data: clerks }, { data: absences }] = await Promise.all([
+  const [{ data: clerks }, { data: absences }, { data: monthDays }] = await Promise.all([
     db.from("clerks").select("id,name,active,clerk_compliance(dbs_status,dbs_recheck,chartership_body,chartership_grade,chartership_renewal,onboarding_complete)").eq("active", true).order("name"),
     db.from("absences").select("id,date_from,date_to,kind,status,clerks(name)").gte("date_to", t).order("date_from"),
+    db.from("clerk_month_days").select("*"),
   ]);
+  const md = new Map((monthDays ?? []).map((m) => [m.clerk_id as string, m]));
+  const month = new Date().toLocaleDateString("en-GB", { month: "long" });
 
   return (
     <>
@@ -34,7 +37,7 @@ export default async function Personnel() {
         <h2>Clerks</h2>
         {!clerks?.length ? <p className="empty">No clerks yet. The diary sync adds them.</p> : (
           <div className="tbl-wrap"><table>
-            <thead><tr><th>Clerk</th><th>DBS</th><th>Recheck</th><th>Chartership</th><th>Renewal</th><th>Onboarded</th></tr></thead>
+            <thead><tr><th>Clerk</th><th className="num">{month}: planned / charged</th><th>DBS</th><th>Recheck</th><th>Chartership</th><th>Renewal</th><th>Onboarded</th></tr></thead>
             <tbody>
               {clerks.map((c) => {
                 const raw = c.clerk_compliance as unknown;
@@ -43,6 +46,7 @@ export default async function Personnel() {
                 return (
                   <tr key={c.id}>
                     <td><b>{c.name}</b></td>
+                    <td className="num">{md.get(c.id)?.planned ?? 0} / {md.get(c.id)?.charged ?? 0}{!!md.get(c.id)?.sites && <span className="two">{md.get(c.id)?.sites} sites</span>}</td>
                     <td><span className={`pill ${tone}`}>{label}</span></td>
                     <td className={cc?.dbs_recheck && cc.dbs_recheck < t ? "neg" : ""}>{fd(cc?.dbs_recheck)}</td>
                     <td>{[cc?.chartership_body, cc?.chartership_grade].filter(Boolean).join(" ") || <span className="muted">—</span>}</td>

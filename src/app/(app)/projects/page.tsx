@@ -13,12 +13,16 @@ export default async function Projects({ searchParams }: { searchParams: Promise
   await requireProfile();
   const { stage = "live" } = await searchParams;
   const db = await createClient();
-  const [{ data: rows }, { data: counts }, { data: unmatched }] = await Promise.all([
+  const [{ data: rows }, { data: counts }, { data: unmatched }, { data: diaryDays }, { data: unmatchedSites }] = await Promise.all([
     db.from("projects").select("id,display_name,stage,agreed_days_building,agreed_days_me,next_action,next_action_due,clients(name)").eq("stage", stage).order("name"),
     db.from("projects").select("stage"),
     db.from("unmatched_invoice_refs").select("reference,last_invoice,client,invoices").order("reference"),
+    db.from("project_diary_days").select("*"),
+    db.from("unmatched_diary_sites").select("site_as_typed,last_seen,days").is("resolved_project_id", null).order("days", { ascending: false }),
   ]);
   const n = (s: string) => (counts ?? []).filter((c) => c.stage === s).length;
+  const dd = new Map((diaryDays ?? []).map((d) => [d.project_id as string, d]));
+  const month = new Date().toLocaleDateString("en-GB", { month: "long" });
 
   return (
     <>
@@ -35,6 +39,17 @@ export default async function Projects({ searchParams }: { searchParams: Promise
           </tbody></table>
         </details>
       )}
+      {!!unmatchedSites?.length && (
+        <details className="callout warn">
+          <summary>{unmatchedSites.length} diary site name{unmatchedSites.length > 1 ? "s" : ""} don’t match a project</summary>
+          <p className="small">Visits under these names aren’t counted against any project. Usually a new spelling in the diary; the diary’s own check flags typos too.</p>
+          <table><tbody>
+            {unmatchedSites.map((u) => (
+              <tr key={u.site_as_typed}><td><b>{u.site_as_typed}</b></td><td className="num">{u.days} days</td><td className="num">last {fd(u.last_seen)}</td></tr>
+            ))}
+          </tbody></table>
+        </details>
+      )}
       <nav className="row">
         {STAGES.map(([k, l]) => (
           <a key={k} href={`/projects?stage=${k}`} className={`btn ${k === stage ? "primary" : ""}`}>{l} <span className="small">{n(k)}</span></a>
@@ -43,15 +58,21 @@ export default async function Projects({ searchParams }: { searchParams: Promise
       <section className="panel">
         {!rows?.length ? <p className="empty">No projects at this stage yet.</p> : (
           <div className="tbl-wrap"><table>
-            <thead><tr><th>Project</th><th>Client</th><th className="num">Agreed days</th><th>Next action</th></tr></thead>
+            <thead><tr><th>Project</th><th>Client</th><th className="num">Agreed days</th><th className="num">Charged 2026</th><th className="num">{month}: planned / charged</th><th>Next action</th></tr></thead>
             <tbody>
               {rows.map((p) => {
                 const days = (Number(p.agreed_days_building ?? 0) + Number(p.agreed_days_me ?? 0)) || null;
+                const d = dd.get(p.id);
+                const used = Number(d?.charged_to_date ?? 0);
                 return (
                   <tr key={p.id}>
-                    <td><b>{p.display_name}</b></td>
+                    <td><b>{p.display_name}</b>{d?.last_visit && <span className="two">last visit {fd(d.last_visit)}</span>}</td>
                     <td>{(p.clients as unknown as { name: string } | null)?.name}</td>
                     <td className="num">{days ?? "—"}</td>
+                    <td className={`num ${days && used > days ? "neg" : ""}`}>{used || "—"}
+                      {!!d?.charged_me && <span className="two">{d.charged_building ?? 0} bldg · {d.charged_me} M&amp;E</span>}
+                      {days ? <span className="two">{used > days ? `${used - days} over` : `${days - used} left`}</span> : null}</td>
+                    <td className="num">{d?.planned_this_month ?? 0} / {d?.charged_this_month ?? 0}</td>
                     <td>{p.next_action ?? <span className="muted">Not set</span>}<span className="two">{fd(p.next_action_due)}</span></td>
                   </tr>
                 );

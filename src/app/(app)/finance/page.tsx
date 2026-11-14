@@ -1,21 +1,27 @@
 import { requireDirector } from "@/lib/auth";
 import { createClient } from "@/lib/supabase/server";
 import { gbp, fdt } from "@/lib/format";
-import { syncNow } from "./actions";
+import { syncNow, syncDiaryNow } from "./actions";
 
 export const dynamic = "force-dynamic";
+export const maxDuration = 120; // "Read diary now" downloads and parses the whole diary
 
-export default async function Finance({ searchParams }: { searchParams: Promise<{ xero?: string; reason?: string }> }) {
+export default async function Finance({ searchParams }: { searchParams: Promise<{ xero?: string; diary?: string; reason?: string }> }) {
   await requireDirector(); // page guard; the tables themselves are director-only in the database too
-  const { xero, reason } = await searchParams;
+  const { xero, diary, reason } = await searchParams;
   const db = await createClient();
-  const [{ data: snaps }, { data: conn }, { data: runs }] = await Promise.all([
+  const [{ data: snaps }, { data: conn }, { data: runs }, { data: gconn }, { data: druns }] = await Promise.all([
     db.from("finance_snapshots").select("*").order("taken_at", { ascending: false }).limit(12),
     db.rpc("xero_connection_status"),
     db.from("sync_runs").select("finished_at,ok,message").eq("source", "xero").order("started_at", { ascending: false }).limit(1),
+    db.rpc("google_connection_status"),
+    // the last diary read that did something (hourly checks that find no change are skipped here)
+    db.from("sync_runs").select("finished_at,ok,message").eq("source", "diary").neq("message", "Diary unchanged since last read").order("started_at", { ascending: false }).limit(1),
   ]);
   const c = (conn as { tenant_name: string; connected_at: string }[] | null)?.[0];
   const last = runs?.[0];
+  const g = (gconn as { email: string; connected_at: string; diary_modified_time: string | null }[] | null)?.[0];
+  const dlast = druns?.[0];
   const latest = snaps?.find((s) => s.period === "latest");
   const month = snaps?.find((s) => /^\d{4}-\d{2}$/.test(s.period));
   const fytd = snaps?.find((s) => s.period.startsWith("FY"));
@@ -42,6 +48,26 @@ export default async function Finance({ searchParams }: { searchParams: Promise<
           <div className="row">
             {c && <form action={syncNow}><button className="btn primary">Sync now</button></form>}
             <a className={`btn ${c ? "" : "primary"}`} href="/api/xero/connect">{c ? "Reconnect" : "Connect Xero"}</a>
+          </div>
+        </div>
+      </section>
+      {diary === "connected" && <p className="callout info">Google Drive is connected and the diary has been read. It’s checked for changes every hour.</p>}
+      {diary === "synced" && <p className="callout info">Diary read just now.</p>}
+      {diary === "error" && <p className="callout warn">Diary: {reason ?? "something went wrong"}</p>}
+      <section className="panel">
+        <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
+          <div>
+            <b>Diary</b>{" "}
+            {g ? <span className="muted">read from Google Drive ({g.email}). Checked hourly{g.diary_modified_time ? `; file last saved ${fdt(g.diary_modified_time)}` : ""}.</span> : <span className="muted">Google Drive not connected yet.</span>}
+            {dlast && (
+              <span className="two">
+                Last read {fdt(dlast.finished_at)}: {dlast.ok ? dlast.message : <span className="neg">failed: {dlast.message}</span>}
+              </span>
+            )}
+          </div>
+          <div className="row">
+            {g && <form action={syncDiaryNow}><button className="btn primary">Read diary now</button></form>}
+            <a className={`btn ${g ? "" : "primary"}`} href="/api/google/connect">{g ? "Reconnect" : "Connect Google Drive"}</a>
           </div>
         </div>
       </section>
