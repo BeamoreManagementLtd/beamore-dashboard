@@ -75,14 +75,22 @@ async function allInvoices(get: XeroGet, from: string) {
 export async function prepareDrafts(admin: SupabaseClient, m: string) {
   const end = lastDay(m);
   const get = await xeroClient(admin);
-  const [rows, { data: projects }, { data: rates }, invoices] = await Promise.all([
+  const [rows, { data: projects }, { data: rates }, { data: linked }, invoices] = await Promise.all([
     monthComparison(admin, m),
     admin.from("projects").select("id,name,display_name,diary_aliases"),
     admin.from("rates").select("site_as_typed,charge"),
+    admin.from("invoices").select("number,project_id").not("project_id", "is", null),
     allInvoices(get, addDays(m, -150)),
   ]);
   const match = projectMatcher(projects ?? []);
-  const projectOf = (i: XInv) => match.fromReference(i.Reference) ?? (i.LineItems ?? []).map((l) => match.fromReference(l.Description) ?? match.fromText(l.Description)).find(Boolean) ?? null;
+  // links already made (by the Xero sync, the diary's invoice table or by hand) win; then every part of the reference
+  // ("FS1018 - Wisbech", "BLMS0547 - Paignton"), then the line descriptions
+  const known = new Map((linked ?? []).map((i) => [i.number, i.project_id as string]));
+  const projectOf = (i: XInv) =>
+    known.get(i.InvoiceNumber) ??
+    (i.Reference ?? "").split(/\s+[-–]\s+/).map((part) => match.fromReference(part)).find(Boolean) ??
+    match.fromText(i.Reference) ??
+    (i.LineItems ?? []).map((l) => match.fromReference(l.Description) ?? match.fromText(l.Description)).find(Boolean) ?? null;
 
   // charge rates from the diary's Rates tab, by project and kind
   const rateBy = new Map<string, number>();
