@@ -1,8 +1,9 @@
 "use server";
 import { revalidatePath } from "next/cache";
+import { redirect } from "next/navigation";
 import { requireProfile } from "@/lib/auth";
 import { createClient } from "@/lib/supabase/server";
-import { ONBOARDING } from "@/lib/onboarding";
+import { buildOnboarding } from "@/lib/onboarding";
 
 const s = (f: FormData, k: string) => String(f.get(k) ?? "").trim() || null;
 const DBS = ["verified", "in_progress", "action_needed", "none"];
@@ -24,22 +25,80 @@ export async function saveCompliance(clerkId: string, form: FormData) {
     chartership_number: s(form, "chartership_number"),
     chartership_renewal: s(form, "chartership_renewal"),
     ppe_notes: s(form, "ppe_notes"),
+    address: s(form, "address"),
+    emergency_contact: s(form, "emergency_contact"),
+    business_type: ["limited", "sole_trader", "umbrella"].includes(s(form, "business_type") ?? "") ? s(form, "business_type") : null,
+    company_name: s(form, "company_name"),
+    bank_details_received: s(form, "bank_details_received"),
+    pi_insurance_expiry: s(form, "pi_insurance_expiry"),
+    pl_insurance_expiry: s(form, "pl_insurance_expiry"),
+    cscs_number: s(form, "cscs_number"),
+    cscs_expiry: s(form, "cscs_expiry"),
+    right_to_work_checked: s(form, "right_to_work_checked"),
+    terms_signed: s(form, "terms_signed"),
     updated_at: new Date().toISOString(),
   });
   if (error) throw new Error(error.message);
   await db.from("clerks").update({ email: s(form, "email"), phone: s(form, "phone") }).eq("id", clerkId);
+  await refreshOnboarded(clerkId);
   revalidatePath(`/personnel/${clerkId}`);
   revalidatePath("/personnel");
 }
 
-/** Adds the standard onboarding steps for a clerk (any already there are kept). */
+/** Recomputes whether a clerk's onboarding is complete (every step green) and stores it. */
+async function refreshOnboarded(clerkId: string) {
+  const db = await createClient();
+  const [{ data: c }, { data: clerk }, { data: items }, { count }] = await Promise.all([
+    db.from("clerk_compliance").select("*").eq("clerk_id", clerkId).maybeSingle(),
+    db.from("clerks").select("email,phone").eq("id", clerkId).maybeSingle(),
+    db.from("onboarding_items").select("item,done_on").eq("clerk_id", clerkId),
+    db.from("diary_visits").select("id", { count: "exact", head: true }).eq("clerk_id", clerkId),
+  ]);
+  if (!c?.onboarding_started) return;
+  const ticked = new Map((items ?? []).filter((i) => i.done_on).map((i) => [i.item as string, i.done_on as string]));
+  const o = buildOnboarding({ ...c, ...clerk }, ticked, (count ?? 0) > 0, new Date().toISOString().slice(0, 10));
+  if (o.complete !== c.onboarding_complete) await db.from("clerk_compliance").update({ onboarding_complete: o.complete }).eq("clerk_id", clerkId);
+}
+
+/** A new person joining: creates them (named as they'll appear in the diary) and starts their onboarding. */
+export async function addNewClerk(form: FormData) {
+  await requireProfile();
+  const db = await createClient();
+  const name = s(form, "name");
+  if (!name) return;
+  const project = s(form, "project_id");
+  const { data: clerk, error } = await db.from("clerks").insert({ name, email: s(form, "email"), phone: s(form, "phone"), active: true }).select("id").single();
+  if (error) throw new Error(error.message.includes("duplicate") ? `There's already a clerk called ${name}` : error.message);
+  await db.from("clerk_compliance").upsert({ clerk_id: clerk.id, onboarding_started: new Date().toISOString().slice(0, 10), onboarding_project_id: project, updated_at: new Date().toISOString() });
+  if (project) {
+    await db.from("projects").update({ clerk_id: clerk.id, clerk_status: "have" }).eq("id", project);
+    await db.from("project_events").insert({ project_id: project, source: "team", kind: "Clerk of works", body: `${name} appointed (new to Beamore, onboarding started)` });
+    revalidatePath(`/projects/${project}`);
+  }
+  revalidatePath("/personnel");
+  redirect(`/personnel/${clerk.id}`);
+}
+
+/** Starts the onboarding workflow for a clerk already in the dashboard. */
 export async function startOnboarding(clerkId: string) {
+  await requireProfile();
+  const db = await createClient();
+  await db.from("clerk_compliance").upsert({ clerk_id: clerkId, onboarding_started: new Date().toISOString().slice(0, 10), updated_at: new Date().toISOString() });
+  await refreshOnboarded(clerkId);
+  revalidatePath(`/personnel/${clerkId}`);
+  revalidatePath("/personnel");
+}
+
+/** Ticks (or unticks) a hand-ticked onboarding step such as a piece of PPE. */
+export async function tickOnboarding(clerkId: string, item: string, done: boolean) {
   const me = await requireProfile();
   const db = await createClient();
-  const { data: have } = await db.from("onboarding_items").select("item").eq("clerk_id", clerkId);
-  const missing = ONBOARDING.filter((i) => !(have ?? []).some((h) => h.item === i));
-  if (missing.length) await db.from("onboarding_items").insert(missing.map((item) => ({ clerk_id: clerkId, item, owner_id: me.id })));
+  await db.from("onboarding_items").delete().eq("clerk_id", clerkId).eq("item", item);
+  if (done) await db.from("onboarding_items").insert({ clerk_id: clerkId, item, done_on: new Date().toISOString().slice(0, 10), owner_id: me.id });
+  await refreshOnboarded(clerkId);
   revalidatePath(`/personnel/${clerkId}`);
+  revalidatePath("/personnel");
+  revalidatePath("/due");
 }
 
 export async function toggleOnboardingItem(clerkId: string, itemId: string, done: boolean) {

@@ -28,6 +28,7 @@ export function WorkflowPanel({ projectId, stages, current, clerks, ticked, stat
             <option value="finding">We need to find one</option>
           </select>
           <button className="btn">Save</button>
+          <a className="small" href={`/personnel?project=${projectId}#new`}>New to Beamore?</a>
         </form>
       );
     if (st.id === "S6" && st.state !== "done")

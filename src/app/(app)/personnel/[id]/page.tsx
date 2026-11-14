@@ -3,7 +3,8 @@ import { notFound } from "next/navigation";
 import { requireProfile } from "@/lib/auth";
 import { createClient } from "@/lib/supabase/server";
 import { fd, fdy, today } from "@/lib/format";
-import { saveCompliance, startOnboarding, toggleOnboardingItem, setActive } from "../actions";
+import { saveCompliance, startOnboarding, tickOnboarding, setActive } from "../actions";
+import { buildOnboarding } from "@/lib/onboarding";
 
 export const dynamic = "force-dynamic";
 
@@ -11,6 +12,9 @@ type Compliance = {
   dbs_level: string | null; dbs_status: string | null; dbs_checked: string | null; dbs_recheck: string | null; dbs_update_service: boolean | null;
   chartership_body: string | null; chartership_grade: string | null; chartership_number: string | null; chartership_renewal: string | null;
   ppe_notes: string | null; onboarding_complete: boolean; updated_at: string;
+  address: string | null; emergency_contact: string | null; business_type: string | null; company_name: string | null; bank_details_received: string | null;
+  pi_insurance_expiry: string | null; pl_insurance_expiry: string | null; cscs_number: string | null; cscs_expiry: string | null;
+  right_to_work_checked: string | null; terms_signed: string | null; onboarding_started: string | null; onboarding_project_id: string | null;
 };
 
 export default async function Clerk({ params }: { params: Promise<{ id: string }> }) {
@@ -37,8 +41,11 @@ export default async function Clerk({ params }: { params: Promise<{ id: string }
     p[v.side as "planned" | "charged"] += Number(v.days);
     byProject.set(name, p);
   }
-  const done = (items ?? []).filter((i) => i.done_on).length;
   const save = saveCompliance.bind(null, id);
+  const { count: diaryRows } = await db.from("diary_visits").select("id", { count: "exact", head: true }).eq("clerk_id", id);
+  const ticked = new Map((items ?? []).filter((i) => i.done_on).map((i) => [i.item, i.done_on as string]));
+  const onb = c.onboarding_started ? buildOnboarding({ ...c, email: clerk.email, phone: clerk.phone }, ticked, (diaryRows ?? 0) > 0, t) : null;
+  const { data: forProject } = c.onboarding_project_id ? await db.from("projects").select("id,display_name").eq("id", c.onboarding_project_id).maybeSingle() : { data: null };
 
   return (
     <>
@@ -52,7 +59,16 @@ export default async function Clerk({ params }: { params: Promise<{ id: string }
         <div className="row">
           <div className="field"><label htmlFor="email">Email</label><input id="email" name="email" type="email" defaultValue={clerk.email ?? ""} /></div>
           <div className="field"><label htmlFor="phone">Phone</label><input id="phone" name="phone" defaultValue={clerk.phone ?? ""} /></div>
+          <div className="field"><label htmlFor="ec">Emergency contact</label><input id="ec" name="emergency_contact" defaultValue={c.emergency_contact ?? ""} placeholder="Name and phone" /></div>
         </div>
+        <div className="field"><label htmlFor="addr">Address</label><input id="addr" name="address" defaultValue={c.address ?? ""} /></div>
+        <div className="row">
+          <div className="field"><label htmlFor="bt">Works as</label>
+            <select id="bt" name="business_type" defaultValue={c.business_type ?? ""}><option value="">—</option><option value="limited">Limited company</option><option value="sole_trader">Sole trader</option><option value="umbrella">Umbrella company</option></select></div>
+          <div className="field"><label htmlFor="co">Company name</label><input id="co" name="company_name" defaultValue={c.company_name ?? ""} /></div>
+          <div className="field"><label htmlFor="bank">Bank details received</label><input id="bank" name="bank_details_received" type="date" defaultValue={c.bank_details_received ?? ""} /></div>
+        </div>
+        <p className="small muted">Bank details themselves go in Xero, not here.</p>
         <h2>DBS</h2>
         <div className="row">
           <div className="field"><label htmlFor="dbs_level">Level</label>
@@ -74,28 +90,56 @@ export default async function Clerk({ params }: { params: Promise<{ id: string }
           <div className="field"><label htmlFor="cn">Membership number</label><input id="cn" name="chartership_number" defaultValue={c.chartership_number ?? ""} /></div>
           <div className="field"><label htmlFor="cr">Renewal due</label><input id="cr" name="chartership_renewal" type="date" defaultValue={c.chartership_renewal ?? ""} /></div>
         </div>
+        <h2>Insurance, CSCS and right to work</h2>
+        <div className="row">
+          <div className="field"><label htmlFor="pi">Professional indemnity expires</label><input id="pi" name="pi_insurance_expiry" type="date" defaultValue={c.pi_insurance_expiry ?? ""} /></div>
+          <div className="field"><label htmlFor="pl">Public liability expires</label><input id="pl" name="pl_insurance_expiry" type="date" defaultValue={c.pl_insurance_expiry ?? ""} /></div>
+          <div className="field"><label htmlFor="cscsn">CSCS card number</label><input id="cscsn" name="cscs_number" defaultValue={c.cscs_number ?? ""} /></div>
+          <div className="field"><label htmlFor="cscse">CSCS expires</label><input id="cscse" name="cscs_expiry" type="date" defaultValue={c.cscs_expiry ?? ""} /></div>
+        </div>
+        <div className="row">
+          <div className="field"><label htmlFor="rtw">Right to work checked</label><input id="rtw" name="right_to_work_checked" type="date" defaultValue={c.right_to_work_checked ?? ""} /></div>
+          <div className="field"><label htmlFor="terms">Terms signed</label><input id="terms" name="terms_signed" type="date" defaultValue={c.terms_signed ?? ""} /></div>
+        </div>
         <h2>PPE</h2>
         <div className="field"><label htmlFor="ppe">Notes (sizes, what’s been issued)</label><textarea id="ppe" name="ppe_notes" rows={2} defaultValue={c.ppe_notes ?? ""} /></div>
-        <div><button className="btn primary">Save</button> <span className="small muted">Renewals due within 30 days appear on Judy’s due list.</span></div>
+        <div><button className="btn primary">Save</button> <span className="small muted">Insurance, CSCS, DBS and chartership renewals due within 30 days appear on Judy’s due list.</span></div>
       </form>
 
-      <section className="panel">
+      <section className="panel wf">
         <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
-          <h2>Onboarding {items?.length ? <span className="small muted">{done} of {items.length} done</span> : null}</h2>
-          {!items?.length && <form action={startOnboarding.bind(null, id)}><button className="btn">Start onboarding checklist</button></form>}
+          <h2>Onboarding {onb && <span className="small muted">{onb.done} of {onb.total} done</span>}</h2>
+          {!onb && <form action={startOnboarding.bind(null, id)}><button className="btn">Start onboarding</button></form>}
         </div>
-        {!items?.length ? <p className="empty">No checklist yet.{c.onboarding_complete ? " Marked as onboarded." : ""}</p> : (
-          <table><tbody>
-            {items.map((i) => (
-              <tr key={i.id}>
-                <td>{i.item}</td>
-                <td className="num">{i.done_on ? <span className="pill good">Done {fd(i.done_on)}</span> : <span className="muted">To do</span>}</td>
-                <td className="num" style={{ width: 90 }}>
-                  <form action={toggleOnboardingItem.bind(null, id, i.id, !i.done_on)}><button className="btn">{i.done_on ? "Undo" : "Done"}</button></form>
-                </td>
-              </tr>
+        {!onb ? <p className="empty">Not being onboarded.{c.onboarding_complete ? " Marked as onboarded." : " Start it for anyone new to Beamore."}</p> : (
+          <>
+            <div className="wf-status">
+              {onb.complete
+                ? <span className="pill good">Ready for site</span>
+                : <span className="pill warn">Not ready for site yet</span>}
+              <p>{onb.complete ? `Onboarding complete.` : `Started ${fd(c.onboarding_started!)}${forProject ? ` for ${forProject.display_name}` : ""}. Next: ${onb.next?.title.toLowerCase()}.`}
+                {forProject && <> <Link href={`/projects/${forProject.id}`}>Open project</Link></>}</p>
+              <p className="small muted">Steps without a button tick themselves when the details above are filled in and saved.</p>
+            </div>
+            {onb.groups.map((g) => (
+              <div key={g.id}>
+                <h3 className="small" style={{ margin: "10px 0 4px" }}>{g.id} · {g.title}</h3>
+                <ol className="wf-steps">
+                  {g.steps.map((st) => (
+                    <li key={st.id} className={st.state}>
+                      <span className="wf-title">{st.title}</span>
+                      {st.note && <span className="wf-note">{st.note}</span>}
+                      {st.tick && (
+                        <form action={tickOnboarding.bind(null, id, st.tick, st.state !== "done")} className="wf-ctl">
+                          {st.state === "done" ? <button className="linklike small">undo</button> : <button className="btn">Done</button>}
+                        </form>
+                      )}
+                    </li>
+                  ))}
+                </ol>
+              </div>
             ))}
-          </tbody></table>
+          </>
         )}
       </section>
 

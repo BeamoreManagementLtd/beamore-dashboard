@@ -2,7 +2,7 @@ import Link from "next/link";
 import { requireProfile } from "@/lib/auth";
 import { createClient } from "@/lib/supabase/server";
 import { fd, today } from "@/lib/format";
-import { addAbsence, cancelAbsence } from "./actions";
+import { addAbsence, cancelAbsence, addNewClerk } from "./actions";
 
 export const dynamic = "force-dynamic";
 
@@ -10,14 +10,14 @@ const DBS: Record<string, [string, string]> = {
   verified: ["good", "Verified"], in_progress: ["neutral", "In progress"], action_needed: ["warn", "Action needed"], none: ["bad", "No check on file"],
 };
 
-export default async function Personnel({ searchParams }: { searchParams: Promise<{ show?: string }> }) {
+export default async function Personnel({ searchParams }: { searchParams: Promise<{ show?: string; project?: string }> }) {
   await requireProfile();
-  const { show } = await searchParams;
+  const { show, project } = await searchParams;
   const db = await createClient();
   const t = today();
   const cutoff = new Date(Date.parse(t + "T00:00:00Z") - 60 * 86400000).toISOString().slice(0, 10);
   const [{ data: clerks }, { data: absences }, { data: monthDays }, { data: activity }] = await Promise.all([
-    db.from("clerks").select("id,name,active,clerk_compliance(dbs_status,dbs_recheck,chartership_body,chartership_grade,chartership_renewal,onboarding_complete)").order("name"),
+    db.from("clerks").select("id,name,active,clerk_compliance(dbs_status,dbs_recheck,chartership_body,chartership_grade,chartership_renewal,onboarding_complete,onboarding_started)").order("name"),
     db.from("absences").select("id,date_from,date_to,part_day,kind,status,source,synced_to_diary_at,clerk_id,clerks(name)").gte("date_to", t).neq("status", "cancelled").order("date_from"),
     db.from("clerk_month_days").select("*"),
     db.from("clerk_activity").select("*"),
@@ -29,7 +29,9 @@ export default async function Personnel({ searchParams }: { searchParams: Promis
   const shown = show === "all" ? all : all.filter(working);
   const month = new Date().toLocaleDateString("en-GB", { month: "long" });
   const comp = (raw: unknown) => (Array.isArray(raw) ? raw[0] : raw) as
-    { dbs_status?: string; dbs_recheck?: string; chartership_body?: string; chartership_grade?: string; chartership_renewal?: string; onboarding_complete?: boolean } | null;
+    { dbs_status?: string; dbs_recheck?: string; chartership_body?: string; chartership_grade?: string; chartership_renewal?: string; onboarding_complete?: boolean; onboarding_started?: string } | null;
+  const onboarding = all.filter((c) => comp(c.clerk_compliance)?.onboarding_started && !comp(c.clerk_compliance)?.onboarding_complete);
+  const { data: wonProjects } = await db.from("projects").select("id,display_name").in("stage", ["won_arranging", "won_preparing", "live"]).order("name");
   const missingDbs = all.filter(working).filter((c) => !comp(c.clerk_compliance)?.dbs_status).length;
   // a diary holiday that a dashboard entry already covers is shown once (as the dashboard entry)
   const abs = absences ?? [];
@@ -41,6 +43,23 @@ export default async function Personnel({ searchParams }: { searchParams: Promis
       <div className="head">
         <div><h1>Personnel</h1><p>Clerks, compliance and holidays. Click a name to update their DBS, chartership, PPE and onboarding.</p></div>
       </div>
+      <section className="panel" id="new">
+        <h2>New clerks</h2>
+        {onboarding.length > 0 && (
+          <p className="small">Being onboarded: {onboarding.map((c, i) => <span key={c.id}>{i ? ", " : ""}<Link href={`/personnel/${c.id}`}>{c.name}</Link></span>)}. They’re not ready for site until every step is green.</p>
+        )}
+        <form action={addNewClerk} className="row">
+          <div className="field"><label htmlFor="nn">Name (as it will appear in the diary)</label><input id="nn" name="name" required /></div>
+          <div className="field"><label htmlFor="ne">Email</label><input id="ne" name="email" type="email" /></div>
+          <div className="field"><label htmlFor="np">Phone</label><input id="np" name="phone" /></div>
+          <div className="field"><label htmlFor="nj">Appointed for</label>
+            <select id="nj" name="project_id" defaultValue={project ?? ""}>
+              <option value="">No particular project</option>
+              {(wonProjects ?? []).map((p) => <option key={p.id} value={p.id}>{p.display_name}</option>)}
+            </select></div>
+          <button className="btn primary">Add and start onboarding</button>
+        </form>
+      </section>
       {missingDbs > 0 && <p className="callout warn">{missingDbs} clerk{missingDbs > 1 ? "s" : ""} working with us {missingDbs > 1 ? "have" : "has"} no DBS record in the dashboard yet.</p>}
       <section className="panel">
         <h2>Holidays coming up</h2>

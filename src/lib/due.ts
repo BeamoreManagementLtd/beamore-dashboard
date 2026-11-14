@@ -36,7 +36,7 @@ export async function buildDueList(db: SupabaseClient, me: Profile): Promise<Due
     db.from("invoices").select("id,number,due,amount_due,clients(name),chase_state(status,next_action,next_action_due,promised_date,owner_id)").gt("amount_due", 0).lt("due", t),
     db.from("report_queue").select("checker,due"),
     db.from("projects").select("id,display_name,next_action,next_action_due,owner_id").not("next_action_due", "is", null).lte("next_action_due", addDays(t, 14)),
-    db.from("clerk_compliance").select("dbs_recheck,chartership_renewal,clerks(name)"),
+    db.from("clerk_compliance").select("clerk_id,dbs_recheck,chartership_renewal,pi_insurance_expiry,pl_insurance_expiry,cscs_expiry,onboarding_started,onboarding_complete,clerks(name,active)"),
     db.from("tasks").select("id,title,kind,due,link,owner_id").is("done_at", null),
     db.from("unmatched_diary_sites").select("site_as_typed", { count: "exact", head: true }).is("resolved_project_id", null).eq("ignored", false),
     db.from("unmatched_invoice_refs").select("reference_key", { count: "exact", head: true }),
@@ -162,6 +162,15 @@ export async function buildDueList(db: SupabaseClient, me: Profile): Promise<Due
       items.push({ key: `dbs-${name}`, kind: "Personnel", title: `${name}: DBS recheck due`, due: c.dbs_recheck, link: "/personnel", ...ownerOf(null, "Judy") });
     if (c.chartership_renewal && c.chartership_renewal <= addDays(t, 30))
       items.push({ key: `chart-${name}`, kind: "Personnel", title: `${name}: chartership renewal due`, due: c.chartership_renewal, link: "/personnel", ...ownerOf(null, "Judy") });
+    const clerkLink = `/personnel/${c.clerk_id}`;
+    const active = (c.clerks as unknown as { active: boolean } | null)?.active !== false;
+    for (const [field, label] of [["pi_insurance_expiry", "professional indemnity insurance"], ["pl_insurance_expiry", "public liability insurance"], ["cscs_expiry", "CSCS card"]] as const) {
+      const d = c[field] as string | null;
+      if (active && d && d <= addDays(t, 30))
+        items.push({ key: `${field}-${c.clerk_id}`, kind: "Personnel", title: `${name}: ${label} ${d < t ? "expired" : "expires soon"}`, detail: "Ask for the new certificate and update the date", due: d, link: clerkLink, ...ownerOf(null, "Judy") });
+    }
+    if (c.onboarding_started && !c.onboarding_complete)
+      items.push({ key: `onboard-${c.clerk_id}`, kind: "Personnel", title: `Onboard ${name}`, detail: "New clerk: insurance, DBS, CSCS, PPE, terms and set-up. Not ready for site until it's all done", due: addDays(c.onboarding_started as string, 7), link: clerkLink, ...ownerOf(null, "Judy") });
   }
 
   // ---- holidays: dashboard entries still to go in the diary, and planned (grey) visits on holiday days
