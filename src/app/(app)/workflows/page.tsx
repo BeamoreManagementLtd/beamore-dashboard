@@ -11,7 +11,7 @@ const COLUMNS = [
   { key: "live", title: "Live" },
   { key: "closeout", title: "Close-out" },
 ] as const;
-const WHO: Record<NonNullable<Status["waitingOn"]>, string> = { us: "Us", client: "Client", you: "Ronan", admin: "Admin team", clerk: "Clerk" };
+const WHO: Record<NonNullable<Status["waitingOn"]>, string> = { us: "us", client: "the client", you: "Ronan", admin: "the admin team", clerk: "the clerk" };
 
 /** Every active project as a card in its workflow stage, with who it's waiting on. */
 export default async function Workflows({ searchParams }: { searchParams: Promise<{ who?: string; old?: string }> }) {
@@ -45,7 +45,7 @@ export default async function Workflows({ searchParams }: { searchParams: Promis
       <div className="wb-filters">
         <Link href={q({ who: undefined })} className={`chip ${!who ? "on" : ""}`}>Everything</Link>
         {(Object.keys(WHO) as (keyof typeof WHO)[]).filter((k) => counts.get(k)).map((k) => (
-          <Link key={k} href={q({ who: k })} className={`chip ${who === k ? "on" : ""}`}>Waiting on {WHO[k].toLowerCase()} · {counts.get(k)}</Link>
+          <Link key={k} href={q({ who: k })} className={`chip ${who === k ? "on" : ""}`}>Waiting on {WHO[k]} · {counts.get(k)}</Link>
         ))}
         {parkedCount > 0 && <Link href={q({ old: old === "1" ? undefined : "1" })} className="chip">{old === "1" ? "Hide" : "Show"} {parkedCount} older enquiries</Link>}
       </div>
@@ -63,7 +63,7 @@ export default async function Workflows({ searchParams }: { searchParams: Promis
                   <Link key={p.id} href={`/projects/${p.id}`} className={`wb-card ${w.status.waitingOn ? `w-${w.status.waitingOn}` : ""}`}>
                     <div className="wb-top"><b>{p.display_name}</b>{c.key !== "live" && <span className="muted small">{done}/{st.steps.length}</span>}</div>
                     {p.clients?.name && <div className="small muted">{p.clients.name}{p.is_dfe ? " · DfE" : ""}</div>}
-                    {w.status.waitingOn && <span className={`pill ${w.status.waitingOn === "client" ? "neutral" : "warn"}`}>Waiting on {WHO[w.status.waitingOn].toLowerCase()}{w.status.days ? ` · ${w.status.days}d` : ""}</span>}
+                    {w.status.waitingOn && <span className={`pill ${w.status.waitingOn === "client" ? "neutral" : "warn"}`}>Waiting on {WHO[w.status.waitingOn]}{w.status.days ? ` · ${w.status.days}d` : ""}</span>}
                     <p className="small">{w.status.text}</p>
                   </Link>
                 );
