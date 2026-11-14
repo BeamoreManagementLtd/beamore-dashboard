@@ -146,7 +146,7 @@ input,select,textarea{background:var(--surface);border:1px solid var(--line);bor
 .wb-filters{display:flex;flex-wrap:wrap;gap:6px;margin:4px 0 14px}
 .wb-filters .chip{font-size:12.5px;font-weight:600;padding:5px 11px;border-radius:999px;border:1px solid var(--line);background:var(--surface);color:var(--ink);text-decoration:none}
 .wb-filters .chip.on{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
-.wb{display:grid;grid-template-columns:repeat(4,minmax(240px,1fr));gap:12px;overflow-x:auto;align-items:start}
+.wb{display:grid;grid-template-columns:repeat(5,minmax(220px,1fr));gap:12px;overflow-x:auto;align-items:start}
 .wb-col{background:var(--surface-2);border:1px solid var(--line);border-radius:var(--r);padding:10px;display:flex;flex-direction:column;gap:8px;min-width:0}
 .wb-col h2{font-size:15px;margin:2px 2px 4px}
 .wb-card{display:flex;flex-direction:column;gap:5px;background:var(--surface);border:1px solid var(--line);border-left:4px solid var(--line);border-radius:8px;padding:9px 11px;color:var(--ink);text-decoration:none}
@@ -154,7 +154,7 @@ input,select,textarea{background:var(--surface);border:1px solid var(--line);bor
 .wb-card p{margin:0;color:var(--muted)} .wb-card .pill{align-self:flex-start}
 .wb-card.w-you,.wb-card.w-us{border-left-color:var(--warn)} .wb-card.w-admin{border-left-color:var(--brand)} .wb-card.w-client{border-left-color:var(--neutral)}
 .wb-top{display:flex;justify-content:space-between;gap:8px;align-items:baseline}
-@media (max-width:900px){.wb{grid-template-columns:repeat(4,260px)}}
+@media (max-width:900px){.wb{grid-template-columns:repeat(5,250px)}}
 /* clerk questionnaire */
 .join{align-items:flex-start;padding-block:24px}
 .join-card{max-width:640px;width:100%;text-align:left}

@@ -9,16 +9,16 @@ export type StepState = "done" | "now" | "todo" | "skip";
 export type Step = { id: string; title: string; state: StepState; note?: string; manual?: boolean; how?: "auto" | "button" | "task" };
 /** One plain sentence on where the project is and who it's waiting on. */
 export type Status = { text: string; waitingOn: "us" | "client" | "you" | "admin" | "clerk" | null; days?: number; extra?: string[] };
-export type Stage = { key: "pricing" | "setup" | "live" | "closeout"; title: string; steps: Step[]; state: StepState };
+export type Stage = { key: "pricing" | "setup" | "start" | "live" | "closeout"; title: string; steps: Step[]; state: StepState };
 export type Current = Stage["key"] | "lost" | "complete";
 export type Workflow = { stages: Stage[]; current: Current; ticked: string[]; status: Status; quiet: boolean };
 
 export type WorkflowProject = {
   id: string; stage: string; is_dfe: boolean | null; dfe_evidence: string | null; created_at: string; stage_changed_at: string | null;
   clerk_id: string | null; clerk_status: string | null; po_number: string | null; drive_folder_id: string | null; lost_reason: string | null;
-  next_action?: string | null; with_whom?: string | null; next_action_due?: string | null;
+  next_action?: string | null; with_whom?: string | null; next_action_due?: string | null; start_date?: string | null;
 };
-export const WORKFLOW_COLUMNS = "id,stage,is_dfe,dfe_evidence,created_at,stage_changed_at,clerk_id,clerk_status,po_number,drive_folder_id,lost_reason,next_action,with_whom,next_action_due";
+export const WORKFLOW_COLUMNS = "id,stage,is_dfe,dfe_evidence,created_at,stage_changed_at,clerk_id,clerk_status,po_number,drive_folder_id,lost_reason,next_action,with_whom,next_action_due,start_date";
 
 type ManualStep = { step: string; done_at: string; done_by: string | null; note: string | null };
 type Facts = {
@@ -75,7 +75,14 @@ export function buildWorkflow(p: WorkflowProject, f: Facts): Workflow {
     s("S7", "Set up in Xero", live.length > 0, "invoiced", { manual: true, how: "auto" }),
     s("S8", "Diary updated", (f.visits?.visits ?? 0) > 0 && (f.hasContacts || legacy), "in the diary", { manual: true, how: "task" }),
     s("S9", "Report tracker", (f.reports?.reports ?? 0) > 0, "in the tracker", { manual: true, how: "task" }),
-    s("S10", "Live", ["live", "on_hold", "complete"].includes(p.stage), undefined, { how: "auto" }),
+  ];
+  const onSite = ["live", "on_hold", "complete"].includes(p.stage);
+  const plannedInDiary = (f.visits?.visits ?? 0) - (f.visits?.charged_visits ?? 0) > 0 || (f.visits?.charged_visits ?? 0) > 0;
+  // won and set up, but not on site yet: often weeks or months
+  const startSteps: Step[] = [
+    step("T1", "Start on site date", !!p.start_date || onSite, p.start_date ? fmt(p.start_date) : undefined, { how: "button" }),
+    step("T2", "Clerk booked in the diary", plannedInDiary || onSite, plannedInDiary ? "in the diary" : undefined, { how: "task" }),
+    step("T3", "Started on site", onSite, undefined, { how: "button" }),
   ];
   if (setup[2].state !== "done" && p.clerk_status === "finding") setup[2].note = "Finding a clerk";
   if (setup[4].state !== "done" && info.length) setup[4].note = `${infoIn} of ${info.length} received`;
@@ -103,14 +110,16 @@ export function buildWorkflow(p: WorkflowProject, f: Facts): Workflow {
     { id: "X4", title: "Complete", how: "auto", state: p.stage === "complete" ? "done" : "todo" },
   ];
 
+  const setupDone = p.stage === "won_preparing" || setup.every((x) => x.state === "done");
   const current: Current =
-    p.stage === "lost" ? "lost" : p.stage === "complete" ? "complete" : PRICING.includes(p.stage) ? "pricing" : WON.includes(p.stage) ? "setup"
+    p.stage === "lost" ? "lost" : p.stage === "complete" ? "complete" : PRICING.includes(p.stage) ? "pricing" : WON.includes(p.stage) ? (setupDone ? "start" : "setup")
       : p.stage === "on_hold" || quiet || (x2 && x2.note !== "going") ? "closeout" : "live";
-  const order = ["pricing", "setup", "live", "closeout"] as const;
-  const idx = current === "lost" ? 0 : current === "complete" ? 4 : order.indexOf(current);
+  const order = ["pricing", "setup", "start", "live", "closeout"] as const;
+  const idx = current === "lost" ? 0 : current === "complete" ? 5 : order.indexOf(current);
   const stages: Stage[] = [
     { key: "pricing", title: "Pricing", steps: pricing, state: "todo" },
     { key: "setup", title: "Set-up", steps: setup, state: "todo" },
+    { key: "start", title: "Waiting to start", steps: startSteps, state: "todo" },
     { key: "live", title: "Live", steps: liveSteps, state: "todo" },
     { key: "closeout", title: "Close-out", steps: closeout, state: "todo" },
   ];
@@ -149,7 +158,13 @@ export function buildWorkflow(p: WorkflowProject, f: Facts): Workflow {
     else if (id === "S6") status = { text: "Waiting on the client for a PO number.", waitingOn: "client" };
     else if (id === "S8") status = { text: "Waiting on the admin team to add it to the diary (clerk rows, Invoice emails and Report emails tabs).", waitingOn: "admin" };
     else if (id === "S9") status = { text: "Waiting on the admin team to add it to the report tracker.", waitingOn: "admin" };
-    else status = { text: waitingStep ? `Setting up. Next: ${waitingStep.title.toLowerCase()}.` : "Set-up done, ready to go live.", waitingOn: waitingStep ? "us" : null };
+    else status = { text: waitingStep ? `Setting up. Next: ${waitingStep.title.toLowerCase()}.` : "Set-up done.", waitingOn: waitingStep ? "us" : null };
+  } else if (current === "start") {
+    const today = new Date().toISOString().slice(0, 10);
+    if (!p.start_date) status = { text: "All set up. Waiting to start on site: no start date yet.", waitingOn: "client" };
+    else if (p.start_date < today) status = { text: `Was due on site ${fmt(p.start_date)}. Has it started? Press Started on site, or change the date.`, waitingOn: "you", days: daysSince(p.start_date) };
+    else if (!plannedInDiary && daysSince(p.start_date) === 0) status = { text: `Starts on site today. The clerk isn't booked in the diary yet.`, waitingOn: "admin" };
+    else status = { text: `All set up. Starts on site ${fmt(p.start_date)}${plannedInDiary ? "; the clerk is booked in the diary" : "; the clerk still needs booking in the diary"}.`, waitingOn: plannedInDiary ? null : "admin" };
   } else if (current === "closeout") {
     if (p.stage === "on_hold") status = { text: changed ? `Paused since ${fmt(changed)}.` : "Paused.", waitingOn: null };
     else if (x2?.note === "finished") status = outstanding > 0

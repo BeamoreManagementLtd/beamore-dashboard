@@ -4,6 +4,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { driveClient } from "@/lib/google";
 import { INFO_DFE, INFO_STANDARD } from "@/lib/project-info";
 import { ensureProjectFolder, saveProjectAttachments, onWon } from "@/lib/project-setup";
+import { loadWorkflows, WORKFLOW_COLUMNS, type WorkflowProject } from "@/lib/workflow";
 
 /**
  * Project intake (hourly, read only):
@@ -197,6 +198,28 @@ export async function runIntake(admin: SupabaseClient) {
       requestsSent++;
     }
 
+    // ---- 3f. won jobs: set-up finished → "waiting to start on site"; a charged day in the diary → started (Live)
+    let readyToStart = 0, startedOnSite = 0;
+    {
+      const { data: won } = await admin.from("projects").select(`${WORKFLOW_COLUMNS},display_name`).in("stage", ["won_arranging", "won_preparing"]);
+      const list = (won ?? []) as unknown as (WorkflowProject & { display_name: string })[];
+      const wfs = await loadWorkflows(admin, list);
+      const { data: vs } = await admin.from("project_visit_summary").select("project_id,last_visit,charged_visits").in("project_id", list.map((p) => p.id));
+      for (const p of list) {
+        const v = (vs ?? []).find((x) => x.project_id === p.id);
+        const since = (p.stage_changed_at ?? "").slice(0, 10);
+        if (v && v.charged_visits > 0 && v.last_visit && (!since || v.last_visit >= since)) {
+          await admin.from("projects").update({ stage: "live", ...(p.start_date ? {} : { start_date: v.last_visit }) }).eq("id", p.id);
+          await admin.from("project_events").insert({ project_id: p.id, source: "dashboard", kind: "Started on site", who: "Dashboard", body: `Started on site: charged days in the diary (latest ${v.last_visit})` });
+          startedOnSite++;
+        } else if (p.stage === "won_arranging" && wfs.get(p.id)?.current === "start") {
+          await admin.from("projects").update({ stage: "won_preparing" }).eq("id", p.id);
+          await admin.from("project_events").insert({ project_id: p.id, source: "dashboard", kind: "Set-up done", who: "Dashboard", body: `Set-up finished. Waiting to start on site${p.start_date ? ` (${p.start_date})` : ""}` });
+          readyToStart++;
+        }
+      }
+    }
+
     // ---- 3d. S5: client attachments into the project's Drive folder
     let filesSaved = 0;
     {
@@ -276,7 +299,7 @@ export async function runIntake(admin: SupabaseClient) {
       goAheads++;
     }
 
-    const msgText = `${classified} projects checked for DfE, ${started} checklists started, ${hinted} checklist items found in email, ${sentFound} proposals found sent, ${replies4} client replies, ${setupDone} folders made, ${requestsSent} info requests seen sent, ${filesSaved} attachments saved to Drive, ${applicants} job applications, ${goAheads} possible go-aheads, ${priceRequests} possible pricing requests`;
+    const msgText = `${classified} projects checked for DfE, ${started} checklists started, ${hinted} checklist items found in email, ${sentFound} proposals found sent, ${replies4} client replies, ${setupDone} folders made, ${requestsSent} info requests seen sent, ${filesSaved} attachments saved to Drive, ${applicants} job applications, ${readyToStart} ready to start, ${startedOnSite} started on site, ${goAheads} possible go-aheads, ${priceRequests} possible pricing requests`;
     await finish(true, msgText);
     return { ok: true, message: msgText };
   } catch (e) {

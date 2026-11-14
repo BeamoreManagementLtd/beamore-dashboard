@@ -326,3 +326,23 @@ export async function dismissApplication(applicationId: string) {
   await db.from("job_applications").update({ status: "dismissed" }).eq("id", applicationId);
   revalidatePath("/personnel");
 }
+
+// ---- waiting to start on site
+export async function setStartDate(projectId: string, form: FormData) {
+  const d = String(form.get("start_date") ?? "").trim() || null;
+  const { db } = await workflowLog(projectId, "Start date", d ? `Start on site: ${d}` : "Start date cleared");
+  await db.from("projects").update({ start_date: d }).eq("id", projectId);
+  revalidatePath(`/projects/${projectId}`);
+  revalidatePath("/workflows");
+}
+
+/** T3: the job has started on site, so it goes Live (also happens by itself on the first charged day in the diary). */
+export async function startedOnSite(projectId: string) {
+  const { db } = await workflowLog(projectId, "Started on site", "Started on site");
+  const today = new Date().toISOString().slice(0, 10);
+  const { data: p } = await db.from("projects").select("start_date").eq("id", projectId).single();
+  await db.from("projects").update({ stage: "live", ...(!p?.start_date || p.start_date > today ? { start_date: today } : {}) }).eq("id", projectId);
+  revalidatePath(`/projects/${projectId}`);
+  revalidatePath("/workflows");
+  revalidatePath("/due");
+}

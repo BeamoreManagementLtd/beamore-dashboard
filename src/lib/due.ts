@@ -145,6 +145,10 @@ export async function buildDueList(db: SupabaseClient, me: Profile): Promise<Due
       } else if (w.current === "setup" && (w.status.waitingOn === "us" || w.status.waitingOn === "admin")) {
         const clerkStep = w.stages[1].steps.find((x) => x.state === "now")?.id === "S3";
         add(`Set up ${p.display_name}`, w.status.text, clerkStep ? toDirector : judy);
+      } else if (w.current === "start" && w.status.waitingOn === "you") {
+        add(`Has ${p.display_name} started on site?`, w.status.text, toDirector);
+      } else if (w.current === "start" && w.status.waitingOn === "admin" && p.start_date && p.start_date <= addDays(t, 14)) {
+        add(`Book the clerk in the diary for ${p.display_name}`, w.status.text, judy, addDays(p.start_date, -14) < t ? t : addDays(p.start_date, -14));
       } else if (w.current === "closeout" && w.quiet)
         add(`Is ${p.display_name} finished, paused or still going?`, w.status.text.replace(/ Waiting on you.*$/, ""), toDirector);
     }

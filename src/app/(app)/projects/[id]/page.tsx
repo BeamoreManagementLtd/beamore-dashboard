@@ -101,7 +101,7 @@ export default async function Project({ params }: { params: Promise<{ id: string
         <div className={`tile ${owed ? "alert" : ""}`}><span className="label">Outstanding invoices</span><span className="big">{gbp(owed)}</span><span className="sub">{invoices?.length ?? 0} invoice{invoices?.length === 1 ? "" : "s"}</span></div>
       </div>
 
-      <WorkflowPanel projectId={p.id} stages={wf.stages} current={wf.current} clerks={clerkList ?? []} ticked={new Set(wf.ticked)} status={wf.status} folder={{ id: p.drive_folder_id ?? null, kind: p.folder_kind ?? guessFolderKind(p) }} />
+      <WorkflowPanel projectId={p.id} stages={wf.stages} current={wf.current} clerks={clerkList ?? []} ticked={new Set(wf.ticked)} status={wf.status} folder={{ id: p.drive_folder_id ?? null, kind: p.folder_kind ?? guessFolderKind(p) }} startDate={p.start_date ?? null} />
 
       {p.clerk_status === "finding" && !p.clerk_id && <FindClerk db={db} project={p} today={t} />}
 

@@ -1,12 +1,12 @@
 import type { Stage, Status, Step } from "@/lib/workflow";
-import { markStep, setOutcome, setClerk, setPo, closeOutAnswer, setFolderKind, redraftInfoRequest, draftFollowUp } from "../actions";
+import { markStep, setOutcome, setClerk, setPo, closeOutAnswer, setFolderKind, redraftInfoRequest, draftFollowUp, setStartDate, startedOnSite } from "../actions";
 import { FOLDER_KINDS } from "@/lib/folder-kinds";
 
 /** The project's workflow: stages across the top, then the current stage's steps (green done, amber waiting, grey to come). */
 const WHO = { us: "Waiting on us", client: "Waiting on the client", you: "Waiting on you", admin: "Waiting on the admin team", clerk: "Waiting on the clerk" } as const;
 
-export function WorkflowPanel({ projectId, stages, current, clerks, ticked, status, folder }: {
-  projectId: string; status: Status; folder: { id: string | null; kind: string }; stages: Stage[]; current: string; clerks: { id: string; name: string }[]; ticked: Set<string>;
+export function WorkflowPanel({ projectId, stages, current, clerks, ticked, status, folder, startDate }: {
+  projectId: string; status: Status; folder: { id: string | null; kind: string }; startDate: string | null; stages: Stage[]; current: string; clerks: { id: string; name: string }[]; ticked: Set<string>;
 }) {
   const open = stages.find((s) => s.state === "now") ?? stages[stages.length - 1];
   const count = (s: Stage) => `${s.steps.filter((x) => x.state === "done").length} of ${s.steps.length}`;
@@ -32,6 +32,15 @@ export function WorkflowPanel({ projectId, stages, current, clerks, ticked, stat
           <a className="small" href={`/personnel?project=${projectId}#new`}>New to Beamore?</a>
         </form>
       );
+    if (st.id === "T1")
+      return (
+        <form action={setStartDate.bind(null, projectId)} className="wf-ctl wf-inline">
+          <input type="date" name="start_date" defaultValue={startDate ?? ""} aria-label="Start on site date" />
+          <button className="btn">Save</button>
+        </form>
+      );
+    if (st.id === "T3" && st.state !== "done")
+      return <form action={startedOnSite.bind(null, projectId)} className="wf-ctl"><button className="btn primary">Started on site</button></form>;
     if (st.id === "S4")
       return (
         <span className="wf-ctl">

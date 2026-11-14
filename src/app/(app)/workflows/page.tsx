@@ -7,7 +7,8 @@ export const dynamic = "force-dynamic";
 
 const COLUMNS = [
   { key: "pricing", title: "Pricing" },
-  { key: "setup", title: "Set-up" },
+  { key: "setup", title: "Setting up" },
+  { key: "start", title: "Waiting to start" },
   { key: "live", title: "Live" },
   { key: "closeout", title: "Close-out" },
 ] as const;
