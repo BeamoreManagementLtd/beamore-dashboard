@@ -2,7 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { createServiceClient } from "@/lib/supabase/server";
 import { syncXero } from "@/lib/sync/xero-sync";
 
-export const maxDuration = 60;
+export const maxDuration = 300; // the first run fetches the whole financial year's invoices
 export const dynamic = "force-dynamic";
 
 /** Hourly Vercel cron (vercel.json). Vercel sends "Authorization: Bearer <CRON_SECRET>". */

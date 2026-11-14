@@ -34,7 +34,7 @@ export default async function Finance({ searchParams }: { searchParams: Promise<
 
   return (
     <>
-      <div className="head"><div><h1>Finance</h1><p>From Xero{latest ? ` · ${fdt(latest.taken_at)}` : ""}</p></div><span className="ronly">Director only</span></div>
+      <div className="head"><div><h1>Finance</h1><p>From Xero{latest ? ` · ${fdt(latest.taken_at)}` : ""} · <a href="/finance/fees">Fees by project →</a></p></div><span className="ronly">Director only</span></div>
       {xero === "connected" && <p className="callout info">Xero is connected and the first sync has run. It now updates every hour.</p>}
       {xero === "synced" && <p className="callout info">Synced with Xero just now.</p>}
       {xero === "error" && <p className="callout warn">Xero: {reason ?? "something went wrong"}</p>}

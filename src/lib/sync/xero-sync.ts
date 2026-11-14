@@ -8,8 +8,10 @@ type XInvoice = {
   InvoiceID: string; InvoiceNumber: string; Reference?: string; Status: string; Type: string;
   Contact: { ContactID: string; Name: string };
   DateString?: string; DueDateString?: string; FullyPaidOnDate?: string;
-  Total: number; AmountDue: number;
+  Total: number; AmountDue: number; SubTotal?: number; AmountPaid?: number; AmountCredited?: number;
+  LineItems?: { Description?: string }[];
 };
+const YEAR_START = process.env.FEES_FROM ?? "2025-12-01"; // financial year start for "Fees by project"
 type ReportRow = { RowType: string; Title?: string; Cells?: { Value: string }[]; Rows?: ReportRow[] };
 type Report = { Reports: { Rows: ReportRow[] }[] };
 
@@ -81,11 +83,33 @@ export async function syncXero(admin: SupabaseClient) {
     for (let i = 0; i < gone.length; i += 40)
       closed.push(...(await get<{ Invoices: XInvoice[] }>("Invoices", { InvoiceNumbers: gone.slice(i, i + 40).join(","), summaryOnly: "true" })).Invoices);
 
+    // ---- every sales invoice since the financial year started (paid too), for Fees by project:
+    // all of them the first time, then only those Xero has changed since the last run
+    const { data: mark } = await admin.from("sync_files").select("modified_time").eq("key", "xero_year_invoices").maybeSingle();
+    const [fy, fm, fd] = YEAR_START.split("-").map(Number);
+    let where = `Type=="ACCREC" AND Date>=DateTime(${fy},${fm},${fd})`;
+    if (mark?.modified_time) {
+      const u = new Date(Date.parse(mark.modified_time) - 10 * 60000); // overlap a little
+      where += ` AND UpdatedDateUTC>=DateTime(${u.getUTCFullYear()},${u.getUTCMonth() + 1},${u.getUTCDate()},${u.getUTCHours()},${u.getUTCMinutes()},0)`;
+    }
+    const yearStarted = new Date().toISOString();
+    const year: XInvoice[] = [];
+    for (let page = 1; page < 40; page++) {
+      const r = await get<{ Invoices: XInvoice[] }>("Invoices", { where, Statuses: "AUTHORISED,PAID,VOIDED", page, pageSize: 200 });
+      year.push(...r.Invoices);
+      if (r.Invoices.length < 200) break;
+    }
+    // one entry per invoice: the outstanding/closed lists are freshest; the year list adds net, paid, credited and lines
+    const byNumber = new Map<string, XInvoice>();
+    for (const i of year) byNumber.set(i.InvoiceNumber, i);
+    for (const i of [...open, ...closed]) byNumber.set(i.InvoiceNumber, { ...byNumber.get(i.InvoiceNumber), ...i, LineItems: byNumber.get(i.InvoiceNumber)?.LineItems });
+    const all = [...byNumber.values()];
+
     // ---- clients (Xero contact names are the standard)
     const { data: clients } = await admin.from("clients").select("id,name,xero_contact_id");
     const byContact = new Map((clients ?? []).filter((c) => c.xero_contact_id).map((c) => [c.xero_contact_id, c.id]));
     const byName = new Map((clients ?? []).map((c) => [c.name, c]));
-    for (const inv of [...open, ...closed]) {
+    for (const inv of all) {
       const { ContactID, Name } = inv.Contact;
       if (byContact.has(ContactID)) continue;
       const same = byName.get(Name);
@@ -105,25 +129,30 @@ export async function syncXero(admin: SupabaseClient) {
     const projectInText = match.fromText;
     // Invoices whose reference doesn't name a project: read their line descriptions (needs the full invoice)
     const fromLines = new Map<string, string>();
-    const needLines = [...open, ...closed].filter((i) => !knownBy.get(i.InvoiceNumber)?.project_id && !projectFor(i.Reference));
-    for (let i = 0; i < needLines.length; i += 40) {
+    const lineProject = (lines?: { Description?: string }[]) =>
+      (lines ?? []).map((l) => (l.Description ? projectFor(l.Description) ?? projectInText(l.Description) : null)).find(Boolean) ?? null;
+    // every part of the reference ("FS1018 - Wisbech", "BLMS0547 - Paignton")
+    const refProject = (ref?: string) => (ref ?? "").split(/\s+[-–]\s+/).map((part) => projectFor(part)).find(Boolean) ?? null;
+    const needLines = all.filter((i) => !knownBy.get(i.InvoiceNumber)?.project_id && !refProject(i.Reference));
+    for (const i of needLines) if (i.LineItems?.length) { const pid = lineProject(i.LineItems); if (pid) fromLines.set(i.InvoiceNumber, pid); }
+    const stillNeed = needLines.filter((i) => !i.LineItems?.length);
+    for (let i = 0; i < stillNeed.length; i += 40) {
       const full = await get<{ Invoices: (XInvoice & { LineItems?: { Description?: string }[] })[] }>("Invoices", {
-        IDs: needLines.slice(i, i + 40).map((x) => x.InvoiceID).join(","), page: 1,
+        IDs: stillNeed.slice(i, i + 40).map((x) => x.InvoiceID).join(","), page: 1,
       });
-      for (const f of full.Invoices) {
-        const pid = (f.LineItems ?? []).map((l) => (l.Description ? projectFor(l.Description) ?? projectInText(l.Description) : null)).find(Boolean);
-        if (pid) fromLines.set(f.InvoiceNumber, pid);
-      }
+      for (const f of full.Invoices) { const pid = lineProject(f.LineItems); if (pid) fromLines.set(f.InvoiceNumber, pid); }
     }
 
-    const rows = [...open, ...closed].map((i) => ({
+    const rows = all.map((i) => ({
       inv: i,
       row: {
         xero_invoice_id: i.InvoiceID, number: i.InvoiceNumber, client_id: byContact.get(i.Contact.ContactID) ?? null,
         reference: i.Reference ?? null, issued: day(i.DateString), due: day(i.DueDateString), total: i.Total,
         amount_due: i.Status === "AUTHORISED" ? i.AmountDue : 0, status: i.Status, synced_at: new Date().toISOString(),
+        ...(i.SubTotal != null ? { subtotal: i.SubTotal } : {}), ...(i.AmountPaid != null ? { amount_paid: i.AmountPaid } : {}),
+        ...(i.AmountCredited != null ? { amount_credited: i.AmountCredited } : {}),
       },
-      project: knownBy.get(i.InvoiceNumber)?.project_id ?? projectFor(i.Reference) ?? fromLines.get(i.InvoiceNumber) ?? null,
+      project: knownBy.get(i.InvoiceNumber)?.project_id ?? refProject(i.Reference) ?? fromLines.get(i.InvoiceNumber) ?? null,
     }));
     const withProject = rows.filter((r) => r.project).map((r) => ({ ...r.row, project_id: r.project }));
     const without = rows.filter((r) => !r.project).map((r) => r.row);
@@ -150,7 +179,7 @@ export async function syncXero(admin: SupabaseClient) {
     // ---- references that match no project: listed on the Projects page for someone to link
     const unmatched = new Map<string, { reference: string; last_invoice: string; client: string; invoices: number }>();
     for (const r of rows) {
-      if (r.project || !r.inv.Reference) continue;
+      if (r.project || !r.inv.Reference || r.inv.Status !== "AUTHORISED") continue; // outstanding ones only
       const head = r.inv.Reference.split(/\s+[-–]\s+/)[0];
       const k = siteKey(head);
       if (!k) continue;
@@ -191,7 +220,8 @@ export async function syncXero(admin: SupabaseClient) {
     ]);
     if (fe) throw new Error(`finance: ${fe.message}`);
 
-    const msg = `${open.length} outstanding invoices, ${closed.length} closed since last sync, ${unmatched.size} references with no project`;
+    await admin.from("sync_files").upsert({ key: "xero_year_invoices", modified_time: yearStarted, read_at: yearStarted });
+    const msg = `${year.length ? `${year.length} invoices since ${YEAR_START} updated, ` : ""}${open.length} outstanding invoices, ${closed.length} closed since last sync, ${unmatched.size} references with no project`;
     await finish(true, msg);
     return { ok: true, message: msg };
   } catch (e) {
