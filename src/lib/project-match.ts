@@ -10,9 +10,12 @@ type P = { id: string; name: string; diary_aliases: string[] };
 export function projectMatcher(projects: P[]) {
   // names first, then diary spellings, so a spelling linked to one project wins when two projects share a name
   // (the register has e.g. two "Amwell"s)
+  // words too general to identify a project on their own ("Project no: 100113205" isn't the register's "Project 1089")
+  const GENERIC = new Set(["project", "projects", "school", "academy", "college", "site", "works", "services", "clerk", "clerkofworks", "building", "general", "invoice", "the"]);
+  const ok = (k: string) => k && !GENERIC.has(k);
   const byKey = new Map<string, string>();
-  for (const p of projects) if (siteKey(p.name)) byKey.set(siteKey(p.name), p.id);
-  for (const p of projects) for (const a of p.diary_aliases) if (siteKey(a)) byKey.set(siteKey(a), p.id);
+  for (const p of projects) if (ok(siteKey(p.name))) byKey.set(siteKey(p.name), p.id);
+  for (const p of projects) for (const a of p.diary_aliases) if (ok(siteKey(a))) byKey.set(siteKey(a), p.id);
   const keys = [...byKey.keys()];
 
   const fromReference = (ref?: string | null) => {

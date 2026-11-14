@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { requireProfile } from "@/lib/auth";
-import { linkSite } from "./actions";
+import { linkSite, ignoreSite } from "./actions";
 import { createClient } from "@/lib/supabase/server";
 import { fd } from "@/lib/format";
 
@@ -20,7 +20,7 @@ export default async function Projects({ searchParams }: { searchParams: Promise
     db.from("projects").select("stage"),
     db.from("unmatched_invoice_refs").select("reference,last_invoice,client,invoices").order("reference"),
     db.from("project_diary_days").select("*"),
-    db.from("unmatched_diary_sites").select("site_as_typed,last_seen,days").is("resolved_project_id", null).order("days", { ascending: false }),
+    db.from("unmatched_diary_sites").select("site_as_typed,last_seen,days").is("resolved_project_id", null).eq("ignored", false).order("days", { ascending: false }),
     db.from("projects").select("id,display_name").order("name"),
   ]);
   const n = (s: string) => (counts ?? []).filter((c) => c.stage === s).length;
@@ -58,7 +58,8 @@ export default async function Projects({ searchParams }: { searchParams: Promise
                     </select>
                     <button className="btn">Link</button>
                   </form>
-                </td></tr>
+                </td>
+                <td><form action={ignoreSite.bind(null, u.site_as_typed)}><button className="btn" title="A one-off that isn't a project">Not a project</button></form></td></tr>
             ))}
           </tbody></table>
         </details>

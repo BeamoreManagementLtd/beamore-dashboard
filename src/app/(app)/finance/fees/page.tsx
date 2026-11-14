@@ -39,6 +39,9 @@ export default async function Fees({ searchParams }: { searchParams: Promise<{ s
   const tot = [...byProject.values()].reduce((s, x) => ({ net: s.net + x.net, paid: s.paid + x.paid, out: s.out + x.out, n: s.n + x.n }), { net: 0, paid: 0, out: 0, n: 0 });
   const monthTot = (m: string) => f.filter((x) => x.month === m).reduce((s, x) => s + Number(x.invoiced_net ?? 0), 0);
   const pl = snap?.[0]?.sales;
+  // credit notes are recorded against invoices including VAT; at the year's own VAT ratio they come off net sales
+  const gross = f.reduce((s, x) => s + Number((x as unknown as { invoiced_gross: number }).invoiced_gross ?? 0), 0);
+  const credNet = gross ? f.reduce((s, x) => s + Number(x.credited), 0) * (tot.net / gross) : 0;
 
   return (
     <>
@@ -50,7 +53,8 @@ export default async function Fees({ searchParams }: { searchParams: Promise<{ s
       {!f.length ? <p className="callout info">No invoices loaded yet. They arrive with the next Xero sync (Finance → Sync now).</p> : (
         <>
           <div className="tiles">
-            <div className="tile"><span className="label">Invoiced (net)</span><span className="big">{gbp(tot.net)}</span><span className="sub">{tot.n} invoices{pl ? ` · P&L sales ${gbp(pl)}` : ""}</span></div>
+            <div className="tile"><span className="label">Invoiced (net)</span><span className="big">{gbp(tot.net)}</span>
+              <span className="sub">{tot.n} invoices{credNet ? ` · less credit notes ${gbp(credNet)} = ${gbp(tot.net - credNet)}` : ""}{pl ? ` · P&L sales ${gbp(pl)}` : ""}</span></div>
             <div className="tile"><span className="label">Paid</span><span className="big">{gbp(tot.paid)}</span><span className="sub">incl. VAT</span></div>
             <div className={`tile ${tot.out ? "alert" : ""}`}><span className="label">Outstanding</span><span className="big">{gbp(tot.out)}</span><span className="sub">incl. VAT</span></div>
             <div className={`tile ${none?.net ? "alert" : ""}`}><span className="label">Not linked to a project</span><span className="big">{gbp(none?.net ?? 0)}</span><span className="sub">{none?.n ?? 0} invoices</span></div>

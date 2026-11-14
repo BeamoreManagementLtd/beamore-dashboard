@@ -37,7 +37,7 @@ export async function buildDueList(db: SupabaseClient, me: Profile): Promise<Due
     db.from("projects").select("id,display_name,next_action,next_action_due,owner_id").not("next_action_due", "is", null).lte("next_action_due", addDays(t, 14)),
     db.from("clerk_compliance").select("dbs_recheck,chartership_renewal,clerks(name)"),
     db.from("tasks").select("id,title,kind,due,link,owner_id").is("done_at", null),
-    db.from("unmatched_diary_sites").select("site_as_typed", { count: "exact", head: true }).is("resolved_project_id", null),
+    db.from("unmatched_diary_sites").select("site_as_typed", { count: "exact", head: true }).is("resolved_project_id", null).eq("ignored", false),
     db.from("unmatched_invoice_refs").select("reference_key", { count: "exact", head: true }),
     db.from("sync_runs").select("source,ok,message,started_at").in("source", ["xero", "diary"]).order("started_at", { ascending: false }).limit(10),
     db.from("month_signoffs").select("month"),

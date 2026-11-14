@@ -35,6 +35,15 @@ export async function addAlias(id: string, form: FormData) {
   revalidatePath("/projects");
 }
 
+/** A one-off diary entry that isn't a project (e.g. a site measure): stop listing it as unlinked. */
+export async function ignoreSite(site: string) {
+  await requireProfile();
+  const db = await createClient();
+  await db.from("unmatched_diary_sites").update({ ignored: true }).eq("site_as_typed", site);
+  revalidatePath("/projects");
+  revalidatePath("/due");
+}
+
 /** From the Projects page: link an unmatched diary site name to a project. */
 export async function linkSite(form: FormData) {
   const project = s(form, "project_id"), site = s(form, "site");

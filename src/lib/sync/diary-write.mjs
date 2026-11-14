@@ -63,7 +63,8 @@ export async function writeDiary(admin, d, label) {
     if (v.side === "charged") u.days += 0.5;
     unmatched.set(v.site, u);
   }
-  must(await admin.from("unmatched_diary_sites").delete().is("resolved_project_id", null), "clear unmatched");
+  // keep rows someone linked to a project or marked "not a project"
+  must(await admin.from("unmatched_diary_sites").delete().is("resolved_project_id", null).eq("ignored", false), "clear unmatched");
   if (unmatched.size)
     must(await admin.from("unmatched_diary_sites").upsert([...unmatched].map(([site_as_typed, u]) => ({
       site_as_typed, first_seen: u.first, last_seen: u.last, days: u.days,
