@@ -89,7 +89,45 @@ export async function syncProjectDetails(admin: SupabaseClient) {
       if (front.dfe_project_number && !unknown(front.dfe_project_number))
         await admin.from("projects").update({ dfe_project_number: front.dfe_project_number.replace(/\s+/g, "") }).eq("id", p.id).is("dfe_project_number", null);
     }
-    const msg = `${linked} projects linked to their Drive folder, ${read} CoW diaries read, ${unchanged} unchanged, ${ticked} checklist items filled in`;
+    // ---- PO / invoicing numbers. (a) the client's job code on our Xero invoices ("LNMS0296 - HighamPark") answers
+    // "PO or project number for invoicing"; (b) PO numbers quoted in email about the project (50 projects a day).
+    const today = new Date().toISOString().slice(0, 10);
+    const canTick = (i: { received_on: string | null; note: string | null }) => !(i.received_on && i.note && !/^(Assumed|From the CoW diary|From the diary|From Xero|From email)/.test(i.note));
+    const { data: refs } = await admin.from("invoices").select("project_id,reference,issued").in("project_id", (projects ?? []).map((p) => p.id)).order("issued", { ascending: false });
+    let pos = 0;
+    for (const p of projects ?? []) {
+      const code = (refs ?? []).filter((r) => r.project_id === p.id).map((r) => /^\s*([A-Z]{2,5}\s?\d{3,5})\s*-/.exec(r.reference ?? "")?.[1]).find(Boolean);
+      if (!code) continue;
+      for (const i of (infoRows ?? []).filter((x) => x.project_id === p.id && /PO or project number/i.test(x.item) && canTick(x))) {
+        await admin.from("project_info").update({ received_on: i.received_on ?? today, note: `From Xero: invoices quote ${code}` }).eq("id", i.id);
+        ticked++;
+      }
+    }
+    const { data: noPo } = await admin.from("projects").select("id,name,details").in("id", (projects ?? []).map((p) => p.id)).is("po_number", null);
+    const due = (noPo ?? []).filter((p) => ((p.details ?? {}) as Record<string, string>)._po_checked !== today)
+      .sort((a, b) => String(((a.details ?? {}) as Record<string, string>)._po_checked ?? "").localeCompare(String(((b.details ?? {}) as Record<string, string>)._po_checked ?? ""))).slice(0, 50);
+    const PO = /(?:purchase order|\bP\.?O\.?)\s*(?:number|no\.?|num|#|ref(?:erence)?)?\s*(?:is|=|:|-)?\s*([A-Z]{0,4}[-/]?\d[\dA-Z\-/]{3,})/i;
+    type Part = { mimeType?: string; body?: { data?: string }; parts?: Part[] };
+    const textOf = (pt: Part): string => (pt.mimeType === "text/plain" && pt.body?.data ? Buffer.from(pt.body.data, "base64url").toString("utf8") : (pt.parts ?? []).map(textOf).join("\n"));
+    for (const p of due) {
+      const found = await g.gmail<{ messages?: { id: string }[] }>("messages", { q: `"${p.name.replace(/"/g, "")}" ("purchase order" OR "PO number" OR "PO no" OR "PO ref") newer_than:2y`, maxResults: "3" });
+      let hit: { po: string; subject: string; date: string } | null = null;
+      for (const m of found.messages ?? []) {
+        const f = await g.gmail<{ snippet?: string; internalDate: string; payload: Part & { headers: { name: string; value: string }[] } }>(`messages/${m.id}`, { format: "full" });
+        const newest = textOf(f.payload).split(/\n(?:From:|On .* wrote:)/)[0]; // not the quoted history
+        const x = PO.exec(`${f.snippet ?? ""}\n${newest}`);
+        if (x && /\d{4,}/.test(x[1])) { hit = { po: x[1], subject: f.payload.headers.find((h) => h.name === "Subject")?.value ?? "", date: new Date(Number(f.internalDate)).toISOString().slice(0, 10) }; break; }
+      }
+      await admin.from("projects").update({ details: { ...((p.details ?? {}) as Record<string, string>), _po_checked: today }, ...(hit ? { po_number: hit.po } : {}) }).eq("id", p.id);
+      if (!hit) continue;
+      pos++;
+      for (const i of (infoRows ?? []).filter((x) => x.project_id === p.id && /\bPO\b/.test(x.item) && canTick(x))) {
+        await admin.from("project_info").update({ received_on: i.received_on ?? today, note: `From email "${hit.subject.slice(0, 80)}" (${hit.date}): PO ${hit.po}` }).eq("id", i.id);
+        ticked++;
+      }
+    }
+
+    const msg = `${linked} projects linked to their Drive folder, ${read} CoW diaries read, ${unchanged} unchanged, ${pos} PO numbers found in email, ${ticked} checklist items filled in`;
     await finish(true, msg);
     return { ok: true, message: msg };
   } catch (e) {
