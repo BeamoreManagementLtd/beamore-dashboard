@@ -2,6 +2,7 @@ import Link from "next/link";
 import { requireProfile } from "@/lib/auth";
 import { createClient } from "@/lib/supabase/server";
 import { fd, today } from "@/lib/format";
+import { addAbsence, cancelAbsence } from "./actions";
 
 export const dynamic = "force-dynamic";
 
@@ -17,7 +18,7 @@ export default async function Personnel({ searchParams }: { searchParams: Promis
   const cutoff = new Date(Date.parse(t + "T00:00:00Z") - 60 * 86400000).toISOString().slice(0, 10);
   const [{ data: clerks }, { data: absences }, { data: monthDays }, { data: activity }] = await Promise.all([
     db.from("clerks").select("id,name,active,clerk_compliance(dbs_status,dbs_recheck,chartership_body,chartership_grade,chartership_renewal,onboarding_complete)").order("name"),
-    db.from("absences").select("id,date_from,date_to,kind,status,clerk_id,clerks(name)").gte("date_to", t).order("date_from"),
+    db.from("absences").select("id,date_from,date_to,part_day,kind,status,source,synced_to_diary_at,clerk_id,clerks(name)").gte("date_to", t).neq("status", "cancelled").order("date_from"),
     db.from("clerk_month_days").select("*"),
     db.from("clerk_activity").select("*"),
   ]);
@@ -30,6 +31,10 @@ export default async function Personnel({ searchParams }: { searchParams: Promis
   const comp = (raw: unknown) => (Array.isArray(raw) ? raw[0] : raw) as
     { dbs_status?: string; dbs_recheck?: string; chartership_body?: string; chartership_grade?: string; chartership_renewal?: string; onboarding_complete?: boolean } | null;
   const missingDbs = all.filter(working).filter((c) => !comp(c.clerk_compliance)?.dbs_status).length;
+  // a diary holiday that a dashboard entry already covers is shown once (as the dashboard entry)
+  const abs = absences ?? [];
+  const shownAbsences = abs.filter((a) => a.source !== "diary" || !abs.some((d) =>
+    d.source === "dashboard" && d.clerk_id === a.clerk_id && d.date_from <= a.date_from && d.date_to >= a.date_to));
 
   return (
     <>
@@ -39,11 +44,33 @@ export default async function Personnel({ searchParams }: { searchParams: Promis
       {missingDbs > 0 && <p className="callout warn">{missingDbs} clerk{missingDbs > 1 ? "s" : ""} working with us {missingDbs > 1 ? "have" : "has"} no DBS record in the dashboard yet.</p>}
       <section className="panel">
         <h2>Holidays coming up</h2>
-        {!absences?.length ? <p className="empty">None in the diary.</p> : (
+        <form action={addAbsence} className="row" style={{ marginBottom: 12 }}>
+          <div className="field"><label htmlFor="hc">Clerk</label>
+            <select id="hc" name="clerk_id" required defaultValue="">
+              <option value="" disabled>Choose…</option>
+              {all.filter(working).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select></div>
+          <div className="field"><label htmlFor="hf">From</label><input id="hf" name="date_from" type="date" required /></div>
+          <div className="field"><label htmlFor="ht">To</label><input id="ht" name="date_to" type="date" /></div>
+          <div className="field"><label htmlFor="hp">Part day</label>
+            <select id="hp" name="part_day" defaultValue=""><option value="">Whole day(s)</option><option value="am">Morning only</option><option value="pm">Afternoon only</option></select></div>
+          <div className="field"><label htmlFor="hk">Type</label>
+            <select id="hk" name="kind" defaultValue="Holiday"><option>Holiday</option><option>Sick</option><option>Training</option><option>Other</option></select></div>
+          <div className="field"><label htmlFor="hv"><input id="hv" name="provisional" type="checkbox" style={{ width: "auto", marginRight: 6 }} />Not confirmed yet</label></div>
+          <button className="btn primary">Add holiday</button>
+        </form>
+        {!shownAbsences.length ? <p className="empty">None coming up.</p> : (
           <table><tbody>
-            {absences.map((a) => (
-              <tr key={a.id}><td><Link href={`/personnel/${a.clerk_id}`}>{(a.clerks as unknown as { name: string } | null)?.name}</Link></td>
-                <td>{fd(a.date_from)}{a.date_to !== a.date_from ? ` – ${fd(a.date_to)}` : ""}</td><td>{a.kind}</td><td className="num">{a.date_from <= t ? "Now" : ""}</td></tr>
+            {shownAbsences.map((a) => (
+              <tr key={a.id}>
+                <td><Link href={`/personnel/${a.clerk_id}`}>{(a.clerks as unknown as { name: string } | null)?.name}</Link></td>
+                <td>{fd(a.date_from)}{a.date_to !== a.date_from ? ` – ${fd(a.date_to)}` : ""}{a.part_day ? ` (${a.part_day})` : ""}</td>
+                <td>{a.kind}{a.status === "provisional" ? <span className="two">not confirmed</span> : null}</td>
+                <td>{a.source === "diary" ? <span className="muted small">from the diary</span>
+                  : a.synced_to_diary_at ? <span className="pill good">In the diary</span> : <span className="pill warn">Add to the diary</span>}</td>
+                <td className="num">{a.date_from <= t ? "Now" : ""}</td>
+                <td className="num">{a.source === "dashboard" && <form action={cancelAbsence.bind(null, a.id)}><button className="btn">Cancel</button></form>}</td>
+              </tr>
             ))}
           </tbody></table>
         )}

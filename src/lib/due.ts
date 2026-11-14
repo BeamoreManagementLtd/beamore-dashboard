@@ -97,6 +97,20 @@ export async function buildDueList(db: SupabaseClient, me: Profile): Promise<Due
       items.push({ key: `chart-${name}`, kind: "Personnel", title: `${name}: chartership renewal due`, due: c.chartership_renewal, link: "/personnel", ...ownerOf(null, "Judy") });
   }
 
+  // ---- holidays: dashboard entries still to go in the diary, and planned (grey) visits on holiday days
+  const { data: hols } = await db.from("absences").select("id,clerk_id,date_from,date_to,part_day,source,synced_to_diary_at,clerks(name)")
+    .gte("date_to", t).neq("status", "cancelled");
+  const span = (a: { date_from: string; date_to: string }) => (a.date_from === a.date_to ? a.date_from : `${a.date_from} – ${a.date_to}`);
+  for (const h of hols ?? []) {
+    const name = (h.clerks as unknown as { name: string } | null)?.name ?? "Clerk";
+    if (h.source === "dashboard" && !h.synced_to_diary_at)
+      items.push({ key: `hol-${h.id}`, kind: "Personnel", title: `Add ${name}'s holiday to the diary`, detail: `${span(h)}${h.part_day ? ` (${h.part_day})` : ""}: put "Holiday" in the comments`, due: addDays(h.date_from, -7) < t ? t : addDays(h.date_from, -7), link: "/personnel", ...ownerOf(null, "Judy") });
+    const { data: clash } = await db.from("diary_visits").select("visit_date,site_as_typed").eq("clerk_id", h.clerk_id).eq("side", "planned")
+      .gte("visit_date", h.date_from < t ? t : h.date_from).lte("visit_date", h.date_to).order("visit_date").limit(5);
+    if (clash?.length)
+      items.push({ key: `clash-${h.id}`, kind: "Diary", title: `${name} is on holiday but planned on site`, detail: clash.map((c) => `${c.visit_date.slice(5)} ${c.site_as_typed}`).join(", "), due: clash[0].visit_date, link: `/personnel/${h.clerk_id}`, ...ownerOf(null, directorName) });
+  }
+
   // ---- clerks working with us (diary in the last 60 days) with no DBS record yet
   const [{ data: act }, { data: withDbs }] = await Promise.all([
     db.from("clerk_activity").select("clerk_id").gte("last_visit", addDays(t, -60)),

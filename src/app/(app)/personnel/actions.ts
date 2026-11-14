@@ -54,6 +54,30 @@ export async function toggleOnboardingItem(clerkId: string, itemId: string, done
   revalidatePath("/personnel");
 }
 
+/** A holiday entered in the dashboard; it goes on the due list until the same days show as Holiday in the diary. */
+export async function addAbsence(form: FormData) {
+  await requireProfile();
+  const db = await createClient();
+  const clerk = s(form, "clerk_id"), from = s(form, "date_from"), to = s(form, "date_to") ?? from;
+  if (!clerk || !from || !to || to < from) return;
+  const part = s(form, "part_day");
+  await db.from("absences").insert({
+    clerk_id: clerk, date_from: from, date_to: to, part_day: part === "am" || part === "pm" ? part : null,
+    kind: s(form, "kind") ?? "Holiday", status: form.get("provisional") === "on" ? "provisional" : "confirmed", source: "dashboard",
+  });
+  revalidatePath("/personnel");
+  revalidatePath(`/personnel/${clerk}`);
+  revalidatePath("/due");
+}
+
+export async function cancelAbsence(id: string) {
+  await requireProfile();
+  const db = await createClient();
+  await db.from("absences").update({ status: "cancelled" }).eq("id", id).eq("source", "dashboard");
+  revalidatePath("/personnel");
+  revalidatePath("/due");
+}
+
 export async function setActive(clerkId: string, active: boolean) {
   await requireProfile();
   const db = await createClient();

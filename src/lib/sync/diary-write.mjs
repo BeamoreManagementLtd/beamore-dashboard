@@ -82,6 +82,20 @@ export async function writeDiary(admin, d, label) {
   }
   if (abs.length) must(await admin.from("absences").insert(abs), "absences");
 
+  // holidays entered in the dashboard: done once every weekday of them shows as a holiday in the diary
+  const inDiary = new Set(d.absences.map((a) => `${clerkId.get(clerkKey(a.clerk))}|${a.date}`));
+  const pending = must(await admin.from("absences").select("id,clerk_id,date_from,date_to,synced_to_diary_at").eq("source", "dashboard").neq("status", "cancelled"), "dashboard holidays");
+  for (const p of pending) {
+    let all = true;
+    for (let t = Date.parse(p.date_from + "T00:00:00Z"); t <= Date.parse(p.date_to + "T00:00:00Z"); t += 86400000) {
+      const day = new Date(t);
+      if (day.getUTCDay() === 0 || day.getUTCDay() === 6) continue;
+      if (!inDiary.has(`${p.clerk_id}|${day.toISOString().slice(0, 10)}`)) { all = false; break; }
+    }
+    if (all !== !!p.synced_to_diary_at)
+      must(await admin.from("absences").update({ synced_to_diary_at: all ? new Date().toISOString() : null }).eq("id", p.id), "holiday tick");
+  }
+
   // ---- rates (director only), and the client invoice table → days on each invoice and its project
   if (d.rates.length) {
     const seen = new Set();
