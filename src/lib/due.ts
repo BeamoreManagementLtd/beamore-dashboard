@@ -97,6 +97,15 @@ export async function buildDueList(db: SupabaseClient, me: Profile): Promise<Due
       items.push({ key: `chart-${name}`, kind: "Personnel", title: `${name}: chartership renewal due`, due: c.chartership_renewal, link: "/personnel", ...ownerOf(null, "Judy") });
   }
 
+  // ---- clerks working with us (diary in the last 60 days) with no DBS record yet
+  const [{ data: act }, { data: withDbs }] = await Promise.all([
+    db.from("clerk_activity").select("clerk_id").gte("last_visit", addDays(t, -60)),
+    db.from("clerk_compliance").select("clerk_id").not("dbs_status", "is", null),
+  ]);
+  const noDbs = (act ?? []).filter((a) => !(withDbs ?? []).some((w) => w.clerk_id === a.clerk_id)).length;
+  if (noDbs)
+    items.push({ key: "dbs-missing", kind: "Personnel", title: `Add DBS details for ${noDbs} clerk${noDbs > 1 ? "s" : ""}`, detail: "Working with us but no DBS record in the dashboard", due: null, link: "/personnel", ...ownerOf(null, "Judy") });
+
   // ---- diary month routine (the grey/salmon layout starts with November 2026)
   const monthStart = t.slice(0, 7) + "-01";
   const lastMonth = addDays(monthStart, -1).slice(0, 7) + "-01";
