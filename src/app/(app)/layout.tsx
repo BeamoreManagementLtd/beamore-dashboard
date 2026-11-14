@@ -7,6 +7,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   const nav: [string, string][] = [
     ["/", "Home"],
     ["/due", "Due list"],
+    ["/workflows", "Workflows"],
     ["/projects", "Projects"],
     ["/invoices", "Overdue invoices"],
     ["/reports", "Reports"],

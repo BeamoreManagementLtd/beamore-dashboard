@@ -2,6 +2,7 @@ import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Profile } from "@/lib/auth";
 import { SCOPES_CHANGED_AT } from "@/lib/xero";
+import { loadWorkflows, WORKFLOW_COLUMNS, daysSince, type WorkflowProject } from "@/lib/workflow";
 
 /**
  * The team due list. Most items are worked out from live data each time (they disappear once the underlying thing is
@@ -98,6 +99,39 @@ export async function buildDueList(db: SupabaseClient, me: Profile): Promise<Due
   }
   for (const [pid, x] of byProj)
     items.push({ key: `info-${pid}`, kind: "Projects", title: `${x.name}: chase the client for project information`, detail: x.items.join(", "), due: addDays(x.since, 7), link: `/projects/${pid}`, ...ownerOf(null, "Judy") });
+
+  // ---- project workflows (docs/workflows.html): pricing, set-up and close-out reminders
+  {
+    const { data: active } = await db.from("projects").select(`${WORKFLOW_COLUMNS},display_name`)
+      .in("stage", ["enquiry", "pricing", "sent", "won_arranging", "won_preparing", "live"]);
+    // enquiries imported from the register with no date are left alone (93 "Check status" rows)
+    const list = ((active ?? []) as unknown as (WorkflowProject & { display_name: string })[])
+      .filter((p) => p.stage_changed_at || !["enquiry", "pricing"].includes(p.stage));
+    const wfs = await loadWorkflows(db, list);
+    const judy = ownerOf(null, "Judy");
+    for (const p of list) {
+      const w = wfs.get(p.id)!;
+      const days = daysSince(p.stage_changed_at) ?? 0;
+      const link = `/projects/${p.id}`;
+      const add = (title: string, detail: string, owner: { owner: string | null; ownerId: string | null }, due: string | null = t) =>
+        items.push({ key: `wf-${p.id}`, kind: "Projects", title, detail, due, link, ...owner });
+      const toDirector = director ? ownerOf(me.id, null) : ownerOf(null, directorName);
+      if (w.current === "pricing" && p.is_dfe != null) {
+        if (p.stage !== "sent" && p.stage_changed_at && days >= 2)
+          add(`Price ${p.display_name}`, `Asked to price ${days} days ago. Ticks itself when the proposal shows in your sent email`, toDirector, addDays(p.stage_changed_at.slice(0, 10), 2));
+        else if (p.stage === "sent" && w.status.waitingOn === "you")
+          add(`Won or lost: ${p.display_name}?`, w.status.text, toDirector);
+        else if (p.stage === "sent" && p.stage_changed_at && days >= 30)
+          add(`Is ${p.display_name} still live?`, `Proposal sent ${days} days ago with no reply. Mark it Lost, or chase once more`, toDirector);
+        else if (p.stage === "sent" && p.stage_changed_at && days >= 7)
+          add(`Ask for a reply: ${p.display_name}`, `Proposal sent ${days} days ago, no reply yet. Reminds again every 7 days`, toDirector, addDays(p.stage_changed_at.slice(0, 10), 7 * Math.floor(days / 7)));
+      } else if (w.current === "setup" && (w.status.waitingOn === "us" || w.status.waitingOn === "admin")) {
+        const clerkStep = w.stages[1].steps.find((x) => x.state === "now")?.id === "S3";
+        add(`Set up ${p.display_name}`, w.status.text, clerkStep ? toDirector : judy);
+      } else if (w.current === "closeout" && w.quiet)
+        add(`Is ${p.display_name} finished, paused or still going?`, w.status.text.replace(/ Waiting on you.*$/, ""), toDirector);
+    }
+  }
 
   // ---- the DfE check couldn't decide: ask the director rather than guess
   if (director) {

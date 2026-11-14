@@ -139,6 +139,34 @@ export async function runIntake(admin: SupabaseClient) {
       } else await admin.from("project_info").update({ hint_at: new Date().toISOString() }).eq("id", i.id);
     }
 
+    // ---- 3b. pricing workflow: proposal gone out (P3) and client replied (P4), for projects started since workflows began
+    let sentFound = 0, replies4 = 0;
+    for (const p of (projects ?? []).filter((x) => x.stage_changed_at && ["enquiry", "pricing", "sent"].includes(x.stage))) {
+      const since = Math.floor(Date.parse(p.stage_changed_at!) / 1000);
+      if (p.stage !== "sent") {
+        const found = await q(`in:sent subject:${quoted(p.name)} (proposal OR fee OR quote OR quotation) after:${since}`, 1);
+        const m = found.messages?.[0];
+        if (!m) continue;
+        const full = await msg(m.id);
+        await admin.from("projects").update({ stage: "sent" }).eq("id", p.id);
+        await admin.from("project_events").insert({ project_id: p.id, source: "gmail", kind: "Email sent", who: "You",
+          body: `Proposal found in sent email: "${header(full, "Subject").slice(0, 120)}" to ${header(full, "To").slice(0, 120)}` });
+        sentFound++;
+      } else {
+        const { count } = await admin.from("project_steps").select("step", { count: "exact", head: true }).eq("project_id", p.id).eq("step", "P4");
+        if (count) continue;
+        const found = await q(`subject:${quoted(p.name)} -from:me -subject:"automatic reply" -subject:"out of office" after:${since}`, 1);
+        const m = found.messages?.[0];
+        if (!m) continue;
+        const full = await msg(m.id);
+        const from = who(header(full, "From"));
+        await admin.from("project_steps").upsert({ project_id: p.id, step: "P4", done_by: from, done_at: new Date(Number(full.internalDate)).toISOString(), note: m.threadId });
+        await admin.from("project_events").insert({ project_id: p.id, source: "gmail", kind: "Email received", who: from,
+          body: `Reply to the proposal: "${header(full, "Subject").slice(0, 120)}": ${(full.snippet ?? "").slice(0, 200)}` });
+        replies4++;
+      }
+    }
+
     // ---- 4. replies to cost proposals that look like a go-ahead (logged once per message)
     const replies = await q('(subject:proposal OR subject:"fee") (instruct OR "go ahead" OR "pleased to confirm" OR "happy to proceed" OR appoint OR "purchase order") -from:me newer_than:14d', 20);
     for (const m of replies.messages ?? []) {
@@ -153,7 +181,7 @@ export async function runIntake(admin: SupabaseClient) {
       goAheads++;
     }
 
-    const msgText = `${classified} projects checked for DfE, ${started} checklists started, ${hinted} checklist items found in email, ${goAheads} possible go-aheads`;
+    const msgText = `${classified} projects checked for DfE, ${started} checklists started, ${hinted} checklist items found in email, ${sentFound} proposals found sent, ${replies4} client replies, ${goAheads} possible go-aheads`;
     await finish(true, msgText);
     return { ok: true, message: msgText };
   } catch (e) {

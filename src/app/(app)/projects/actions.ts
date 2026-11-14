@@ -139,7 +139,10 @@ export async function markStep(projectId: string, step: string, done: boolean) {
   const db = await createClient();
   if (done) await db.from("project_steps").upsert({ project_id: projectId, step, done_by: me.full_name ?? me.email, done_at: new Date().toISOString() });
   else await db.from("project_steps").delete().eq("project_id", projectId).eq("step", step);
+  // ticking "cost proposal sent" by hand moves the project on, the same as finding it in sent email
+  if (step === "P3" && done) await db.from("projects").update({ stage: "sent" }).eq("id", projectId).in("stage", ["enquiry", "pricing"]);
   revalidatePath(`/projects/${projectId}`);
+  revalidatePath("/workflows");
 }
 
 /** P5: won starts set-up (the intake job then starts the checklist); lost closes the project with a reason. */
