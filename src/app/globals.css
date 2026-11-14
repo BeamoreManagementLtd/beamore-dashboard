@@ -69,10 +69,28 @@ td .two{display:block;font-size:12px;color:var(--muted)}
 th.num,td.num{text-align:right}
 tr.link td{cursor:pointer} tr.link:hover td{background:var(--surface-2)}
 
-.timeline{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:14px}
-.timeline li{display:grid;grid-template-columns:62px minmax(0,1fr);gap:12px}
-.timeline .when{font-size:12.5px;color:var(--muted);text-align:right}
-.src{font-size:11px;font-weight:600;padding:2px 8px;border-radius:20px;border:1px solid var(--line);color:var(--muted)}
+/* chase log (as in the prototype): date | coloured dot on a line | event */
+.timeline{list-style:none;margin:0;padding:0;display:flex;flex-direction:column}
+.timeline li{display:grid;grid-template-columns:62px 14px minmax(0,1fr);gap:0 12px;padding-bottom:16px;position:relative}
+.timeline li::after{content:"";position:absolute;left:calc(62px + 12px + 6px);top:15px;bottom:0;width:2px;background:var(--line)}
+.timeline li:last-child::after{display:none}
+.timeline .when{font-size:12.5px;color:var(--muted);text-align:right;font-variant-numeric:tabular-nums}
+.dot{width:14px;height:14px;border-radius:50%;border:3px solid var(--surface);margin-top:2px;position:relative;z-index:1;background:var(--neutral)}
+.dot.in{background:var(--bad)} .dot.out{background:var(--link)} .dot.team{background:var(--good)} .dot.xero{background:var(--neutral)}
+.ev-top{display:flex;flex-wrap:wrap;gap:4px 8px;align-items:center}
+.ev-top b{font-weight:600}
+.ev-who{font-size:12.5px;color:var(--muted)}
+.src{font-size:11px;font-weight:600;padding:2px 8px;border-radius:20px;border:1px solid var(--line);color:var(--muted);text-decoration:none;background:var(--surface)}
+a.src.on{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+/* record header: name on the left, key facts on the right */
+.rec-head{display:flex;flex-wrap:wrap;gap:16px 28px;align-items:flex-end;justify-content:space-between}
+.facts{display:flex;flex-wrap:wrap;gap:12px 28px}
+.facts div{display:flex;flex-direction:column;gap:2px}
+.facts .k{font-size:11px;text-transform:uppercase;letter-spacing:.07em;color:var(--muted);font-weight:600}
+.facts .v{font-size:19px;font-weight:700;font-variant-numeric:tabular-nums;font-family:var(--heading)}
+.callout.good{background:var(--good-soft);color:var(--good)}
+.btn-row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.btn-row .btn{text-align:center;padding:12px}
 
 .form{display:grid;gap:11px}
 .field{display:grid;gap:4px}

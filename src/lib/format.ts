@@ -17,7 +17,7 @@ export const daysBetween = (from: string, to: string) =>
 
 export const CHASE_STATUS: Record<string, [string, string]> = {
   new: ["bad", "Not chased yet"],
-  our_move: ["bad", "We owe a reply"],
+  our_move: ["bad", "Needs our reply"],
   queried: ["warn", "Queried"],
   promised: ["good", "Promised / being processed"],
   waiting: ["neutral", "Waiting on them"],
