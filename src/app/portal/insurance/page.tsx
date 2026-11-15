@@ -17,7 +17,7 @@ export default async function PortalInsurance() {
     <>
       <section className="portal-hello">
         <h1>Insurance</h1>
-        <p className="muted">Beamore needs at least £500,000 of professional indemnity (PI) cover. Public liability and employers liability are optional; any public liability cover must be at least £1 million.</p>
+        <p className="muted">Beamore asks for £1 million of professional indemnity (PI) cover. Public liability and employers liability are optional; any public liability cover must be at least £1 million.</p>
       </section>
 
       <section className={`status-banner ${ins.piOk ? "good" : "warn"}`}>

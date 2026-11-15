@@ -1,6 +1,7 @@
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { driveClient } from "@/lib/google";
+import { PI_ASK_PENCE } from "@/lib/portal/data";
 
 /**
  * Renewal requests (onboarding O2, "for as long as they work with us"): when an active clerk's insurance, CSCS card or
@@ -20,6 +21,10 @@ export async function draftExpiryChasers(admin: SupabaseClient) {
   const back = new Date(Date.now() - 60 * 864e5).toISOString().slice(0, 10);
   const { data: rows } = await admin.from("clerk_compliance")
     .select("clerk_id,pi_insurance_expiry,pl_insurance_expiry,cscs_expiry,dbs_recheck,expiry_chased,clerks(name,email,active)");
+  // current PI cover per clerk: under £1m is accepted, but they're asked to go up to £1m when they renew
+  const { data: pols } = await admin.from("insurance_policies").select("clerk_id,cover_pence,expires").eq("type", "PI");
+  const piCover = new Map<string, { cover: number | null; expires: string | null }>();
+  for (const p of pols ?? []) { const c = piCover.get(p.clerk_id); if (!c || (p.expires ?? "") > (c.expires ?? "")) piCover.set(p.clerk_id, { cover: p.cover_pence, expires: p.expires }); }
   let drafted = 0;
   let g: Awaited<ReturnType<typeof driveClient>> | null = null;
   const fmt = (d: string) => new Date(d).toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
@@ -30,7 +35,9 @@ export async function draftExpiryChasers(admin: SupabaseClient) {
     const due = FIELDS.filter(([f]) => { const d = r[f] as string | null; return d && d <= soon && d >= back && chased[f] !== d; });
     if (!due.length) continue;
     const lines = due.map(([f, label, verb]) => { const d = r[f] as string; return `- your ${label} ${d < today ? (verb === "expires" ? "expired" : "was due for a recheck") : verb} on ${fmt(d)}`; });
-    const body = `Hi ${c.name.split(" ")[0]},\n\nOur records show that:\n\n${lines.join("\n")}\n\nCould you send us the renewed ${due.length > 1 ? "documents" : "document"} when you have ${due.length > 1 ? "them" : "it"}? A photo or PDF by reply is fine.\n\nMany thanks,\nRonan\n\nRonan O'Boyle\nBeamore Management Ltd`;
+    const body = `Hi ${c.name.split(" ")[0]},\n\nOur records show that:\n\n${lines.join("\n")}\n\nCould you send us the renewed ${due.length > 1 ? "documents" : "document"} when you have ${due.length > 1 ? "them" : "it"}? A photo or PDF by reply is fine.${due.some(([f]) => f === "pi_insurance_expiry") && (piCover.get(r.clerk_id)?.cover ?? PI_ASK_PENCE) < PI_ASK_PENCE ? `
+
+When you renew your professional indemnity, could you increase the cover to £1 million? Your current policy is £${((piCover.get(r.clerk_id)!.cover as number) / 100).toLocaleString("en-GB")}, and Beamore asks all clerks for £1 million.` : ""}\n\nMany thanks,\nRonan\n\nRonan O'Boyle\nBeamore Management Ltd`;
     const raw = [`To: ${c.email}`, `Subject: Renewal due: ${due.map(([, label]) => label.replace(/ certificate$/, "")).join(", ")}`, "MIME-Version: 1.0", "Content-Type: text/plain; charset=UTF-8"].join("\r\n") + "\r\n\r\n" + body.replace(/\n/g, "\r\n");
     g ??= await driveClient(admin);
     await g.post("https://gmail.googleapis.com/gmail/v1/users/me/drafts", { message: { raw: Buffer.from(raw).toString("base64url") } });

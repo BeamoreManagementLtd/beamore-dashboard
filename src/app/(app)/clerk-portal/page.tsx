@@ -141,7 +141,7 @@ export default async function ClerkPortalAdmin({ searchParams }: { searchParams:
         const cell = (p?: Policy) => !p ? <span className="muted">—</span> : <span className={p.expires && p.expires >= t ? "" : "neg"}>{gbp(p.cover_pence)} · {fmtDate(p.expires)}</span>;
         return (
           <section className="panel tbl-wrap">
-            <p className="muted small">{rows.filter((r) => r.s.piOk).length} of {rows.length} clerks have PI of at least £500,000 in date.</p>
+            <p className="muted small">{rows.filter((r) => r.s.piOk).length} of {rows.length} clerks have PI in date (£500,000 or more is accepted; we ask for £1m). {rows.filter((r) => r.s.piLow).length} of them are below £1m: they're asked to increase it at renewal.</p>
             <table>
               <thead><tr><th>Clerk</th><th>PI (required)</th><th>Public liability</th><th>Employers liability</th><th>Status</th></tr></thead>
               <tbody>
@@ -149,7 +149,7 @@ export default async function ClerkPortalAdmin({ searchParams }: { searchParams:
                   <tr key={c.id}>
                     <td><Link href={`/personnel/${c.id}`}>{c.name}</Link></td>
                     <td>{cell(s.latest.get("PI"))}</td><td>{cell(s.latest.get("PL"))}</td><td>{cell(s.latest.get("EL"))}</td>
-                    <td><span className={`pill ${s.piOk ? "good" : "bad"}`}>{s.piOk ? "OK" : s.pi ? "PI needs updating" : "No PI on file"}</span></td>
+                    <td><span className={`pill ${s.piLow ? "warn" : s.piOk ? "good" : "bad"}`}>{s.piLow ? "OK, under £1m" : s.piOk ? "OK" : s.pi ? "PI needs updating" : "No PI on file"}</span></td>
                   </tr>
                 ))}
               </tbody>

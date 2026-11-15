@@ -1,7 +1,9 @@
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
-export const PI_MIN_PENCE = 50_000_000; // £500,000 professional indemnity, required (Ronan, 15 Nov 2026)
+// Professional indemnity (Ronan, 15 Nov 2026): Beamore ASKS for £1m, but ACCEPTS £500,000 and asks for £1m at renewal.
+export const PI_ASK_PENCE = 100_000_000;
+export const PI_MIN_PENCE = 50_000_000;
 export const PL_MIN_PENCE = 100_000_000; // £1m public liability, if they have it
 
 export const QUAL_TYPES = ["CSCS card", "MCIOB", "MICWCI", "MCABE", "SMSTS / SSSTS", "First aid", "Degree / HNC / HND", "CV", "Other"];
@@ -32,7 +34,7 @@ export async function myPolicies(db: SupabaseClient, clerkId: string) {
   return (data ?? []) as Policy[];
 }
 
-/** The newest policy of each type, and whether the £500,000 PI requirement is met today. */
+/** The newest policy of each type, and whether the PI requirement (£500,000 accepted, £1m asked for) is met today. */
 export function insuranceSummary(policies: Policy[]) {
   const t = today();
   const latest = new Map<string, Policy>();
@@ -43,13 +45,14 @@ export function insuranceSummary(policies: Policy[]) {
   const pi = latest.get("PI") ?? null;
   const piOk = !!pi && !!pi.expires && pi.expires >= t && (pi.cover_pence ?? 0) >= PI_MIN_PENCE;
   const soon = new Date(Date.now() + 30 * 864e5).toISOString().slice(0, 10);
+  const piLow = piOk && (pi?.cover_pence ?? 0) < PI_ASK_PENCE; // accepted, but please go up to £1m at renewal
   return {
-    latest, pi, piOk,
+    latest, pi, piOk, piLow,
     piText: !pi ? "No professional indemnity certificate on file"
       : !pi.expires ? "Professional indemnity on file, expiry date not read yet"
       : pi.expires < t ? `Professional indemnity expired on ${fmtDate(pi.expires)}`
-      : (pi.cover_pence ?? 0) < PI_MIN_PENCE ? `Professional indemnity cover is ${gbp(pi.cover_pence)} (we need at least £500,000)`
-      : `Professional indemnity in date until ${fmtDate(pi.expires)}${pi.expires <= soon ? " (renewal due soon)" : ""}`,
+      : (pi.cover_pence ?? 0) < PI_MIN_PENCE ? `Professional indemnity cover is ${gbp(pi.cover_pence)} (Beamore asks for £1 million)`
+      : `Professional indemnity in date until ${fmtDate(pi.expires)}${pi.expires <= soon ? " (renewal due soon)" : ""}${piLow ? `. Your cover is ${gbp(pi.cover_pence)}: please increase it to £1 million when you renew` : ""}`,
   };
 }
 
