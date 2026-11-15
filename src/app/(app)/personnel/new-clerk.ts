@@ -17,7 +17,7 @@ export async function addAndOnboardClerk(_prev: NewClerkResult | null, form: For
   const project = val(form, "project_id") || null;
   const role = val(form, "role") === "me" ? "me" : "building";
   const createAccount = form.get("create_account") === "on";
-  const sendWelcome = form.get("send_welcome") === "on" && me.role === "director"; // only Ronan's adds send email
+  const sendWelcome = form.get("send_welcome") === "on"; // anyone adding a clerk can send the welcome (Ronan, 15 Nov 2026)
   if (!name) return { ok: false, message: "Add their name." };
   if (!val(form, "phone")) return { ok: false, message: "Add their mobile number (Google needs it for their account)." };
   if (beamore && !/^[a-z0-9._-]+@beamore\.co\.uk$/.test(beamore)) return { ok: false, message: "The Beamore address must end @beamore.co.uk, e.g. gareth.mayoh@beamore.co.uk" };

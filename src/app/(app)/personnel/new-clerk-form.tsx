@@ -52,7 +52,7 @@ export function NewClerkForm({ projects, director, defaultName, defaultProject, 
         <div className="field"><label htmlFor="nr">As</label>
           <select id="nr" name="role" defaultValue={defaultRole === "me" ? "me" : "building"}><option value="building">Building clerk</option><option value="me">M&amp;E clerk</option></select></div>
         {director && <label className="small" style={{ alignSelf: "center" }}><input type="checkbox" name="create_account" defaultChecked /> Create their @beamore.co.uk Google account</label>}
-        {director && <label className="small" style={{ alignSelf: "center" }}><input type="checkbox" name="send_welcome" defaultChecked /> Email them now at their current address</label>}
+        <label className="small" style={{ alignSelf: "center" }}><input type="checkbox" name="send_welcome" defaultChecked /> Email them now at their current address</label>
       </div>
       <p className="small muted">This creates their account (with their mobile for sign-in checks), shares their Personnel folder, the project folder and the Beamore manual with them, switches on the portal, emails them a welcome (sign-in details, 2-Step Verification, portal, folder, manual) at their current address, or saves it as a draft if you untick that, and puts sending their PPE on your list.</p>
       <button className="btn primary" disabled={busy}>{busy ? "Setting them up…" : "Add and set them up"}</button>
