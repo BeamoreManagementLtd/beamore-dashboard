@@ -52,7 +52,7 @@ export async function syncGmail(admin: SupabaseClient) {
             const bounced = !ours && /mailer-daemon|mail delivery|delivery status notification|undeliverable|address not found/i.test(text);
             // automatic acknowledgements and out-of-office replies don't need an answer
             const automatic = !ours && !bounced && /no-?reply|do-?not-?reply|invoice has been received|has been received and|automatic reply|auto-?reply|out of (the )?office/i.test(text);
-            if (!viaXero && !automatic) { if (ours) lastOut = when > lastOut ? when : lastOut; else lastIn = when > lastIn ? when : lastIn; }
+            if (!viaXero && !automatic && !bounced) { if (ours) lastOut = when > lastOut ? when : lastOut; else lastIn = when > lastIn ? when : lastIn; }
             if (have.has(`${inv.id}|${m.id}`)) continue;
             if ((summarisedUntil.get(t.id) ?? "") >= when) continue;
             have.add(`${inv.id}|${m.id}`);
