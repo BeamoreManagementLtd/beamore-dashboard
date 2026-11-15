@@ -174,12 +174,14 @@ export async function buildDueList(db: SupabaseClient, me: Profile): Promise<Due
 
   // ---- draft invoices sitting in Xero for over a week (contacts held on purpose, e.g. Portakabin, left out)
   if (director) {
-    const [{ data: drafts }, { data: held }] = await Promise.all([
+    const [{ data: drafts }, { data: held }, { data: heldInv }] = await Promise.all([
       db.from("xero_draft_invoices").select("number,contact,issued,subtotal").lte("issued", addDays(t, -7)),
       db.from("held_draft_contacts").select("contact"),
+      db.from("held_draft_invoices").select("number"),
     ]);
     const heldSet = new Set((held ?? []).map((h) => h.contact.toLowerCase()));
-    const waiting = (drafts ?? []).filter((d) => !heldSet.has((d.contact ?? "").toLowerCase()));
+    const heldNos = new Set((heldInv ?? []).map((h) => h.number));
+    const waiting = (drafts ?? []).filter((d) => !heldSet.has((d.contact ?? "").toLowerCase()) && !heldNos.has(d.number ?? ""));
     if (waiting.length) {
       const total = waiting.reduce((s, d) => s + Number(d.subtotal ?? 0), 0);
       const oldest = waiting.map((d) => d.issued).sort()[0];

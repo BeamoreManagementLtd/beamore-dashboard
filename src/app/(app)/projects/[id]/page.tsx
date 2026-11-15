@@ -236,7 +236,7 @@ export default async function Project({ params }: { params: Promise<{ id: string
         </section>
         <section className="panel">
           <h2>Outstanding invoices</h2>
-          {!!draftInv?.length && <p className="callout warn small">Draft{draftInv.length > 1 ? "s" : ""} in Xero, not sent: {draftInv.map((d) => `${d.number} £${Math.round(Number(d.subtotal ?? 0)).toLocaleString("en-GB")} (${d.issued})`).join(", ")}</p>}
+          {!!draftInv?.length && <p className="callout info small">Draft{draftInv.length > 1 ? "s" : ""} in Xero, not sent yet: {draftInv.map((d) => `${d.number} £${Math.round(Number(d.subtotal ?? 0)).toLocaleString("en-GB")} (${d.issued})`).join(", ")}</p>}
           {!invoices?.length ? <p className="empty">Nothing outstanding.</p> : (
             <table><tbody>{invoices.map((i) => {
               const raw = i.chase_state as unknown;
