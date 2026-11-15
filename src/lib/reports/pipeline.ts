@@ -260,6 +260,8 @@ export async function checkOne(admin: SupabaseClient, id: string) {
     trk.greenNoDate.length ? `item${trk.greenNoDate.length === 1 ? "" : "s"} ${nums(trk.greenNoDate)} green but with no date closed` : "",
     trk.closedNotGreen.length ? `item${trk.closedNotGreen.length === 1 ? "" : "s"} ${nums(trk.closedNotGreen)} closed but not turned green` : "",
     trk.closedNoReason.length ? `item${trk.closedNoReason.length === 1 ? "" : "s"} ${nums(trk.closedNoReason)} closed without a comment saying why` : "",
+    // an old progress note left in place of the reason for closing (Ronan, 15 Nov 2026)
+    trk.closedReasonUnclear.length ? `item${trk.closedReasonUnclear.length === 1 ? "" : "s"} ${nums(trk.closedReasonUnclear)} closed, but the comment doesn't say why (e.g. ${trk.unclearExamples[0] ? `item ${trk.unclearExamples[0].no}: "${trk.unclearExamples[0].comment}"` : ""})` : "",
   ].filter(Boolean);
   if (trkProblems.length) extra.push({ severity: "medium", kind: "other", text: `Issues tracker: ${trkProblems.join("; ")}`, p: null });
   const issues: Issue[] = [...extra, ...ai.issues].sort((a, b) => rank[a.severity] - rank[b.severity]);
@@ -302,7 +304,7 @@ export async function checkOne(admin: SupabaseClient, id: string) {
       ...(stats.stretched ? ["A handy tip: resizing photos from a corner (or holding Shift) stops them stretching out of shape"] : []),
       ...(raw.length > 10_000_000 ? [`The file came in at ${(raw.length / 1e6).toFixed(0)} MB, so it's worth shrinking the photos before inserting them (in Word: Picture Format > Compress Pictures)`] : []),
       ...(!early && (hsGone.length || hsThin.length >= 3) ? [`It would be great to see all ${hs.length} health and safety items at the start of the report filled in, even briefly, rather than taken out or left as "N/A". This time it was ${hs.filter((h) => h.status !== "ok").map((h) => h.label).join(", ")}. ${onDfeForm ? "Christian Tate's St Leonards diaries" : "Keith Osorio's Holiday Inn Camden reports"} are a good example`] : []),
-      ...(trkProblems.length ? [`On the issues tracker: it works best as a simple record of each issue and which report to read about it in (so no photos), with every item red, orange or green. When you close one, add the date, turn it green and say in the comments why, e.g. "certificate received" or "remedial work seen complete"`] : []),
+      ...(trkProblems.length ? [`On the issues tracker: it works best as a simple record of each issue and which report to read about it in (so no photos), with every item red, orange or green. When you close one, add the date, turn it green and add a line in the comments saying why it's closed, e.g. "certificate received 12/11/26" or "remedial work seen complete on 12/11/26", rather than leaving the earlier progress note as the last word`] : []),
       ...(prog && (prog.verdict === "weak" || prog.verdict === "missing") ? [`On the ${prog.dfe ? "progress vs programme section" : "progress summary"}, it would help to ${progGaps.join("; ") || "follow the approach below"}`] : []),
       ...(ai.clerk_points ?? []),
     ].slice(0, 8),

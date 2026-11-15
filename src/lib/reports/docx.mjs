@@ -152,8 +152,20 @@ const rag = (hex) => {
   if (r > 170 && g < 90 && b < 90) return "red";
   return null;
 };
+// does a closed item's comment say why it was closed? (Ronan, 15 Nov 2026: "some people just leave the comments in
+// there from previously that don't actually say why the thing was closed out"). The latest part of the comment should
+// say what closed it (received, completed, rectified, signed off...), not still be waiting for something.
+const CLOSING = /\b(receiv|provid|suppl|submit|issued|sent|forward|email(ed)? (from|sent|receiv)|email from|letter from|note from|advised|complet|rectif|resolv|sign(ed)?[\s-]*off|confirm|install|fitted|erect|paint|placed|treat|seal|replac|remov|clos|verif|seen|observed|witness|inspect|fix|action|repair|approv|accept|agreed|done|made good|reinstat|correct|amend|changed|altered|adjust|extend|cut back|glued|protected|fire[\s-]*stopped|(engineer'?s?|sika|manufacturer'?s?|test|inspection)\s+report|test(ed)?|certif|cleared|tidied|in place|no further|satisf|sufficient|compliant|in accordance|not concerned|no concern|no issue|not (needed|required|necessary)|no \w+ (was|were|is) (needed|required))/i;
+const STILL_OPEN = /\b(await|to be\b|will be|would be|ongoing|outstanding|pending|tbc|chas(e|ing)|requested|required|needs? to|not yet|yet to|still to)/i;
+export function closingReasonOk(comment) {
+  // at least one sentence says what closed it, without itself still waiting for something
+  // ("As at 4/12/25, details were awaited" is an old progress note, not a reason for closing)
+  return comment.split(/(?<=[.!?])\s*|\n|(?=\d{1,2}\/\d{1,2}\/\d{2,4})/).map((s) => s.trim())
+    .some((s) => CLOSING.test(s) && !STILL_OPEN.test(s.replace(/\bno \w+ (was|were|is) (needed|required)|not (needed|required|necessary)/gi, "")));
+}
+
 export function issuesTracker(r) {
-  const out = { tables: 0, items: 0, photos: 0, uncoloured: [], greenNoDate: [], closedNotGreen: [], closedNoReason: [] };
+  const out = { tables: 0, items: 0, photos: 0, uncoloured: [], greenNoDate: [], closedNotGreen: [], closedNoReason: [], closedReasonUnclear: [], unclearExamples: [] };
   for (const t of r.xml.match(/<w:tbl>[\s\S]*?<\/w:tbl>/g) ?? []) {
     const rows = t.match(/<w:tr\b[\s\S]*?<\/w:tr>/g) ?? [];
     const head = (rows[0]?.match(/<w:tc\b[\s\S]*?<\/w:tc>/g) ?? []).map((c) => textOf(c).replace(/\s+/g, " ").trim().toLowerCase());
@@ -178,6 +190,10 @@ export function issuesTracker(r) {
       if (colour === "green" && !isDate(closedText) && !/^open/i.test(closedText) && !isDate(comment)) out.greenNoDate.push(no);
       if (closed && colour && colour !== "green") out.closedNotGreen.push(no);
       if (closed && comment.replace(/[^a-z]/gi, "").length < 12) out.closedNoReason.push(no);
+      else if ((closed || colour === "green") && comment && !closingReasonOk(comment)) {
+        out.closedReasonUnclear.push(no);
+        if (out.unclearExamples.length < 3) out.unclearExamples.push({ no, comment: comment.slice(0, 120) });
+      }
     }
   }
   return out;
