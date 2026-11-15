@@ -3,7 +3,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { xeroClient, type XeroGet } from "@/lib/xero";
 import { projectMatcher } from "@/lib/project-match";
 import { siteKey } from "@/lib/site-key.mjs";
-import { projectCategory, CATEGORY } from "@/lib/xero-tracking";
+import { projectCategories, isEducation, TRACKING_NAMES } from "@/lib/xero-tracking";
 
 /**
  * Monthly sign-off (decision 6): compare the diary's grey (planned) and salmon (charged) days per project, then prepare
@@ -82,15 +82,16 @@ export async function prepareDrafts(admin: SupabaseClient, m: string, { test = f
   const get = await xeroClient(admin);
   const [rows, { data: projects }, { data: rates }, { data: linked }, invoices] = await Promise.all([
     monthComparison(admin, m),
-    admin.from("projects").select("id,name,display_name,diary_aliases"),
+    admin.from("projects").select("id,name,display_name,diary_aliases,is_dfe,folder_kind"),
     admin.from("rates").select("site_as_typed,charge"),
     admin.from("invoices").select("number,project_id").not("project_id", "is", null),
     allInvoices(get, addDays(m, -150)),
   ]);
   const match = projectMatcher(projects ?? []);
-  // Xero "Project" tracking options (if set up): drafts are tagged with their project
-  const cat = await projectCategory(get).catch(() => null);
-  const trackingOption = new Map((cat?.Options ?? []).filter((o) => o.Status === "ACTIVE").map((o) => [o.Name.toLowerCase(), o.Name]));
+  // Xero project tracking (if set up): drafts are tagged in "Education projects" or "Other projects"
+  const cats = await projectCategories(get).catch(() => ({ education: null, other: null }));
+  const optionsOf = (c: typeof cats.education) => new Map((c?.Options ?? []).filter((o) => o.Status === "ACTIVE").map((o) => [o.Name.toLowerCase(), o.Name]));
+  const tracking = { education: { cat: cats.education, options: optionsOf(cats.education) }, other: { cat: cats.other, options: optionsOf(cats.other) } };
   // links already made (by the Xero sync, the diary's invoice table or by hand) win; then every part of the reference
   // ("FS1018 - Wisbech", "BLMS0547 - Paignton"), then the line descriptions
   const known = new Map((linked ?? []).map((i) => [i.number, i.project_id as string]));
@@ -174,9 +175,11 @@ export async function prepareDrafts(admin: SupabaseClient, m: string, { test = f
     const reference = new RegExp(MONTHS).test(tpl.Reference ?? "") || new RegExp(SHORT).test(tpl.Reference ?? "")
       ? retext(tpl.Reference, m) : `${(tpl.Reference ?? p.name).split(/\s+[-–]\s+/)[0]} - ${monthLabel(m)}`;
     const number = nextNumber(prefix);
-    const option = trackingOption.get(p.display_name.toLowerCase());
-    if (cat && !option) warnings.push(`No "${CATEGORY}" tracking option for ${p.display_name} in Xero yet`);
-    const tagged = (l: XLine) => option ? [...(l.Tracking ?? []).filter((t) => t.Name !== CATEGORY), { Name: CATEGORY, Option: option }] : l.Tracking;
+    const t = isEducation(p) ? tracking.education : tracking.other;
+    const option = t.options.get(p.display_name.toLowerCase());
+    if (t.cat && !option) warnings.push(`No "${t.cat.Name}" tracking option for ${p.display_name} in Xero yet`);
+    // replace any project tag copied from the old invoice with the right category's option
+    const tagged = (l: XLine) => option && t.cat ? [...(l.Tracking ?? []).filter((x) => !TRACKING_NAMES.includes(x.Name)), { Name: t.cat.Name, Option: option }] : l.Tracking?.filter((x) => !TRACKING_NAMES.includes(x.Name));
     const payload = {
       Type: "ACCREC", Status: "DRAFT", Contact: { ContactID: tpl.Contact.ContactID }, InvoiceNumber: number, Reference: reference,
       Date: end, DueDate: addDays(end, termDays), LineAmountTypes: tpl.LineAmountTypes ?? "Exclusive",

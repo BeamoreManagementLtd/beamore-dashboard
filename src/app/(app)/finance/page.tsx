@@ -60,14 +60,14 @@ export default async function Finance({ searchParams }: { searchParams: Promise<
         <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
           <div>
             <b>Project tracking in Xero</b>{" "}
-            <span className="muted">a “Project” tracking category with one option per live project (“St Aidans 1073”), so draft invoices are tagged and Xero reports can be run by project. Only adds; never archives or deletes.</span>
+            <span className="muted">two tracking categories, “Education projects” and “Other projects”, each with one option per current job (“St Aidans 1073”), so draft invoices are tagged and Xero reports can be run by project. Up to 100 jobs in each; quiet jobs are archived and come back when invoiced again. Updated every morning; clients never see tracking.</span>
             {tlast && (
               <span className="two">
                 Last run {fdt(tlast.finished_at)}: {tlast.ok ? tlast.message : <span className="neg">failed: {tlast.message}</span>}
               </span>
             )}
           </div>
-          {c && <form action={setupTracking}><button className="btn">{tlast?.ok ? "Add new live projects" : "Set up Project tracking in Xero"}</button></form>}
+          {c && <form action={setupTracking}><button className="btn">{tlast?.ok ? "Update project tracking now" : "Set up project tracking in Xero"}</button></form>}
         </div>
       </section>
       {diary === "connected" && <p className="callout info">Google Drive is connected and the diary has been read. It’s checked for changes every hour.</p>}
