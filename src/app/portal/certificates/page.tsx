@@ -53,7 +53,7 @@ export default async function PortalCertificates() {
                   <tr key={u.id}>
                     <td>{fmtDate(u.received_at)}</td>
                     <td>{u.doc_type ?? "Certificate"}</td>
-                    <td className="clip">{u.file_name ?? "—"}</td>
+                    <td className="clip">{u.file_name ?? (u.kind === "insurance" ? "Insurance certificate" : u.doc_type ?? "Document")}</td>
                     <td><span className={`pill ${s.tone}`}>{s.text}</span>{u.status === "needs_correction" && u.issues[0] && <div className="small muted">{u.issues.join(". ")}</div>}</td>
                   </tr>
                 );

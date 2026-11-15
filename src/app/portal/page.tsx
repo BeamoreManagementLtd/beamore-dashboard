@@ -74,7 +74,7 @@ export default async function PortalHome() {
                   <tr key={u.id}>
                     <td>{fmtDate(u.received_at)}</td>
                     <td>{u.kind === "invoice" ? "Invoice" : u.kind === "insurance" ? "Insurance" : u.doc_type ?? "Certificate"}</td>
-                    <td className="clip">{u.file_name ?? "—"}</td>
+                    <td className="clip">{u.file_name ?? (u.kind === "insurance" ? "Insurance certificate" : u.doc_type ?? "Document")}</td>
                     <td><span className={`pill ${s.tone}`}>{s.text}</span></td>
                   </tr>
                 );

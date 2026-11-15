@@ -133,6 +133,11 @@ export async function mapLegacy(db, S, { write }) {
     await db.from("clerk_compliance").update({ documents_folder_id: f.documents_folder_id }).eq("clerk_id", f.clerk_id).is("documents_folder_id", null);
   }
   for (const u of uploads) u.issues ??= []; // bulk upserts fill missing keys with null
+  { // keep file names and folders already looked up in Drive on an earlier run
+    const { data: had } = await db.from("portal_uploads").select("receipt,file_name,drive_folder_id").eq("source", "legacy");
+    const h = new Map((had ?? []).map((r) => [r.receipt, r]));
+    for (const u of uploads) { const o = h.get(u.receipt); u.file_name ??= o?.file_name ?? null; u.drive_folder_id ??= o?.drive_folder_id ?? null; }
+  }
   const { error: ue } = await db.from("portal_uploads").upsert(uploads, { onConflict: "receipt" });
   if (ue) throw new Error("uploads " + ue.message);
   const { data: ids } = await db.from("portal_uploads").select("id,receipt").eq("source", "legacy");

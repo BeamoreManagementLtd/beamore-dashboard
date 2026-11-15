@@ -22,7 +22,8 @@ export async function myUploads(db: SupabaseClient, clerkId: string, kind?: stri
     .eq("clerk_id", clerkId).neq("status", "deleted").neq("status", "uploading").order("received_at", { ascending: false });
   if (kind) q = q.in("kind", kind);
   const { data } = await q;
-  return (data ?? []) as Upload[];
+  // the old portal stored files as <receipt>.pdf: show a plain label instead of the code
+  return ((data ?? []) as Upload[]).map((u) => (/^[0-9a-f-]{36}.pdf$/i.test(u.file_name ?? "") ? { ...u, file_name: null } : u));
 }
 
 export async function myPolicies(db: SupabaseClient, clerkId: string) {
