@@ -5,7 +5,7 @@ import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { fd, fdt } from "@/lib/format";
 import { draftFor } from "@/lib/reports/pipeline";
 import { userConnection } from "@/lib/google-user";
-import { assignChecker, sendReport, markDone, ignoreReport, checkAgain } from "../actions";
+import { assignChecker, sendReport, markDone, ignoreReport, checkAgain, sendClerkEmail } from "../actions";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -15,10 +15,12 @@ type Issue = { severity: "high" | "medium" | "low"; kind: string; text: string }
 /** A friendly note to the clerk: what had to be fixed in this report and what to do next time. */
 function clerkNote(r: Record<string, unknown>, sender: string) {
   const clerk = ((r.clerks as { name?: string } | null)?.name ?? (r.clerk_name as string | null) ?? "").split(" ")[0];
-  const f = (r.fixes ?? {}) as { spelling?: { find: string; replace: string }[]; rotated?: number; shrunk?: number; stretched?: number; enlarged?: number };
+  const f = (r.fixes ?? {}) as { spelling?: { find: string; replace: string }[]; rotated?: number; shrunk?: number; stretched?: number; enlarged?: number; uniform?: number; side_cm?: number | null; renamed?: string | null };
   const issues = ((r.issues ?? []) as Issue[]).filter((i) => i.severity !== "low" && i.kind !== "safety");
   const fixed = [
     f.spelling?.length ? `${f.spelling.length} spelling/grammar correction${f.spelling.length === 1 ? "" : "s"} (e.g. ${f.spelling.slice(0, 3).map((s) => `"${s.find}" → "${s.replace}"`).join(", ")})` : null,
+    f.renamed ? `the file name, to match your other reports in the folder (now "${f.renamed}")` : null,
+    f.uniform ? `photo sizes: please use square photos all the same size, about ${f.side_cm ?? 6} cm, two to a line (as in Christian Tate's reports)` : null,
     f.stretched ? `${f.stretched} photo${f.stretched === 1 ? "" : "s"} stretched out of shape (please keep the shift key down when resizing)` : null,
     f.enlarged ? `${f.enlarged} photo${f.enlarged === 1 ? "" : "s"} too small to see on the page` : null,
     f.rotated ? `${f.rotated} photo${f.rotated === 1 ? "" : "s"} on their side` : null,
@@ -38,12 +40,12 @@ function clerkNote(r: Record<string, unknown>, sender: string) {
 const SEV: Record<string, [string, string]> = { high: ["Must check", "bad"], medium: ["Should fix", "warn"], low: ["Minor", "muted"] };
 
 /** One report: what the AI found, then approve and send it from your own email with the standard email. */
-export default async function ReportPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ error?: string }> }) {
+export default async function ReportPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ error?: string; clerk?: string }> }) {
   const me = await requireProfile();
   const { id } = await params;
-  const { error } = await searchParams;
+  const { error, clerk } = await searchParams;
   const db = await createClient();
-  const { data: r } = await db.from("reports").select("*,projects(id,name),clerks(name)").eq("id", id).maybeSingle();
+  const { data: r } = await db.from("reports").select("*,projects(id,name),clerks(name,email)").eq("id", id).maybeSingle();
   if (!r) notFound();
   const admin = createServiceClient();
   const [{ data: staff }, conn, draft] = await Promise.all([
@@ -64,6 +66,7 @@ export default async function ReportPage({ params, searchParams }: { params: Pro
       <div className="head"><div><h1 style={{ wordBreak: "break-word" }}>{r.file_name}</h1>
         <p>{p?.name ?? r.project_folder_name} · {r.folder_name} · {(r.clerks as unknown as { name?: string } | null)?.name ?? r.clerk_name ?? "clerk not known"}{r.report_number ? ` · No. ${r.report_number}` : ""}</p></div></div>
       {error && <p className="callout bad">{error}</p>}
+      {clerk === "sent" && <p className="callout good">Sent to the clerk.</p>}
       {r.error && r.status !== "failed" && <p className="callout bad">{r.error}</p>}
 
       <div className="grid2">
@@ -108,24 +111,34 @@ export default async function ReportPage({ params, searchParams }: { params: Pro
           <section className="panel">
             <h2>What was changed {typeof r.score === "number" && <span className={`pill ${r.score >= 85 ? "good" : r.score >= 65 ? "warn" : "bad"}`} title="Quality score: how much needed fixing">{r.score}/100</span>}</h2>
             {(() => {
-              const f = (r.fixes ?? {}) as { spelling?: { find: string; replace: string }[]; rotated?: number; shrunk?: number; stretched?: number; enlarged?: number };
+              const f = (r.fixes ?? {}) as { spelling?: { find: string; replace: string }[]; rotated?: number; shrunk?: number; stretched?: number; enlarged?: number; uniform?: number; side_cm?: number | null; renamed?: string | null };
               return (
                 <ul className="plain small">
                   {!!f.spelling?.length && <li><b>Spelling and grammar ({f.spelling.length}):</b> {f.spelling.slice(0, 25).map((s) => `${s.find} → ${s.replace}`).join("; ")}</li>}
+                  {!!f.uniform && <li><b>Photos all made the same size:</b> {f.uniform} photos to {f.side_cm} cm squares (cropped from the middle; undo a crop in Word with Crop &gt; Reset)</li>}
+                  {!!f.renamed && <li><b>Renamed to match the other reports in the folder:</b> {f.renamed}</li>}
                   {!!f.stretched && <li><b>Stretched photos put back in proportion:</b> {f.stretched}</li>}
                   {!!f.enlarged && <li><b>Small photos made bigger:</b> {f.enlarged}</li>}
                   {!!f.rotated && <li><b>Photos turned upright:</b> {f.rotated}</li>}
                   {!!f.shrunk && <li><b>Photos made smaller:</b> {f.shrunk} ({mb(r.size_before)} → {mb(r.size_after)})</li>}
                   {r.renamed_from && <li><b>Renamed</b> from {r.renamed_from}</li>}
-                  {!f.spelling?.length && !f.stretched && !f.enlarged && !f.rotated && !f.shrunk && <li>Nothing needed changing.</li>}
+                  {!f.spelling?.length && !f.uniform && !f.renamed && !f.stretched && !f.enlarged && !f.rotated && !f.shrunk && <li>Nothing needed changing.</li>}
                 </ul>
               );
             })()}
           </section>
           <section className="panel">
-            <h2>Note for the clerk</h2>
-            <p className="small muted">Copy into an email to the clerk, so their next report needs less fixing.</p>
-            <textarea readOnly rows={10} style={{ width: "100%" }} defaultValue={clerkNote(r, me.full_name ?? me.email)} />
+            <h2>Email to the clerk</h2>
+            {r.clerk_email_sent_at ? <p className="callout good">Sent to the clerk {fdt(r.clerk_email_sent_at)} by {nameOf(r.clerk_email_sent_by) ?? ""}.</p>
+              : <p className="small muted">What had to be fixed and what to do better next time. Change anything you like, then send it, or leave it.</p>}
+            {conn ? (
+              <form action={sendClerkEmail.bind(null, id)} className="form">
+                <div className="field"><label htmlFor="cto">To</label><input id="cto" name="to" defaultValue={(r.clerks as unknown as { email?: string } | null)?.email ?? ""} placeholder="the clerk's email" /></div>
+                <div className="field"><label htmlFor="csu">Subject</label><input id="csu" name="subject" defaultValue={`Your report: ${String(r.file_name).replace(/\.docx?$/i, "")}`} /></div>
+                <div className="field"><label htmlFor="cbo">Email</label><textarea id="cbo" name="body" rows={12} defaultValue={clerkNote(r, me.full_name ?? me.email)} /></div>
+                <button className="btn">{r.clerk_email_sent_at ? "Send again" : "Send to the clerk"}</button>
+              </form>
+            ) : <textarea readOnly rows={10} style={{ width: "100%" }} defaultValue={clerkNote(r, me.full_name ?? me.email)} />}
           </section>
         </div>
       )}

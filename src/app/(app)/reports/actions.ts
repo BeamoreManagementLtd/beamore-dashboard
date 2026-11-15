@@ -83,3 +83,20 @@ export async function saveSettings(form: FormData) {
   }).eq("id", 1);
   redirect("/reports/settings?saved=1");
 }
+
+/** The note to the clerk about their report: sent from the checker's own email when they click Send (edited or as drafted). */
+export async function sendClerkEmail(reportId: string, form: FormData) {
+  const me = await requireProfile();
+  const to = emails(form.get("to"));
+  if (!to.length) redirect(`/reports/${reportId}?error=${encodeURIComponent("Add the clerk's email address")}`);
+  const admin = createServiceClient();
+  try {
+    const { sendReportEmail } = await import("@/lib/google-user");
+    await sendReportEmail(admin, me.id, { to, cc: emails(form.get("cc")), subject: String(form.get("subject") ?? "").trim(), body: String(form.get("body") ?? "") });
+  } catch (e) {
+    redirect(`/reports/${reportId}?error=${encodeURIComponent(e instanceof Error ? e.message : "Couldn't send")}`);
+  }
+  const { data: r } = await admin.from("reports").update({ clerk_email_sent_at: new Date().toISOString(), clerk_email_sent_by: me.id }).eq("id", reportId).select("project_id,file_name").single();
+  if (r?.project_id) await admin.from("project_events").insert({ project_id: r.project_id, source: "team", kind: "Clerk feedback", who: me.full_name ?? me.email, body: `Feedback on ${r.file_name} emailed to ${to.join(", ")}` });
+  redirect(`/reports/${reportId}?clerk=sent`);
+}

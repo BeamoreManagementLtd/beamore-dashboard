@@ -55,8 +55,11 @@ async function accessFor(admin: SupabaseClient, profileId: string) {
 
 const enc = (s: string) => (/^[\x20-\x7e]*$/.test(s) ? s : `=?UTF-8?B?${Buffer.from(s).toString("base64")}?=`);
 
-/** Sends one email with one PDF attached, from this team member's own Gmail. Returns Gmail's message id. */
-export async function sendReportEmail(admin: SupabaseClient, profileId: string, m: { to: string[]; cc: string[]; subject: string; body: string; fileName: string; pdf: Buffer }) {
+/**
+ * Sends one email from this team member's own Gmail: a checked report (PDF attached) to the client's list, or the
+ * note about a report to its clerk (no attachment). Only ever on their click (Ronan, 15 Nov 2026).
+ */
+export async function sendReportEmail(admin: SupabaseClient, profileId: string, m: { to: string[]; cc: string[]; subject: string; body: string; fileName?: string; pdf?: Buffer }) {
   const { access, email } = await accessFor(admin, profileId);
   const b = `beamore${Date.now()}`;
   const CRLF = "\r\n";
@@ -65,7 +68,7 @@ export async function sendReportEmail(admin: SupabaseClient, profileId: string, 
     `From: ${email}`, `To: ${m.to.join(", ")}`, ...(m.cc.length ? [`Cc: ${m.cc.join(", ")}`] : []), `Subject: ${enc(m.subject)}`,
     "MIME-Version: 1.0", `Content-Type: multipart/mixed; boundary="${b}"`, "",
     `--${b}`, "Content-Type: text/plain; charset=UTF-8", "Content-Transfer-Encoding: base64", "", wrap(Buffer.from(m.body).toString("base64")),
-    `--${b}`, `Content-Type: application/pdf; name="${m.fileName.replace(/"/g, "")}"`, `Content-Disposition: attachment; filename="${m.fileName.replace(/"/g, "")}"`, "Content-Transfer-Encoding: base64", "", wrap(m.pdf.toString("base64")),
+    ...(m.pdf && m.fileName ? [`--${b}`, `Content-Type: application/pdf; name="${m.fileName.replace(/"/g, "")}"`, `Content-Disposition: attachment; filename="${m.fileName.replace(/"/g, "")}"`, "Content-Transfer-Encoding: base64", "", wrap(m.pdf.toString("base64"))] : []),
     `--${b}--`, "",
   ].join(CRLF);
   const res = await fetch("https://gmail.googleapis.com/upload/gmail/v1/users/me/messages/send?uploadType=media", {

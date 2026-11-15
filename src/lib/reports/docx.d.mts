@@ -19,5 +19,6 @@ export function unticked(r: Report): number;
 export function fillBlank(r: Report, label: string, value: string): boolean;
 export function rotatePhoto(r: Report, sharp: typeof Sharp, path: string, degrees: 90 | 180 | 270): Promise<void>;
 export function fixPhotoShapes(r: Report, stats: PhotoStats): Promise<{ stretched: number; enlarged: number }>;
+export function uniformPhotos(r: Report, stats: PhotoStats, rels: string): { side: number | null; changed: number };
 export function saveReport(r: Report): Promise<Buffer>;
 export function cleanCopy(buf: Buffer): Promise<Buffer>;

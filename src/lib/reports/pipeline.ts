@@ -4,7 +4,7 @@ import sharp from "sharp";
 import { driveClient } from "@/lib/google";
 import { projectMatcher } from "@/lib/project-match";
 import { sendReportEmail } from "@/lib/google-user";
-import { readReport, photoStats, shrinkPhotos, trackSpelling, addComments, saveReport, photoHashes, reusedCount, uncaptioned, unticked, rotatePhoto, fixPhotoShapes } from "./docx.mjs";
+import { readReport, photoStats, shrinkPhotos, trackSpelling, addComments, saveReport, photoHashes, reusedCount, uncaptioned, unticked, rotatePhoto, fixPhotoShapes, uniformPhotos } from "./docx.mjs";
 
 /** 0-100: how much the report needed fixing (must-checks count most). Lateness is shown separately. */
 export function qualityScore(issues: { severity: string }[], spelling: number, lateDays: number) {
@@ -13,6 +13,7 @@ export function qualityScore(issues: { severity: string }[], spelling: number, l
   return Math.max(0, 100 - off);
 }
 import { checkReport, type Issue } from "./check";
+import { conventionName } from "./naming.mjs";
 
 /**
  * Report checking (Ronan, 15 Nov 2026), replacing the "Ready To Check" and turnaround spreadsheets:
@@ -167,19 +168,38 @@ export async function checkOne(admin: SupabaseClient, id: string) {
     unticked: unticked(r), thumbnails: thumbs, today: new Date().toISOString().slice(0, 10),
   });
 
-  // put the fixes into the Word file: spelling and grammar as tracked changes, obvious blanks filled (tracked), photos
-  // turned upright and made smaller, issues as comments
+  // first: the file name follows the pattern of the other reports in its folder (next number, this visit's date)
+  const visitDate = ai.visit_date && /^\d{4}-\d{2}-\d{2}$/.test(ai.visit_date) ? ai.visit_date : null;
+  let renamedTo: string | null = null;
+  try {
+    const sibs = await g.json<{ files: { name: string }[] }>("files", { q: `'${rep.folder_id}' in parents and trashed = false and (mimeType = '${DOCX}' or mimeType = 'application/pdf')`, fields: "files(name)", orderBy: "modifiedTime desc", pageSize: "40", supportsAllDrives: "true", includeItemsFromAllDrives: "true" });
+    const want = conventionName(rep.file_name, sibs.files.map((f) => f.name).filter((n) => n !== rep.file_name), visitDate, ai.report_number);
+    if (want && !sibs.files.some((f) => f.name.toLowerCase() === want.toLowerCase())) renamedTo = want;
+  } catch { /* keep the name */ }
+
+  // put the fixes into the Word file: spelling, grammar and punctuation as tracked changes, photos turned upright, all
+  // the same size (Christian's: 6 cm squares) and made smaller, issues as comments
   const rotated: string[] = [];
   for (const t of ai.rotate ?? []) {
     const path = thumbPaths[t.photo - 1];
     if (path && !rotated.includes(path)) { await rotatePhoto(r, sharp, path, t.degrees); rotated.push(path); }
   }
   // blank boxes are left for the clerk (Ronan, 15 Nov 2026); photo shapes and sizes are put right
-  const shapes = await fixPhotoShapes(r, await photoStats(r, sharp));
+  // every photo the same size (Christian's format); where that can't apply, at least stretched/tiny photos put right
+  const uniform = uniformPhotos(r, await photoStats(r, sharp), await r.zip.file("word/_rels/document.xml.rels")!.async("string"));
+  const shapes = uniform.changed ? { stretched: 0, enlarged: 0 } : await fixPhotoShapes(r, await photoStats(r, sharp));
   const shrunk = await shrinkPhotos(r, sharp, await photoStats(r, sharp));
   const spelt = trackSpelling(r, ai.spelling);
   const rank = { high: 0, medium: 1, low: 2 } as const;
-  const issues: Issue[] = [...ai.issues].sort((a, b) => rank[a.severity] - rank[b.severity]);
+  // not enough photos or not enough written, against the benchmark clerks' reports (weekly diaries: 35-57 photos,
+  // 1,800-5,000 words); monthly reports aren't judged on this
+  const words = r.paragraphs.reduce((n, p) => n + (p.text.match(/[A-Za-z]{2,}/g) ?? []).length, 0);
+  const monthly = /monthly/i.test(rep.folder_name ?? "") || /monthly/i.test(rep.file_name);
+  const min = rep.kind === "me" ? { photos: 12, words: 800 } : { photos: 20, words: 1200 };
+  const extra: Issue[] = [];
+  if (!monthly && stats.count < min.photos) extra.push({ severity: "medium", kind: "photos", text: `Only ${stats.count} photo${stats.count === 1 ? "" : "s"}: good reports have ${rep.kind === "me" ? "20 or more" : "35-50"}${usual ? ` (this clerk usually has about ${usual} here)` : ""}`, p: null });
+  if (!monthly && words < min.words) extra.push({ severity: "medium", kind: "vague", text: `Not much written (about ${words} words): good reports describe each area in detail, typically ${rep.kind === "me" ? "1,000+" : "1,800-5,000"} words`, p: null });
+  const issues: Issue[] = [...extra, ...ai.issues].sort((a, b) => rank[a.severity] - rank[b.severity]);
   if (spelt.skipped.length) issues.push({ severity: "low", kind: "other", text: `Spelling not changed automatically (please fix by hand): ${spelt.skipped.slice(0, 8).map((s) => `${s.find} → ${s.replace}`).join(", ")}`, p: null });
   await addComments(r, issues.filter((i) => i.severity !== "low").slice(0, 15).map((i) => ({ p: i.p, text: `${i.severity === "high" ? "Must check: " : ""}${i.text}` })));
   const out = await saveReport(r);
@@ -191,6 +211,10 @@ export async function checkOne(admin: SupabaseClient, id: string) {
     return;
   }
   await g.replaceContent(rep.drive_file_id, out, DOCX);
+  if (renamedTo) {
+    try { await g.rename(rep.drive_file_id, renamedTo); await admin.from("reports").update({ file_name: renamedTo, renamed_from: rep.file_name }).eq("id", id); }
+    catch { renamedTo = null; }
+  }
   const after = await g.json<{ headRevisionId: string }>(`files/${rep.drive_file_id}`, { fields: "headRevisionId", supportsAllDrives: "true" });
   const visitFromName = /(\d{1,2})[.\-_ ](\d{1,2})[.\-_ ](\d{2,4})/.exec(rep.file_name);
   const nameDate = visitFromName ? `${visitFromName[3].length === 2 ? `20${visitFromName[3]}` : visitFromName[3]}-${visitFromName[2].padStart(2, "0")}-${visitFromName[1].padStart(2, "0")}` : null;
@@ -199,7 +223,7 @@ export async function checkOne(admin: SupabaseClient, id: string) {
     status: "ready", ai_summary: ai.summary, issues, spelling_fixed: spelt.applied,
     photos: { count: stats.count, blurry: stats.blurry, smallOnPage: stats.smallOnPage, stretched: stats.stretched, shrunk: shrunk.changed, rotated: rotated.length, reused, usual, uncaptioned: uncaptioned(r) },
     photo_hashes: hashes, photo_count: stats.count, clerk_points: (ai.clerk_points ?? []).slice(0, 5),
-    fixes: { spelling: applied, rotated: rotated.length, shrunk: shrunk.changed, stretched: shapes.stretched, enlarged: shapes.enlarged },
+    fixes: { spelling: applied, rotated: rotated.length, shrunk: shrunk.changed, stretched: shapes.stretched, enlarged: shapes.enlarged, uniform: uniform.changed, side_cm: uniform.side ? +(uniform.side / 360000).toFixed(1) : null, renamed: renamedTo, words },
     score: qualityScore(issues, spelt.applied, 0), // lateness is shown on its own on the Reports page
     size_before: raw.length, size_after: out.length, checked_revision: after.headRevisionId, checked_at: new Date().toISOString(),
     visit_date: ai.visit_date && /^\d{4}-\d{2}-\d{2}$/.test(ai.visit_date) ? ai.visit_date : (nameDate && !Number.isNaN(Date.parse(nameDate)) ? nameDate : null),
@@ -249,8 +273,8 @@ export function standardName(rep: { file_name: string; report_number: string | n
  *  a. the email is kept with the report and the report is queued for its PDF
  *  b. the helper on the office PC opens a copy in Word, accepts any tracked changes left, takes the comments out,
  *     saves the PDF next to the report (Google Drive for desktop uploads it) and says so
- *  c. the dashboard finds the PDF in Drive and emails it from the checker's own Gmail; then the Word file gets the
- *     standard name too
+ *  c. the dashboard finds the PDF in Drive and emails it from the checker's own Gmail
+ * The PDF has the Word file's name, which already follows the folder's pattern (renamed when it was checked).
  */
 export async function approveReport(admin: SupabaseClient, reportId: string, who: { id: string; full_name: string | null }, m: { to: string[]; cc: string[]; subject: string; body: string }) {
   if (!m.to.length) throw new Error("Nobody to send it to: add the report list on the project's page");
@@ -258,9 +282,7 @@ export async function approveReport(admin: SupabaseClient, reportId: string, who
   if (!rep) throw new Error("No such report");
   if (rep.status === "sent") throw new Error("Already sent");
   if (!rep.main_folder) throw new Error("Can't tell where this report is on the office PC; please make the PDF in Word by hand");
-  const { data: proj } = rep.project_id ? await admin.from("projects").select("name").eq("id", rep.project_id).single() : { data: null };
-  const std = standardName(rep, proj?.name ?? rep.project_folder_name ?? "");
-  const pdfName = `${(std ?? rep.file_name).replace(/\.docx?$/i, "")}.pdf`;
+  const pdfName = `${rep.file_name.replace(/\.docx?$/i, "")}.pdf`;
   await admin.from("reports").update({
     status: "approved", approved_by: who.id, approved_at: new Date().toISOString(), error: null,
     pending_email: { ...m, by: who.id, by_name: who.full_name }, pdf_name: pdfName, pdf_requested_at: new Date().toISOString(), pdf_made_at: null,
@@ -314,11 +336,6 @@ async function sendIfPdfReady(admin: SupabaseClient, reportId: string) {
     const at = new Date().toISOString();
     await admin.from("reports").update({ status: "sent", pdf_file_id: pdfFile.id, sent_at: at, done_at: at, sent_by: m.by, sent_to: m.to, sent_cc: m.cc, gmail_message_id: sent.id, pending_email: null, updated_at: at }).eq("id", reportId);
     if (rep.project_id) await admin.from("project_events").insert({ project_id: rep.project_id, source: "team", kind: "Report sent", who: m.by_name ?? sent.from, body: `${rep.pdf_name} sent from ${sent.from} to ${m.to.join(", ")}${m.cc.length ? `, cc ${m.cc.join(", ")}` : ""}` });
-    // the Word file gets the same standard name as its PDF
-    const wordName = String(rep.pdf_name).replace(/\.pdf$/i, ".docx");
-    if (wordName !== rep.file_name) {
-      try { await g.rename(rep.drive_file_id, wordName); await admin.from("reports").update({ file_name: wordName, renamed_from: rep.file_name }).eq("id", reportId); } catch { /* keeps its name */ }
-    }
     return true;
   } catch (e) {
     await admin.from("reports").update({ status: "approved", error: `Not sent yet: ${(e instanceof Error ? e.message : String(e)).slice(0, 300)}` }).eq("id", reportId);

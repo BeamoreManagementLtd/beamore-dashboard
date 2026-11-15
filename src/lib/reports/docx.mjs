@@ -331,6 +331,68 @@ export async function fixPhotoShapes(r, stats) {
   return { stretched, enlarged };
 }
 
+/**
+ * Every photo in the report the same size (Ronan, 15 Nov 2026), like Christian Tate's reports: squares, 6 cm, two to a
+ * line in the photo panel. Each photo is cropped square from its middle with Word's own crop (it can be undone in Word:
+ * Picture Format > Crop > Reset). Smaller squares if the report's photo panels are narrower, still the same for every
+ * photo. Left alone: logos, signatures and icons (under 1.5 cm), plans and drawings (over 10 cm wide).
+ */
+export function uniformPhotos(r, stats, rels) {
+  const relPath = new Map([...rels.matchAll(/<Relationship\b[^>]*Id="([^"]+)"[^>]*Target="([^"]+)"/g)].map((m) => [m[1], `word/${m[2].replace(/^\.?\//, "")}`]));
+  const byPath = new Map(stats.list.map((p) => [p.path, p]));
+  const xml = r.xml;
+  const cellWidthAt = (i) => {
+    const at = xml.lastIndexOf("<w:tc>", i);
+    if (at < 0 || at < xml.lastIndexOf("</w:tc>", i)) return null;
+    const w = /<w:tcW w:w="(\d+)" w:type="dxa"/.exec(xml.slice(at, i))?.[1];
+    return w ? +w * 635 : null; // twentieths of a point -> EMU
+  };
+  const isPhoto = (d, ph) => {
+    const ext = /<wp:extent cx="(\d+)" cy="(\d+)"/.exec(d);
+    return ph && ext && +ext[1] >= 540_000 && +ext[1] <= 3_600_000 && Math.min(ph.width, ph.height) >= 200;
+  };
+  const drawings = [...xml.matchAll(/<w:drawing>[\s\S]*?<\/w:drawing>/g)].map((m) => ({ m, ph: byPath.get(relPath.get(/<a:blip\b[^>]*r:embed="([^"]+)"/.exec(m[0])?.[1] ?? "") ?? "") }));
+  const photos = drawings.filter((x) => isPhoto(x.m[0], x.ph));
+  if (photos.length < 2) return { side: null, changed: 0 };
+  // the size: 6 cm, unless the usual photo panel is too narrow for two of those side by side
+  const widths = new Map();
+  for (const x of photos) { const w = cellWidthAt(x.m.index); if (w) widths.set(w, (widths.get(w) ?? 0) + 1); }
+  const panel = [...widths].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
+  const SIX = 2_160_000, GAP = 220_000;
+  let side = !panel ? SIX : panel >= 3_600_000 ? Math.min(SIX, Math.floor((panel - GAP * 2) / 2)) : Math.min(SIX, panel - GAP);
+  // a few photo boxes slightly narrower: all photos come down to fit them, so they still match; one much narrower box
+  // keeps its own smaller photo rather than shrinking every photo
+  const tightest = Math.min(...photos.map((x) => cellWidthAt(x.m.index)).filter((w) => w).map((w) => w - GAP));
+  if (Number.isFinite(tightest) && tightest < side && tightest >= side * 0.8) side = tightest;
+  let out = "", last = 0, changed = 0;
+  for (const x of drawings) {
+    let d = x.m[0];
+    if (photos.includes(x)) {
+      const own = cellWidthAt(x.m.index);
+      const s = Math.max(540_000, own ? Math.min(side, own - GAP) : side);
+      const ext = /<wp:extent cx="(\d+)" cy="(\d+)"/.exec(d);
+      const crop = /<a:srcRect\b[^>]*(l|t|r|b)="-?\d+"/.test(d);
+      let cx = s, cy = s;
+      if (crop) cy = Math.round(s * (+ext[2] / +ext[1])); // already cropped by the clerk: same width, keep their crop
+      else {
+        const w = x.ph.width, h = x.ph.height;
+        const cut = Math.round(((1 - Math.min(w, h) / Math.max(w, h)) / 2) * 100000);
+        const rect = cut <= 0 ? "<a:srcRect/>" : w > h ? `<a:srcRect l="${cut}" r="${cut}"/>` : `<a:srcRect t="${cut}" b="${cut}"/>`;
+        d = /<a:srcRect\b[^>]*\/>/.test(d) ? d.replace(/<a:srcRect\b[^>]*\/>/, rect) : d.replace(/(<a:blip\b[^>]*\/>|<a:blip\b[^>]*>[\s\S]*?<\/a:blip>)/, `$1${rect}`);
+      }
+      if (+ext[1] !== cx || +ext[2] !== cy || !crop) {
+        d = d.replace(/<wp:extent cx="\d+" cy="\d+"/, `<wp:extent cx="${cx}" cy="${cy}"`).replace(/(<pic:spPr\b[^>]*>[\s\S]*?<a:ext )cx="\d+" cy="\d+"/, `$1cx="${cx}" cy="${cy}"`);
+        changed++;
+      }
+    }
+    out += xml.slice(last, x.m.index) + d;
+    last = x.m.index + x.m[0].length;
+  }
+  r.xml = out + xml.slice(last);
+  r.spans = paragraphSpans(r.xml);
+  return { side, changed };
+}
+
 /** The changed report as a file. */
 export async function saveReport(r) {
   r.zip.file("word/document.xml", r.xml, NO_FOLDERS);
