@@ -37,7 +37,7 @@ export async function buildDueList(db: SupabaseClient, me: Profile): Promise<Due
     db.from("report_queue").select("checker,due,project_name"),
     db.from("projects").select("id,display_name,next_action,next_action_due,owner_id").not("next_action_due", "is", null).lte("next_action_due", addDays(t, 14)),
     db.from("clerk_compliance").select("clerk_id,dbs_recheck,chartership_renewal,pi_insurance_expiry,pl_insurance_expiry,cscs_expiry,onboarding_started,onboarding_complete,clerks(name,active)"),
-    db.from("tasks").select("id,title,kind,due,link,owner_id,owner_name").is("done_at", null),
+    db.from("tasks").select("id,title,kind,due,link,owner_id,owner_name,ai_note").is("done_at", null),
     db.from("unmatched_diary_sites").select("site_as_typed", { count: "exact", head: true }).is("resolved_project_id", null).eq("ignored", false),
     db.from("unmatched_invoice_refs").select("reference_key", { count: "exact", head: true }),
     db.from("sync_runs").select("source,ok,message,started_at").in("source", ["xero", "diary"]).order("started_at", { ascending: false }).limit(10),
@@ -305,7 +305,7 @@ export async function buildDueList(db: SupabaseClient, me: Profile): Promise<Due
 
   // ---- tasks people added
   for (const k of (tasks.data ?? []).filter((k) => director || !(k.kind ?? "").startsWith("Work list"))) // Ronan's Todoist work list is his own
-    items.push({ key: `task-${k.id}`, kind: "Task", title: k.title, detail: k.kind ?? undefined, due: k.due, link: k.link ?? undefined, taskId: k.id, ...ownerOf(k.owner_id, k.owner_name ?? null) });
+    items.push({ key: `task-${k.id}`, kind: "Task", title: k.title, detail: [k.kind, k.ai_note].filter(Boolean).join(" · ") || undefined, due: k.due, link: k.link ?? undefined, taskId: k.id, ...ownerOf(k.owner_id, k.owner_name ?? null) });
 
   return items.sort((a, b) => (a.due ?? "9999").localeCompare(b.due ?? "9999") || a.title.localeCompare(b.title));
 }

@@ -57,6 +57,9 @@ async function send(cmds: Cmd[]) {
   return out;
 }
 
+/** Raw Todoist commands (used to add comments to cards). */
+export async function todoistCommands(cmds: Cmd[]) { return send(cmds); }
+
 const finished = (i: Item) => !!i.checked || !!i.completed_at || !!i.is_deleted;
 const firstOf = (name: string) => name.trim().split(/[\s']/)[0].toLowerCase();
 
