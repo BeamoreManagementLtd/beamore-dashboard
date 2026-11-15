@@ -7,6 +7,7 @@ const TABS: [string, string][] = [
   ["/portal/invoices", "Invoices"],
   ["/portal/insurance", "Insurance"],
   ["/portal/certificates", "Certificates & qualifications"],
+  ["/portal/details", "My details"],
 ];
 
 export function PortalNav() {

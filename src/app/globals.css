@@ -231,3 +231,7 @@ a.pcard:hover{transform:translateY(-2px);box-shadow:0 6px 18px rgba(0,0,0,.07)}
 .ask-turn.assistant{white-space:normal}
 .ask-answer>div{min-height:1em}
 .ask-li{padding-left:14px;text-indent:-12px}
+.onboard-result{display:flex;flex-direction:column;gap:10px}
+.steps-done{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:4px}
+.steps-done li.ok{color:var(--good)}
+.steps-done li.no{color:var(--warn)}

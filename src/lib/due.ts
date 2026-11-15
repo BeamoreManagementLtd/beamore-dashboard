@@ -298,7 +298,7 @@ export async function buildDueList(db: SupabaseClient, me: Profile): Promise<Due
     const { data: gc } = await db.rpc("google_connection_status");
     const g = (gc as { connected_at: string }[] | null)?.[0];
     if (g && g.connected_at < GOOGLE_SCOPES_CHANGED_AT)
-      items.push({ key: "google-reconnect", kind: "Xero", title: "Reconnect Google once so the dashboard can make project folders and save email drafts", detail: "Finance → Google → Reconnect. It still never deletes files or sends emails", due: t, link: "/finance", ...ownerOf(me.id, null) });
+      items.push({ key: "google-reconnect", kind: "Xero", title: "Reconnect Google once so the dashboard can set up new clerks' @beamore.co.uk accounts", detail: "Finance → Google → Reconnect, and allow it to manage users. It still never deletes files or sends emails", due: t, link: "/finance", ...ownerOf(me.id, null) });
   }
 
   // ---- a sync that's failing (director only: it's about the connections)

@@ -2,7 +2,9 @@ import Link from "next/link";
 import { requireProfile } from "@/lib/auth";
 import { createClient } from "@/lib/supabase/server";
 import { fd, today } from "@/lib/format";
-import { addAbsence, cancelAbsence, addNewClerk } from "./actions";
+import { addAbsence, cancelAbsence } from "./actions";
+import { NewClerkForm } from "./new-clerk-form";
+import { setManual } from "./new-clerk";
 import { dismissApplication } from "../projects/actions";
 
 export const dynamic = "force-dynamic";
@@ -12,7 +14,7 @@ const DBS: Record<string, [string, string]> = {
 };
 
 export default async function Personnel({ searchParams }: { searchParams: Promise<{ show?: string; project?: string; name?: string; role?: string }> }) {
-  await requireProfile();
+  const me = await requireProfile();
   const { show, project, name, role } = await searchParams;
   const db = await createClient();
   const t = today();
@@ -69,19 +71,17 @@ export default async function Personnel({ searchParams }: { searchParams: Promis
             <p className="small muted">To shortlist someone for a job, open the job and use Find a clerk.</p>
           </details>
         )}
-        <form action={addNewClerk} className="row">
-          <div className="field"><label htmlFor="nn">Name (as it will appear in the diary)</label><input id="nn" name="name" required defaultValue={name ?? ""} /></div>
-          <div className="field"><label htmlFor="ne">Email</label><input id="ne" name="email" type="email" /></div>
-          <div className="field"><label htmlFor="np">Phone</label><input id="np" name="phone" /></div>
-          <div className="field"><label htmlFor="nj">Appointed for</label>
-            <select id="nj" name="project_id" defaultValue={project ?? ""}>
-              <option value="">No particular project</option>
-              {(wonProjects ?? []).map((p) => <option key={p.id} value={p.id}>{p.display_name}</option>)}
-            </select></div>
-          <div className="field"><label htmlFor="nr">As</label>
-            <select id="nr" name="role" defaultValue={role === "me" ? "me" : "building"}><option value="building">Building clerk</option><option value="me">M&amp;E clerk</option></select></div>
-          <button className="btn primary">Add and start onboarding</button>
-        </form>
+        <NewClerkForm projects={(wonProjects ?? []) as { id: string; display_name: string }[]} director={me.role === "director"} defaultName={name} defaultProject={project} defaultRole={role} />
+        {me.role === "director" && await (async () => {
+          const { data: st } = await db.from("onboarding_settings").select("manual_file_id").eq("id", 1).maybeSingle();
+          return (
+            <form action={setManual} className="row" style={{ marginTop: 10, alignItems: "flex-end" }}>
+              <div className="field" style={{ flex: "3 1 320px" }}><label htmlFor="man">Beamore manual (Drive link): every new clerk gets access to it</label>
+                <input id="man" name="manual" defaultValue={st?.manual_file_id ? `https://drive.google.com/file/d/${st.manual_file_id}/view` : ""} placeholder="paste the manual's Google Drive link when Andy's finished it" /></div>
+              <button className="btn">Save</button>
+            </form>
+          );
+        })()}
       </section>
       {missingDbs > 0 && <p className="callout warn">{missingDbs} clerk{missingDbs > 1 ? "s" : ""} working with us {missingDbs > 1 ? "have" : "has"} no DBS record in the dashboard yet.</p>}
       <section className="panel">

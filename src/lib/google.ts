@@ -6,9 +6,9 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 // ever creates folders and files; it never deletes, moves or trashes. Gmail: read (chases, replies) and compose, used
 // only to save drafts in the Drafts folder. The dashboard never sends anything (Ronan's rule).
 export const GOOGLE_SCOPES = process.env.GOOGLE_SCOPES ??
-  "openid email https://www.googleapis.com/auth/drive https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.compose";
-/** Connections made before this lack drive.file and gmail.compose (project folders, drafts). */
-export const GOOGLE_SCOPES_CHANGED_AT = "2026-11-14T20:40:30Z";
+  "openid email https://www.googleapis.com/auth/drive https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.compose https://www.googleapis.com/auth/admin.directory.user";
+/** Connections made before this can't create @beamore.co.uk accounts for new clerks (Admin SDK, 15 Nov 2026). */
+export const GOOGLE_SCOPES_CHANGED_AT = "2026-11-15T17:00:00Z";
 
 type Tokens = { access_token: string; refresh_token?: string; expires_in: number; id_token?: string };
 

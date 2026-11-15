@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import { createServiceClient } from "@/lib/supabase/server";
 import { requirePortalUser } from "@/lib/portal/auth";
 import { myUploads, myPolicies, insuranceSummary, fmtDate, clerkStatus } from "@/lib/portal/data";
@@ -20,6 +21,8 @@ export default async function PortalHome() {
     myPolicies(db, me.clerk.id),
     db.from("clerk_compliance").select("cscs_expiry,chartership_body,chartership_renewal").eq("clerk_id", me.clerk.id).maybeSingle(),
   ]);
+  const { data: done } = await db.from("clerk_compliance").select("details_completed_at").eq("clerk_id", me.clerk.id).maybeSingle();
+  if (!done?.details_completed_at && !me.viewingAs) redirect("/portal/details");
   const ins = insuranceSummary(policies);
   const lastMonth = new Date(new Date().getFullYear(), new Date().getMonth() - 1, 15).toISOString().slice(0, 7);
   const invoices = uploads.filter((u) => u.kind === "invoice");
