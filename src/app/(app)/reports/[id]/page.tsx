@@ -6,6 +6,7 @@ import { fd, fdt } from "@/lib/format";
 import { draftFor } from "@/lib/reports/pipeline";
 import { userConnection } from "@/lib/google-user";
 import { EXAMPLES, PROGRAMME_METHOD, SUMMARY_METHOD } from "@/lib/reports/examples";
+import { STANDARDS, STANDARD_KEYS, type StandardsMet } from "@/lib/reports/standards";
 import { assignChecker, sendReport, markDone, ignoreReport, checkAgain, sendClerkEmail } from "../actions";
 
 export const dynamic = "force-dynamic";
@@ -34,13 +35,15 @@ function clerkNote(r: Record<string, unknown>, sender: string) {
   const programmeIssue = allIssues.some((i) => i.kind === "programme" && i.severity !== "low");
   const dfe = ((f as { programme?: { dfe?: boolean } | null }).programme?.dfe) !== false;
   const programmeHelp = programmeIssue && dfe, summaryHelp = programmeIssue && !dfe;
+  const st = (f as { standards?: StandardsMet | null }).standards ?? {};
+  const missed = STANDARD_KEYS.filter((s) => st[s] === false && !(s === "summary" && summaryHelp));
   const tips = ((r.clerk_points ?? []) as string[]).filter((t) => t && !(programmeIssue && /^Progress (vs programme|summary)/i.test(t)));
   const photoHelp = !!(f.mixed || f.stretched || f.enlarged || allIssues.some((i) => i.kind === "photos" && i.severity !== "low"));
   const detailHelp = allIssues.some((i) => i.kind === "vague" && i.severity !== "low");
-  if (!fixed.length && !tips.length) return `Hi ${clerk},\n\nThanks for your report (${r.file_name}). It needed no changes before it went out. Great work.\n\nKind regards,\n${sender}`;
+  if (!fixed.length && !tips.length && !missed.length) return `Hi ${clerk},\n\nThanks for your report (${r.file_name}). It needed no changes before it went out. Great work.\n\nKind regards,\n${sender}`;
   return [
     `Hi ${clerk},`, "",
-    `Thanks for your report (${r.file_name}). A few things needed fixing before it went to the client:`,
+    fixed.length ? `Thanks for your report (${r.file_name}). A few things needed fixing before it went to the client:` : `Thanks for your report (${r.file_name}). It needed no changes before it went to the client.`,
     ...fixed.map((x) => `- ${x}`),
     ...(tips.length ? ["", "For your next reports, it would help if you could:", ...tips.map((x) => `- ${x}`)] : []),
     // pictures from Christian's report where they'd help (the line becomes the picture when it's sent)
@@ -48,6 +51,8 @@ function clerkNote(r: Record<string, unknown>, sender: string) {
     ...(detailHelp ? ["", EXAMPLES.detail.intro, EXAMPLES.detail.marker] : []),
     ...(programmeHelp ? ["", "The progress vs programme section is one clients look at closely, and we've had feedback on it, so please follow this every time.", ...PROGRAMME_METHOD, "", EXAMPLES.programme.intro, EXAMPLES.programme.marker] : []),
     ...(summaryHelp ? ["", ...SUMMARY_METHOD] : []),
+    // the best bits of everyone's reports this one doesn't do yet (standards.ts)
+    ...(missed.length ? ["", "We want every report to have the best bits of the whole team's. To get yours there:", ...missed.map((s) => `- ${STANDARDS[s].tip} (have a look at ${STANDARDS[s].from})`)] : []),
     "", "Any questions, just give me a shout.", "", "Kind regards,", sender,
   ].join("\n");
 }

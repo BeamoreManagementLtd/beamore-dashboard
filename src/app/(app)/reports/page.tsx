@@ -4,6 +4,7 @@ import { createClient } from "@/lib/supabase/server";
 import { fd, fdt, today } from "@/lib/format";
 import { loadHolidays, addWorkingDays, workingDaysBetween, rag } from "@/lib/reports/days";
 import { refreshReports } from "./actions";
+import { STANDARDS, STANDARD_KEYS, standardsShare, type StandardKey, type StandardsMet } from "@/lib/reports/standards";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 120;
@@ -28,7 +29,7 @@ export default async function Reports({ searchParams }: { searchParams: Promise<
     db.from("reports").select("id,file_name,folder_name,project_id,project_folder_name,kind,visit_date,uploaded_at,status,issues,checker_id,error,clerks(name),projects(name)").in("status", OPEN).order("uploaded_at"),
     db.from("report_settings").select("clerk_days,team_days").eq("id", 1).single(),
     db.from("profiles").select("id,full_name,email").order("full_name"),
-    db.from("reports").select("id,clerk_id,clerk_name,visit_date,uploaded_at,done_at,sent_at,sent_by,status,issues,spelling_fixed,score,clerks(name)").in("status", ["sent", "done", ...OPEN]).gte("uploaded_at", monthStart),
+    db.from("reports").select("id,clerk_id,clerk_name,visit_date,uploaded_at,done_at,sent_at,sent_by,status,issues,spelling_fixed,score,fixes,clerks(name)").in("status", ["sent", "done", ...OPEN]).gte("uploaded_at", monthStart),
     db.from("sync_runs").select("finished_at,ok,message").eq("source", "report-check").order("started_at", { ascending: false }).limit(1),
     db.from("report_turnaround").select("*").gte("month", new Date(Date.UTC(+t.slice(0, 4), +t.slice(5, 7) - 6, 1)).toISOString().slice(0, 10)),
     db.from("diary_visits").select("project_id,visit_date,projects(name,stage)").eq("side", "charged").gte("visit_date", addDays(t, -14)).lte("visit_date", addDays(t, -2)),
@@ -67,11 +68,15 @@ export default async function Reports({ searchParams }: { searchParams: Promise<
 
   // timings this month: clerks (visit → upload) and checkers (upload → sent)
   const dm = doneMonth ?? [];
-  const byClerk = new Map<string, { n: number; days: number; timed: number; late: number; issues: number; spelling: number; score: number; scored: number }>();
+  const byClerk = new Map<string, { n: number; days: number; timed: number; late: number; issues: number; spelling: number; score: number; scored: number; best: number; bestN: number; missed: Partial<Record<StandardKey, number>> }>();
   for (const r of dm) {
     const k = (r.clerks as unknown as { name?: string } | null)?.name ?? r.clerk_name ?? "Unknown";
-    const x = byClerk.get(k) ?? { n: 0, days: 0, timed: 0, late: 0, issues: 0, spelling: 0, score: 0, scored: 0 };
+    const x = byClerk.get(k) ?? { n: 0, days: 0, timed: 0, late: 0, issues: 0, spelling: 0, score: 0, scored: 0, best: 0, bestN: 0, missed: {} };
     if (typeof r.score === "number") { x.score += r.score; x.scored++; }
+    // the team's best practices (standards.ts): how many this clerk hits, and which they miss most
+    const st = (r.fixes as { standards?: StandardsMet } | null)?.standards;
+    const share = standardsShare(st);
+    if (share !== null) { x.best += share; x.bestN++; for (const s of STANDARD_KEYS) if (st?.[s] === false) x.missed[s] = (x.missed[s] ?? 0) + 1; }
     x.n++; x.issues += ((r.issues ?? []) as Issue[]).filter((i) => i.severity !== "low").length; x.spelling += r.spelling_fixed ?? 0;
     if (r.visit_date) { const d = workingDaysBetween(r.visit_date, r.uploaded_at.slice(0, 10), h); x.days += d; x.timed++; if (d > clerkDays) x.late++; }
     byClerk.set(k, x);
@@ -148,12 +153,14 @@ export default async function Reports({ searchParams }: { searchParams: Promise<
       <div className="grid2">
         <section className="panel">
           <h3>Clerks: scorecard</h3>
-          <p className="small muted">Days from visit to upload, reports late, issues and spelling fixes per report, and the average quality score (100 = nothing needed fixing).</p>
+          <p className="small muted">Days from visit to upload, reports late, issues and spelling fixes per report, the average quality score (100 = nothing needed fixing), and how many of the team&apos;s {STANDARD_KEYS.length} best practices their reports hit, with the one they miss most.</p>
           {!byClerk.size ? <p className="empty">No reports this month yet.</p> : (
-            <table><thead><tr><th>Clerk</th><th className="num">Reports</th><th className="num">Average days</th><th className="num">Late</th><th className="num">Issues per report</th><th className="num">Spelling fixes</th><th className="num" title="Average quality score out of 100: how little needed fixing">Score</th></tr></thead>
+            <table><thead><tr><th>Clerk</th><th className="num">Reports</th><th className="num">Average days</th><th className="num">Late</th><th className="num">Issues per report</th><th className="num">Spelling fixes</th><th className="num" title="Average quality score out of 100: how little needed fixing">Score</th><th className="num" title={`Of the team's best practices: ${STANDARD_KEYS.map((s) => STANDARDS[s].label).join(", ")}`}>Best practice</th><th>Most missed</th></tr></thead>
               <tbody>{[...byClerk].sort((a, b) => (b[1].timed ? b[1].days / b[1].timed : 0) - (a[1].timed ? a[1].days / a[1].timed : 0)).map(([k, x]) => (
                 <tr key={k}><td>{k}</td><td className="num">{x.n}</td><td className={`num ${x.timed && x.days / x.timed > clerkDays ? "neg" : ""}`}>{x.timed ? (x.days / x.timed).toFixed(1) : "—"}</td>
-                  <td className={`num ${x.late ? "neg" : ""}`}>{x.late}</td><td className="num">{(x.issues / x.n).toFixed(1)}</td><td className="num">{x.spelling}</td><td className={`num ${x.scored && x.score / x.scored < 65 ? "neg" : ""}`}>{x.scored ? Math.round(x.score / x.scored) : "—"}</td></tr>
+                  <td className={`num ${x.late ? "neg" : ""}`}>{x.late}</td><td className="num">{(x.issues / x.n).toFixed(1)}</td><td className="num">{x.spelling}</td><td className={`num ${x.scored && x.score / x.scored < 65 ? "neg" : ""}`}>{x.scored ? Math.round(x.score / x.scored) : "—"}</td>
+                  <td className={`num ${x.bestN && x.best / x.bestN < 0.6 ? "neg" : ""}`}>{x.bestN ? `${Math.round((x.best / x.bestN) * STANDARD_KEYS.length)}/${STANDARD_KEYS.length}` : "—"}</td>
+                  <td className="small">{(() => { const top = (Object.entries(x.missed) as [StandardKey, number][]).sort((a, b) => b[1] - a[1])[0]; return top ? STANDARDS[top[0]].label : "—"; })()}</td></tr>
               ))}</tbody></table>
           )}
         </section>

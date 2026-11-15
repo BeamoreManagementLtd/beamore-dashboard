@@ -12,10 +12,12 @@ import { readReport, photoStats, shrinkPhotos, trackSpelling, addComments, saveR
  * not just what's left for the team: issues, spelling, the file name, mixed photo sizes, sideways, stretched or
  * oversized photos.
  */
-export function qualityScore(issues: { severity: string }[], spelling: number, lateDays: number, f: { renamed?: boolean; mixedPhotos?: boolean; rotated?: number; stretched?: number; oversized?: boolean } = {}) {
+export function qualityScore(issues: { severity: string }[], spelling: number, lateDays: number, f: { renamed?: boolean; mixedPhotos?: boolean; rotated?: number; stretched?: number; oversized?: boolean; standardsMissed?: number } = {}) {
   const w = { high: 15, medium: 6, low: 2 } as Record<string, number>;
   const off = issues.reduce((n, i) => n + (w[i.severity] ?? 0), 0) + Math.min(10, spelling) + Math.min(15, lateDays * 5)
-    + (f.renamed ? 5 : 0) + (f.mixedPhotos ? 5 : 0) + Math.min(9, (f.rotated ?? 0) * 3) + Math.min(6, (f.stretched ?? 0) * 2) + (f.oversized ? 3 : 0);
+    + (f.renamed ? 5 : 0) + (f.mixedPhotos ? 5 : 0) + Math.min(9, (f.rotated ?? 0) * 3) + Math.min(6, (f.stretched ?? 0) * 2) + (f.oversized ? 3 : 0)
+    // each of the team's best practices not met (standards.ts)
+    + 2 * (f.standardsMissed ?? 0);
   return Math.max(0, 100 - off);
 }
 import { checkReport, type Issue, type Programme } from "./check";
@@ -268,9 +270,9 @@ export async function checkOne(admin: SupabaseClient, id: string) {
     status: "ready", ai_summary: ai.summary, issues, spelling_fixed: spelt.applied,
     photos: { count: stats.count, blurry: stats.blurry, smallOnPage: stats.smallOnPage, stretched: stats.stretched, shrunk: shrunk.changed, rotated: rotated.length, reused, usual, uncaptioned: uncaptioned(r) },
     photo_hashes: hashes, photo_count: stats.count,
-    fixes: { spelling: applied, rotated: rotated.length, shrunk: shrunk.changed, stretched: shapes.stretched, enlarged: shapes.enlarged, uniform: uniform.changed, mixed: !uniform.wasUniform, side_cm: uniform.side ? +(uniform.side / 360000).toFixed(1) : null, renamed: renamedTo, words, programme: prog ?? null },
+    fixes: { spelling: applied, rotated: rotated.length, shrunk: shrunk.changed, stretched: shapes.stretched, enlarged: shapes.enlarged, uniform: uniform.changed, mixed: !uniform.wasUniform, side_cm: uniform.side ? +(uniform.side / 360000).toFixed(1) : null, renamed: renamedTo, words, programme: prog ?? null, standards: ai.standards ?? null },
     // lateness is shown on its own on the Reports page
-    score: qualityScore(issues, spelt.applied, 0, { renamed: !!renamedTo, mixedPhotos: !uniform.wasUniform, rotated: rotated.length, stretched: stats.stretched, oversized: shrunk.changed > 0 && raw.length > 10_000_000 }),
+    score: qualityScore(issues, spelt.applied, 0, { renamed: !!renamedTo, mixedPhotos: !uniform.wasUniform, rotated: rotated.length, stretched: stats.stretched, oversized: shrunk.changed > 0 && raw.length > 10_000_000, standardsMissed: Object.values(ai.standards ?? {}).filter((v) => v === false).length }),
     clerk_points: [
       ...(renamedTo ? [`Name your reports the same way as the others in the folder, e.g. "${renamedTo.replace(/\.docx?$/i, "")}"`] : []),
       ...(!uniform.wasUniform ? ["Keep all photos the same size: about 6 cm wide (6 x 4.5 cm landscape, 4.5 x 6 cm portrait), two to a line"] : []),

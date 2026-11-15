@@ -1,5 +1,6 @@
 import "server-only";
 import Anthropic from "@anthropic-ai/sdk";
+import { STANDARDS, STANDARD_KEYS, type StandardsMet } from "./standards";
 
 /**
  * The AI read of one report (Ronan, 15 Nov 2026): spelling fixes to put in as tracked changes, and the issues a
@@ -14,6 +15,8 @@ export type Check = {
   spelling: { p: number; find: string; replace: string }[]; issues: Issue[];
   rotate: { photo: number; degrees: 90 | 180 | 270 }[]; clerk_points: string[];
   programme: Programme;
+  /** which of the team's best practices (standards.ts) this report meets */
+  standards: StandardsMet;
 };
 /**
  * How the report's progress reporting measures up (Ronan, 15 Nov 2026). DfE reports (TAS2025 / TAS21 forms): the
@@ -29,7 +32,7 @@ export type Programme = {
 
 const str = { type: "string" }, nstr = { type: ["string", "null"] };
 const SCHEMA = {
-  type: "object", additionalProperties: false, required: ["summary", "visit_date", "report_number", "clerk_name", "spelling", "issues", "rotate", "clerk_points", "programme"],
+  type: "object", additionalProperties: false, required: ["summary", "visit_date", "report_number", "clerk_name", "spelling", "issues", "rotate", "clerk_points", "programme", "standards"],
   properties: {
     summary: { type: "string", description: "One or two plain sentences for the checker: is it fit to send, and the main thing to look at" },
     visit_date: { ...nstr, description: "Visit date this report covers, YYYY-MM-DD (the last one if several)" },
@@ -53,6 +56,10 @@ const SCHEMA = {
       items: { type: "object", additionalProperties: false, required: ["photo", "degrees"], properties: { photo: { type: "integer", description: "Photo number as labelled" }, degrees: { type: "integer", enum: [90, 180, 270], description: "Clockwise turn to make it upright" } } },
     },
     clerk_points: { type: "array", items: str, description: "Up to 5 short, friendly, specific points for the clerk to do better next time (not spelling)" },
+    standards: {
+      type: "object", additionalProperties: false, required: STANDARD_KEYS, description: "Whether this report meets each of the team's best practices (true = clearly does)",
+      properties: Object.fromEntries(STANDARD_KEYS.map((k) => [k, { type: "boolean", description: STANDARDS[k].test }])),
+    },
     programme: {
       type: "object", additionalProperties: false, description: "Progress reporting judged against Beamore's standard (DfE: the progress vs programme method; others: the progress summary)",
       required: ["dfe", "verdict", "items", "programme_named", "per_item_weeks", "critical_path", "narrative", "overall_weeks", "percentages_shown", "looks_from_site_team", "p", "note"],
@@ -84,6 +91,8 @@ const STANDARD = `What good looks like at Beamore (from the best clerks' reports
 - Issues found say what needs doing and by whom, and urgent safety issues are flagged for the client straight away.
 - A weekly site diary is typically 1,800-5,000 words with 35-50 photos covering the areas described.
 - Visit date(s) stated, report numbered in sequence, CoW name filled in, standard boxes completed.
+- Ronan wants every clerk doing all of the best bits of the team's reports:
+${STANDARD_KEYS.map((k) => `  * ${STANDARDS[k].label}: ${STANDARDS[k].test} (best seen in ${STANDARDS[k].from})`).join("\n")}
 - DfE reports (TAS2025 / TAS21 forms): "Progress vs programme (and the causes of any delays)" is done the Beamore way (Ronan's instruction to all clerks, agreed with Mott MacDonald and the DfE):
   * say which programme it's measured against (title, revision, date);
   * 8-10 activities from that programme, preferably on the critical path;
@@ -144,7 +153,8 @@ ${STANDARD}
  Severity: high = must be fixed or looked at before it goes; medium = should be fixed; low = minor.
 Give the paragraph number when an issue is about one place. Don't repeat spelling fixes as issues.
 3. rotate: attached photos (labelled Photo 1, 2...) that are on their side or upside down.
-4. clerk_points: what this clerk could do better next time, judged against the standard above: specific, friendly, no more than 5, not about spelling.
+4. clerk_points: what this clerk could do better next time, judged against the standard above: specific, friendly, no more than 5, not about spelling, and not repeating the best practices or the progress section (those are added separately).
+4b. standards: for each of the team's best practices, whether this report clearly meets it. Monthly reports can summarise the weekly diaries, so judge "people" and "follow_up" against what a monthly report would hold.
 5. programme: say whether it's a DfE report, then judge its progress reporting against the right standard above. For DfE be strict, item by item: no programme named, fewer than 8 activities, activities with no weeks, percentages instead of weeks, or a synopsis under 5-6 lines with no overall view, is "weak".`;
   const content: Anthropic.ContentBlockParam[] = [
     { type: "text", text: `${facts}\n\n${input.previous ? `PREVIOUS REPORT (for comparison, start of it):\n${input.previous.text.slice(0, 8000)}\n\n` : ""}THIS REPORT:\n${body}` },
