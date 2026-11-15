@@ -3,7 +3,7 @@
 #    at the bottom), moved by Excel itself so each block keeps its formulas, colours and merged name cell
 #  - a block for each new clerk (a copy of an ordinary clerk's block), added to the Total Subcontractors sums
 #  - estimated profit from the grey (planned) side, beside the actual profit
-# Usage: powershell -File scriptsarrange-diary-clerks.ps1 -In "Diary 2027 built.xlsx" -Out "Diary 2027.xlsx" -NewClerks 'Ben Lacey','Paul Hankin'
+# Usage: powershell -File scripts/arrange-diary-clerks.ps1 -In "Diary 2027 built.xlsx" -Out "Diary 2027.xlsx" -NewClerks 'Ben Lacey','Paul Hankin'
 param([Parameter(Mandatory)][string]$In, [Parameter(Mandatory)][string]$Out, [string[]]$NewClerks = @())
 $ErrorActionPreference = 'Stop'
 $Months = @('January','February','March','April','May','June','July','August','September','October','November','December')
