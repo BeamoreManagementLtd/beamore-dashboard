@@ -66,7 +66,8 @@ export function parseDiary(wb, { year = 2026, fileLabel = "Diary 2026.xlsx" } = 
         const row = ws.getRow(r);
         const nameCell = row.getCell(nameCol);
         // the clerk's name is merged down the whole block: only its top cell starts a block
-        const name = nameCell.isMerged && nameCell.master.address !== nameCell.address ? "" : str(nameCell);
+        // the first line is the person; a company may follow on a second line, e.g. "Joe Bloggs" then "(Link Contracting Ltd)"
+        const name = nameCell.isMerged && nameCell.master.address !== nameCell.address ? "" : str(nameCell).split(/\r?\n/)[0].trim();
         if (/^1st location$/i.test(str(row.getCell(s)))) { flush(); continue; }
         if (name && !HEADER.test(name) && isNaN(Number(name))) {
           flush();

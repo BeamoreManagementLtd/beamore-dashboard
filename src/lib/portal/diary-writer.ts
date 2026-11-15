@@ -228,3 +228,82 @@ export async function writePendingToDiary(admin: SupabaseClient) {
   }
   return written;
 }
+
+// ---------------------------------------------------------------- company names under clerks' names (Ronan, 15 Nov 2026)
+const COMPANYISH = /\b(ltd|limited|llp|plc|group|associates|contracting|contractors|services|solutions|consult\w*|inspections?|surveys?|management|construction|partnership|& sons?|and sons?)\b/i;
+
+/** The company to show under a person's name, if they invoice through one (their own name as a sole trader doesn't count). */
+export function companyLabel(person: string, companies: string[]) {
+  const last = norm(person.split(/\s+/).at(-1) ?? "");
+  const firm = companies.filter((c) => COMPANYISH.test(c) || !norm(c).includes(last));
+  const seen = new Map<string, string>();
+  for (const c of firm) {
+    const k = norm(c.replace(/\b(ltd|limited)\b\.?/gi, ""));
+    const cur = seen.get(k);
+    if (!cur || (/\b(ltd|limited)\b/i.test(c) && !/\b(ltd|limited)\b/i.test(cur))) seen.set(k, c);
+  }
+  return seen.size ? [...seen.values()].join(" / ") : null;
+}
+
+/**
+ * Puts each clerk's own company in brackets on a second line under their name, in both name columns of every month
+ * from November 2026 ("Joe Bloggs" + "(Link Contracting Ltd)"). The first line, the person, is never changed. Companies
+ * someone only works through (e.g. an agency) aren't shown. Same care as invoice writing: only those cells change.
+ */
+export async function labelDiaryCompanies(admin: SupabaseClient, { write = true } = {}) {
+  const { data: links } = await admin.from("clerk_companies").select("company_name,clerks(name)").eq("kind", "own").eq("status", "Enabled");
+  const byPerson = new Map<string, string[]>();
+  for (const l of links ?? []) {
+    const n = (l.clerks as unknown as { name: string } | null)?.name;
+    if (n) byPerson.set(norm(n), [...(byPerson.get(norm(n)) ?? []), l.company_name]);
+  }
+  const g = await driveClient(admin);
+  const fileId = g.connection.diary_file_id as string | null;
+  if (!fileId) return { changed: 0, note: "Diary not found yet" };
+  const meta = await g.json<{ modifiedTime: string; headRevisionId: string }>(`files/${fileId}`, { fields: "modifiedTime,headRevisionId", supportsAllDrives: "true" });
+  if (write && Date.now() - Date.parse(meta.modifiedTime) < QUIET_MS) return { changed: 0, note: "Diary changed in the last 10 minutes; try later" };
+  const raw = Buffer.from(await g.download(fileId));
+  const wb = await loadWorkbook(raw);
+  const changes: { sheet: string; ref: string; value: string }[] = [];
+  for (let m = Number(FIRST_WRITABLE.slice(5)) - 1; m < 12; m++) {
+    const ws = wb.getWorksheet(MONTHS[m]);
+    if (!ws) continue;
+    const starts: number[] = [];
+    ws.getRow(2).eachCell((c, col) => { if (/^1st location$/i.test(String(cellVal(c) ?? "").trim())) starts.push(col); });
+    for (const s of starts) {
+      for (let r = 3; r <= ws.rowCount; r++) {
+        const c = ws.getCell(r, s - 2);
+        if (c.isMerged && c.master.address !== c.address) continue; // only the top cell of each merged name block
+        const v = cellVal(c);
+        if (typeof v !== "string" || !v.trim()) continue;
+        const person = v.split(/\r?\n/)[0].trim();
+        const company = companyLabel(person, byPerson.get(norm(person)) ?? []);
+        if (!company) continue;
+        const want = `${person}\n(${company})`;
+        if (v.trim() !== want) changes.push({ sheet: MONTHS[m], ref: c.address, value: want });
+      }
+    }
+  }
+  if (!changes.length || !write) return { changed: changes.length, note: changes.map((c) => `${c.sheet} ${c.ref}: ${c.value.replace("\n", " ")}`).join("; ") };
+
+  const zip = await JSZip.loadAsync(raw);
+  const wbXml = await zip.file("xl/workbook.xml")!.async("string");
+  const rels = await zip.file("xl/_rels/workbook.xml.rels")!.async("string");
+  for (const sheet of [...new Set(changes.map((c) => c.sheet))]) {
+    const rid = new RegExp(String.raw`<(?:\w+:)?sheet\b[^>]*name="${sheet}"[^>]*r:id="([^"]+)"`).exec(wbXml)?.[1];
+    const target = rid && (new RegExp(String.raw`<Relationship\b[^>]*Id="${rid}"[^>]*Target="([^"]+)"`).exec(rels)?.[1] ?? new RegExp(String.raw`<Relationship\b[^>]*Target="([^"]+)"[^>]*Id="${rid}"`).exec(rels)?.[1]);
+    if (!target) throw new Error(`can't find the ${sheet} sheet inside the file`);
+    const p = target.startsWith("/") ? target.slice(1) : `xl/${target}`;
+    let xml = await zip.file(p)!.async("string");
+    for (const c of changes.filter((x) => x.sheet === sheet)) xml = setCell(xml, c.ref, c.value);
+    zip.file(p, xml);
+  }
+  const out = await zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE", compressionOptions: { level: 6 } });
+  const now = await g.json<{ headRevisionId: string }>(`files/${fileId}`, { fields: "headRevisionId", supportsAllDrives: "true" });
+  if (now.headRevisionId !== meta.headRevisionId) return { changed: 0, note: "The diary changed while preparing; try later" };
+  await g.replaceContent(fileId, out, XLSX);
+  const after = await g.json<{ md5Checksum: string }>(`files/${fileId}`, { fields: "md5Checksum", supportsAllDrives: "true" });
+  if (after.md5Checksum !== createHash("md5").update(out).digest("hex")) throw new Error("The diary on Drive doesn't match what was saved");
+  await admin.from("portal_audit").insert({ actor: "dashboard", action: "diary-company-labels", detail: { changes } });
+  return { changed: changes.length, note: `${changes.length} name cells labelled` };
+}

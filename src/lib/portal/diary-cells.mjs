@@ -11,7 +11,7 @@ export function setCell(xml, ref, text) {
   if (m.length !== 1) throw new Error(`cell ${ref} isn't in the sheet as expected`);
   const [whole, pre, a, b] = m[0];
   const attrs = `${a} r="${ref}"${b}`.replace(/\s+t="[^"]*"/, "").replace(/\s*\/$/, "");
-  const fresh = `<${pre}c${attrs.startsWith(" ") ? "" : " "}${attrs} t="inlineStr"><${pre}is><${pre}t xml:space="preserve">${escXml(text)}</${pre}t></${pre}is></${pre}c>`;
+  const fresh = `<${pre}c ${attrs.trim().replace(/\s+/g, " ")} t="inlineStr"><${pre}is><${pre}t xml:space="preserve">${escXml(text)}</${pre}t></${pre}is></${pre}c>`;
   return xml.slice(0, m[0].index) + fresh + xml.slice(m[0].index + whole.length);
 }
 
