@@ -6,7 +6,7 @@ import { addAndOnboardClerk, type NewClerkResult } from "./new-clerk";
 type P = { id: string; display_name: string };
 
 /** "Add new clerk": name, personal email, the @beamore.co.uk address to create, and the job they're going on. */
-export function NewClerkForm({ projects, director, defaultName, defaultProject, defaultRole }: { projects: P[]; director: boolean; defaultName?: string; defaultProject?: string; defaultRole?: string }) {
+export function NewClerkForm({ projects, defaultName, defaultProject, defaultRole }: { projects: P[]; director: boolean; defaultName?: string; defaultProject?: string; defaultRole?: string }) {
   const [state, action, busy] = useActionState<NewClerkResult | null, FormData>(addAndOnboardClerk, null);
   const [name, setName] = useState(defaultName ?? "");
   const [beamore, setBeamore] = useState("");
@@ -51,7 +51,7 @@ export function NewClerkForm({ projects, director, defaultName, defaultProject, 
           </select></div>
         <div className="field"><label htmlFor="nr">As</label>
           <select id="nr" name="role" defaultValue={defaultRole === "me" ? "me" : "building"}><option value="building">Building clerk</option><option value="me">M&amp;E clerk</option></select></div>
-        {director && <label className="small" style={{ alignSelf: "center" }}><input type="checkbox" name="create_account" defaultChecked /> Create their @beamore.co.uk Google account</label>}
+        <label className="small" style={{ alignSelf: "center" }}><input type="checkbox" name="create_account" defaultChecked /> Create their @beamore.co.uk Google account</label>
         <label className="small" style={{ alignSelf: "center" }}><input type="checkbox" name="send_welcome" defaultChecked /> Email them now at their current address</label>
       </div>
       <p className="small muted">This creates their account (with their mobile for sign-in checks), shares their Personnel folder, the project folder and the Beamore manual with them, switches on the portal, emails them a welcome (sign-in details, 2-Step Verification, portal, folder, manual) at their current address, or saves it as a draft if you untick that, and puts sending their PPE on your list.</p>

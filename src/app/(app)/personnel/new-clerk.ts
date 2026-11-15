@@ -21,7 +21,7 @@ export async function addAndOnboardClerk(_prev: NewClerkResult | null, form: For
   if (!name) return { ok: false, message: "Add their name." };
   if (!val(form, "phone")) return { ok: false, message: "Add their mobile number (Google needs it for their account)." };
   if (beamore && !/^[a-z0-9._-]+@beamore\.co\.uk$/.test(beamore)) return { ok: false, message: "The Beamore address must end @beamore.co.uk, e.g. gareth.mayoh@beamore.co.uk" };
-  if (createAccount && me.role !== "director") return { ok: false, message: "Only Ronan can create @beamore.co.uk accounts. Untick that box, or ask Ronan." };
+  // any staff member adding a clerk can create their account (Ronan, 15 Nov 2026); it's logged with who did it
   const db = await createClient();
   const { data: clash } = await db.from("clerks").select("id,name").or(`name.ilike.${name},email.ilike.${beamore ?? "-"}`).limit(1);
   if (clash?.length) return { ok: false, message: `${clash[0].name} is already in the dashboard. Open them under Personnel and use Start onboarding there.` };
