@@ -30,7 +30,9 @@ export async function writeDiary(admin, d, label) {
   }
 
   // ---- projects by name or diary spelling, plus sites someone has linked by hand
-  const projects = must(await admin.from("projects").select("id,number,name,diary_aliases"), "projects");
+  const projects = must(await admin.from("projects").select("id,number,name,diary_aliases,details"), "projects");
+  // email lists someone changed on the dashboard that aren't in the diary yet: the diary doesn't overwrite them
+  const listsPending = new Set(projects.filter((p) => p.details?._lists_pending).map((p) => p.id));
   const byNumber = new Map(projects.map((p) => [p.number, p.id]));
   // the diary's Projects tab, when it has one, is where the team now keeps contacts and numbers (15 Nov 2026)
   const tab = d.projectsTab?.length ? d.projectsTab : null;
@@ -189,8 +191,10 @@ export async function writeDiary(admin, d, label) {
     const before = must(await admin.from("invoice_contacts").select("project_id,client_id,notes").not("notes", "is", null), "old notes");
     const noteFor = (r) => before.find((b) => (r.project_id ? b.project_id === r.project_id : !b.project_id && b.client_id === r.client_id))?.notes ?? null;
     for (const r of rows) if (!r.notes) r.notes = noteFor(r);
-    must(await admin.from("invoice_contacts").delete().neq("label", ""), "clear contacts");
-    must(await admin.from("invoice_contacts").insert(rows), "contacts");
+    const keep = [...listsPending];
+    const fresh = rows.filter((r) => !r.project_id || !listsPending.has(r.project_id));
+    must(await (keep.length ? admin.from("invoice_contacts").delete().or(`project_id.is.null,project_id.not.in.(${keep.join(",")})`) : admin.from("invoice_contacts").delete().neq("label", "")), "clear contacts");
+    must(await admin.from("invoice_contacts").insert(fresh), "contacts");
     contacts = new Set(rows.filter((r) => r.project_id || r.client_id).map((r) => r.label)).size;
   }
 
@@ -220,13 +224,14 @@ export async function writeDiary(admin, d, label) {
   const distProjects = new Set();
   if (tab) for (const t of tab) {
     const pid = (t.job && byNumber.get(t.job)) || siteProject(t.project);
-    if (!pid || !t.reportTo.length) continue;
+    if (!pid || !t.reportTo.length || listsPending.has(pid)) continue;
     setP(pid, { report_to: t.reportTo.join("; "), report_cc: t.reportCc.join("; ") || null });
     tick(pid, /distribution list/i, `From the diary (Projects): to ${t.reportTo.join(", ")}${t.reportCc.length ? `; cc ${t.reportCc.join(", ")}` : ""}`);
     distProjects.add(pid);
   }
   for (const e of tab ? [] : d.reportEmails ?? []) {
     const pid = siteProject(e.site);
+    if (pid && listsPending.has(pid)) continue;
     if (!pid) continue;
     setP(pid, { report_to: e.to.join("; "), report_cc: e.cc.join("; ") || null, inspection_frequency: e.inspection, reporting_frequency: e.reporting });
     tick(pid, /distribution list/i, `From the diary (Report emails): to ${e.to.join(", ")}${e.cc.length ? `; cc ${e.cc.join(", ")}` : ""}`);

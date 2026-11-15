@@ -39,7 +39,7 @@ export async function writeProjectsTab(admin: SupabaseClient, { write = true } =
   const files: Record<string, string> = { ...(g.connection.diary_files ?? {}) };
   if (!files["2026"] && g.connection.diary_file_id) files["2026"] = g.connection.diary_file_id;
   const [{ data: projects, error }, { data: clerks }, { data: contacts }] = await Promise.all([
-    admin.from("projects").select("id,number,client_id,display_name,stage,po_number,dfe_project_number,report_to,report_cc,clerk_id,clerk_me_id,clients(name)"),
+    admin.from("projects").select("id,number,client_id,display_name,stage,po_number,dfe_project_number,report_to,report_cc,clerk_id,clerk_me_id,details,clients(name)"),
     admin.from("clerks").select("id,name"),
     admin.from("invoice_contacts").select("project_id,client_id,to_emails,cc_emails,notes"),
   ]);
@@ -48,13 +48,26 @@ export async function writeProjectsTab(admin: SupabaseClient, { write = true } =
   const results: { year: string; changed: number; waiting?: boolean; note: string }[] = [];
   // the newest diary is the one people work in; older years keep their tab as it was
   const year = Object.keys(files).sort().at(-1);
-  if (year) results.push({ year, ...(await writeOne(g, files[year], year, projects ?? [], clerkName, contacts ?? [], write)) });
+  let copied: string[] = [];
+  if (year) { const r = await writeOne(g, files[year], year, projects ?? [], clerkName, contacts ?? [], write); copied = r.copied ?? []; results.push({ year, changed: r.changed, waiting: r.waiting, note: r.note }); }
+  // email list changes made on the dashboard are now in the diary: the diary sync can read those projects again
+  // (only if nobody changed the lists again meanwhile)
+  if (write) for (const id of copied) {
+    const started = (((projects ?? []).find((x) => x.id === id)?.details ?? {}) as { _lists_pending?: { at?: string } })._lists_pending?.at;
+    const { data: now } = await admin.from("projects").select("details").eq("id", id).single();
+    const d = (now?.details ?? {}) as Record<string, unknown> & { _lists_pending?: { at?: string } };
+    if (d._lists_pending?.at !== started) continue;
+    const rest = { ...d };
+    delete rest._lists_pending;
+    await admin.from("projects").update({ details: rest }).eq("id", id);
+  }
   const changed = results.reduce((n, r) => n + r.changed, 0);
   if (write && changed) await admin.from("portal_audit").insert({ actor: "dashboard", action: "diary-projects", detail: { results } });
   return { changed, note: results.map((r) => r.note).filter(Boolean).join("; ") };
 }
 
-type P = { id: string; number: number | null; client_id: string | null; display_name: string; stage: string; po_number: string | null; dfe_project_number: string | null; report_to: string | null; report_cc: string | null; clerk_id: string | null; clerk_me_id: string | null; clients: unknown };
+type P = { id: string; number: number | null; client_id: string | null; display_name: string; stage: string; po_number: string | null; dfe_project_number: string | null; report_to: string | null; report_cc: string | null; clerk_id: string | null; clerk_me_id: string | null; details: unknown; clients: unknown };
+const listsPending = (p: P) => (p.details as Record<string, unknown> | null)?._lists_pending as { invoice?: boolean } | undefined;
 type IC = { project_id: string | null; client_id: string | null; to_emails: unknown; cc_emails: unknown; notes: string | null };
 
 async function writeOne(g: Awaited<ReturnType<typeof driveClient>>, fileId: string, year: string, projects: P[], clerkName: Map<string, string>, contacts: IC[], write: boolean) {
@@ -83,7 +96,8 @@ async function writeOne(g: Awaited<ReturnType<typeof driveClient>>, fileId: stri
   const changes: { ref: string; value: string }[] = [];
   const set = (row: { r: number; v: Record<string, string> }, h: Col, value: string, overwrite = false) => {
     const i = at.get(h);
-    if (i == null || !value || row.v[h] === value || (row.v[h] && !overwrite)) return;
+    // an empty value only ever replaces something when overwriting (someone taken off an email list)
+    if (i == null || row.v[h] === value || (!value && !overwrite) || (row.v[h] && !overwrite)) return;
     changes.push({ ref: `${letter(i)}${row.r}`, value });
     row.v[h] = value;
   };
@@ -99,12 +113,16 @@ async function writeOne(g: Awaited<ReturnType<typeof driveClient>>, fileId: stri
     else if (/\d/.test(n)) set(row, "Project number", n);
     if (/\d/.test(p.po_number ?? "")) set(row, "PO number", p.po_number!);
     set(row, "Clerk of works", clerkOf(p));
-    set(row, "Send reports to", emails(p.report_to));
-    set(row, "CC on reports", emails(p.report_cc));
+    // email lists someone changed on the dashboard replace what's in the diary; otherwise only empty cells are filled
+    const pending = listsPending(p), changed = !!pending;
+    set(row, "Send reports to", emails(p.report_to), changed);
+    set(row, "CC on reports", emails(p.report_cc), changed);
     // only the project's own invoice contact: a company-wide one can belong to a different office or job
     const ic = contacts.find((c) => c.project_id === p.id);
-    if (ic) { set(row, "Send invoice to", emails(ic.to_emails)); set(row, "CC on invoice", emails(ic.cc_emails)); }
+    if (ic || pending?.invoice) { set(row, "Send invoice to", emails(ic?.to_emails), !!pending?.invoice); set(row, "CC on invoice", emails(ic?.cc_emails), !!pending?.invoice); }
+    if (changed) copied.push(p.id);
   };
+  const copied: string[] = [];
 
   const byJob = new Map(rows.filter((x) => x.v["Job no."]).map((x) => [x.v["Job no."], x]));
   for (const p of projects) {
@@ -127,8 +145,8 @@ async function writeOne(g: Awaited<ReturnType<typeof driveClient>>, fileId: stri
     set(spare, "Project", name);
     fill(spare, p);
   }
-  if (!changes.length) return { changed: 0, note: "" };
-  if (!write) return { changed: changes.length, note: changes.map((c) => `${c.ref}=${c.value}`).join("; ") };
+  if (!changes.length) return { changed: 0, note: "", copied };
+  if (!write) return { changed: changes.length, note: changes.map((c) => `${c.ref}=${c.value}`).join("; "), copied: [] as string[] };
 
   const zip = await JSZip.loadAsync(raw);
   const p = await sheetPath(zip, SHEET);
@@ -142,5 +160,5 @@ async function writeOne(g: Awaited<ReturnType<typeof driveClient>>, fileId: stri
   await g.replaceContent(fileId, out, XLSX);
   const after = await g.json<{ md5Checksum: string }>(`files/${fileId}`, { fields: "md5Checksum", supportsAllDrives: "true" });
   if (after.md5Checksum !== createHash("md5").update(out).digest("hex")) throw new Error("The diary on Drive doesn't match what was saved");
-  return { changed: changes.length, note: `Diary ${year}: ${changes.length} Projects cells updated` };
+  return { changed: changes.length, note: `Diary ${year}: ${changes.length} Projects cells updated`, copied };
 }

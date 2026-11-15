@@ -6,6 +6,7 @@ import { gbp, fd, today, daysBetween, CHASE_STATUS } from "@/lib/format";
 import { loadWorkflow } from "@/lib/workflow";
 import { WorkflowPanel } from "./workflow-panel";
 import { FindClerk } from "./find-clerk";
+import { EmailLists } from "./email-lists";
 import { guessFolderKind } from "@/lib/folder-kinds";
 import { saveProject, addAlias, setDfe, startInfoChecklist, addInfoItem, requestOutstanding, setInfoReceived, removeInfoItem, addProjectEvent } from "../actions";
 
@@ -114,7 +115,7 @@ export default async function Project({ params }: { params: Promise<{ id: string
           ["M&E clerk of works", cname(p.clerk_me_id) ?? (p.clerk_me_status === "finding" ? "Finding one" : p.clerk_me_status === "none" ? "None on this job" : null)],
           ["DfE project number", p.dfe_project_number ?? d.dfe_project_number], ["DfE project director", d.dfe_project_director], ["DfE project manager", d.dfe_project_manager],
           ["Technical adviser", d.ta_name && `${d.ta_name}${d.ta_firm ? ` (${d.ta_firm})` : ""}`], ["Principal contractor", d.principal_contractor && `${d.principal_contractor}${d.pc_project_manager ? `, PM ${d.pc_project_manager}` : ""}${d.pc_project_number && !/tbc|not known/i.test(d.pc_project_number) ? `, no. ${d.pc_project_number}` : ""}`],
-          ["Site address", d.site_address], ["PO number", p.po_number], ["Reports go to", p.report_to && `${p.report_to}${p.report_cc ? ` (cc ${p.report_cc})` : ""}`],
+          ["Site address", d.site_address], ["PO number", p.po_number],
           ["Inspections / reports", [p.inspection_frequency, p.reporting_frequency].filter(Boolean).join(" / ") || null],
         ];
         const shown = rowsD.filter(([, v]) => v);
@@ -126,6 +127,8 @@ export default async function Project({ params }: { params: Promise<{ id: string
           </section>
         ) : null;
       })()}
+
+      <EmailLists db={db} projectId={p.id} />
 
       {infoBanner && <p className={`callout ${infoBanner.tone}`}><b>{infoBanner.title}</b> {infoBanner.text}</p>}
       <div className="grid2">
