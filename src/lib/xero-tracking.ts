@@ -31,18 +31,23 @@ export async function setupProjectTracking(admin: SupabaseClient) {
       const r = await xero.put<{ TrackingCategories: Category[] }>("TrackingCategories", { Name: CATEGORY });
       cat = { ...r.TrackingCategories[0], Options: [] };
     }
-    // Xero holds 100 active options, so they rotate (Ronan, 15 Nov 2026): wanted = new wins plus projects invoiced in
-    // the last 3 months, most recent first. Others are archived (kept on old invoices); options never used on an invoice
+    // Xero holds 100 active options, so they rotate (Ronan, 15 Nov 2026): wanted = jobs being set up or starting within
+    // a month, plus live jobs invoiced in the last 3 months or on site in the last 2, most recent first. Others are archived (kept on old invoices); options never used on an invoice
     // can't be archived, so those are deleted when the project is finished, lost or merged away. A quiet project's
     // archived option is brought back when it's invoiced again.
     const since = new Date(Date.now() - 92 * 864e5).toISOString().slice(0, 10);
-    const { data: projs } = await admin.from("projects").select("id,display_name,stage");
+    const { data: projs } = await admin.from("projects").select("id,display_name,stage,start_date,stage_changed_at");
+    const soon = new Date(Date.now() + 30 * 864e5).toISOString().slice(0, 10), visitSince = new Date(Date.now() - 60 * 864e5).toISOString().slice(0, 10);
+    const { data: vis } = await admin.from("project_visit_summary").select("project_id,last_visit,charged_visits");
+    const onSite = new Map((vis ?? []).filter((v) => v.charged_visits > 0 && v.last_visit >= visitSince).map((v) => [v.project_id as string, v.last_visit as string]));
     const { data: recent } = await admin.from("invoices").select("project_id,issued").gte("issued", since).not("project_id", "is", null);
     const lastInv = new Map<string, string>();
     for (const i of recent ?? []) if ((lastInv.get(i.project_id) ?? "") < i.issued) lastInv.set(i.project_id, i.issued);
     const wantedList = (projs ?? [])
-      .filter((p) => ["won_arranging", "won_preparing"].includes(p.stage) || (p.stage === "live" && lastInv.has(p.id)))
-      .sort((a, b) => Number(b.stage !== "live") - Number(a.stage !== "live") || (lastInv.get(b.id) ?? "").localeCompare(lastInv.get(a.id) ?? ""))
+      // invoiced in 3 months, on site in the last 2 months (invoice coming), being set up, or starting within a month
+      .filter((p) => (p.stage === "live" && (lastInv.has(p.id) || onSite.has(p.id) || (p.stage_changed_at ?? "") >= visitSince))
+        || p.stage === "won_arranging" || (p.stage === "won_preparing" && !!p.start_date && p.start_date <= soon))
+      .sort((a, b) => (lastInv.get(b.id) ?? onSite.get(b.id) ?? "9").localeCompare(lastInv.get(a.id) ?? onSite.get(a.id) ?? "9"))
       .slice(0, OPTION_LIMIT).map((p) => p.display_name.slice(0, 100));
     const wanted = new Set(wantedList.map((n) => n.toLowerCase()));
     const stageOf = new Map((projs ?? []).map((p) => [p.display_name.toLowerCase(), p.stage as string]));
