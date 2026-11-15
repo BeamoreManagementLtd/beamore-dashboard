@@ -4,7 +4,7 @@ import { requireProfile, requireDirector } from "@/lib/auth";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { onboardNewClerk, type Step } from "@/lib/clerk-onboard";
 
-export type NewClerkResult = { ok: boolean; message?: string; clerkId?: string; name?: string; steps?: Step[]; password?: string; email?: string };
+export type NewClerkResult = { ok: boolean; message?: string; clerkId?: string; name?: string; steps?: Step[]; password?: string; passwordSent?: boolean; email?: string };
 
 const val = (f: FormData, k: string) => String(f.get(k) ?? "").trim();
 
@@ -17,6 +17,7 @@ export async function addAndOnboardClerk(_prev: NewClerkResult | null, form: For
   const project = val(form, "project_id") || null;
   const role = val(form, "role") === "me" ? "me" : "building";
   const createAccount = form.get("create_account") === "on";
+  const sendWelcome = form.get("send_welcome") === "on" && me.role === "director"; // only Ronan's adds send email
   if (!name) return { ok: false, message: "Add their name." };
   if (!val(form, "phone")) return { ok: false, message: "Add their mobile number (Google needs it for their account)." };
   if (beamore && !/^[a-z0-9._-]+@beamore\.co\.uk$/.test(beamore)) return { ok: false, message: "The Beamore address must end @beamore.co.uk, e.g. gareth.mayoh@beamore.co.uk" };
@@ -32,9 +33,9 @@ export async function addAndOnboardClerk(_prev: NewClerkResult | null, form: For
     await db.from("project_events").insert({ project_id: project, source: "team", kind: role === "me" ? "M&E clerk of works" : "Clerk of works", who: (me.full_name ?? me.email).split(" ")[0], body: `${name} appointed (new to Beamore, onboarding started)` });
   }
   try {
-    const { steps, password } = await onboardNewClerk(createServiceClient(), { clerkId: clerk.id, name, personalEmail: personal, beamoreEmail: beamore, phone: val(form, "phone"), projectId: project, createAccount, addedBy: me.email });
+    const { steps, password, passwordSent } = await onboardNewClerk(createServiceClient(), { clerkId: clerk.id, name, personalEmail: personal, beamoreEmail: beamore, phone: val(form, "phone"), projectId: project, createAccount, sendWelcome, addedBy: me.email });
     revalidatePath("/personnel");
-    return { ok: true, clerkId: clerk.id, name, steps, password, email: beamore ?? undefined };
+    return { ok: true, clerkId: clerk.id, name, steps, password, passwordSent, email: beamore ?? undefined };
   } catch (e) {
     return { ok: false, clerkId: clerk.id, name, message: `Added ${name}, but the set-up stopped: ${e instanceof Error ? e.message.slice(0, 200) : "error"}` };
   }

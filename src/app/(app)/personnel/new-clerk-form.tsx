@@ -24,7 +24,7 @@ export function NewClerkForm({ projects, director, defaultName, defaultProject, 
         {state.password && (
           <p className="callout warn">
             Temporary password for <b>{state.email}</b>: <code className="mono" style={{ fontSize: 15 }}>{state.password}</code><br />
-            <span className="small">Shown once and not saved anywhere. Give it to {state.name?.split(" ")[0]} by phone or text (not in the welcome email). They choose their own when they first sign in.</span>
+            <span className="small">{state.passwordSent ? `Also in the welcome email just sent to ${state.name?.split(" ")[0]}. ` : `Give it to ${state.name?.split(" ")[0]} by phone or text. `}Not saved anywhere; they choose their own when they first sign in.</span>
           </p>
         )}
         <p><Link className="btn primary" href={`/personnel/${state.clerkId}`}>Open {state.name}</Link></p>
@@ -52,8 +52,9 @@ export function NewClerkForm({ projects, director, defaultName, defaultProject, 
         <div className="field"><label htmlFor="nr">As</label>
           <select id="nr" name="role" defaultValue={defaultRole === "me" ? "me" : "building"}><option value="building">Building clerk</option><option value="me">M&amp;E clerk</option></select></div>
         {director && <label className="small" style={{ alignSelf: "center" }}><input type="checkbox" name="create_account" defaultChecked /> Create their @beamore.co.uk Google account</label>}
+        {director && <label className="small" style={{ alignSelf: "center" }}><input type="checkbox" name="send_welcome" defaultChecked /> Email them now at their current address</label>}
       </div>
-      <p className="small muted">This creates their account (with their mobile for sign-in checks), shares their Personnel folder, the project folder and the Beamore manual with them, switches on the portal, saves a welcome email in your Gmail Drafts, and puts sending their PPE on your list.</p>
+      <p className="small muted">This creates their account (with their mobile for sign-in checks), shares their Personnel folder, the project folder and the Beamore manual with them, switches on the portal, emails them a welcome (sign-in details, 2-Step Verification, portal, folder, manual) at their current address, or saves it as a draft if you untick that, and puts sending their PPE on your list.</p>
       <button className="btn primary" disabled={busy}>{busy ? "Setting them up…" : "Add and set them up"}</button>
     </form>
   );

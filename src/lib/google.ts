@@ -97,6 +97,15 @@ export async function driveClient(admin: SupabaseClient) {
       if (!res.ok) throw new Error(`Google ${url.includes("gmail") ? "Gmail" : "Drive"} ${res.status}: ${(await res.text()).slice(0, 200)}`);
       return res.json() as Promise<T>;
     },
+    /**
+     * The ONE email the dashboard sends itself: a new clerk's welcome email, when the person adding them ticks
+     * "Email them now" (Ronan, 15 Nov 2026). Everything else is only ever saved as a draft. Don't reuse this.
+     */
+    sendNewClerkWelcome: async (raw: string) => {
+      const res = await fetch("https://gmail.googleapis.com/gmail/v1/users/me/messages/send", { method: "POST", headers: { Authorization: `Bearer ${access}`, "Content-Type": "application/json" }, body: JSON.stringify({ raw }), cache: "no-store" });
+      if (!res.ok) throw new Error(`Gmail ${res.status}: ${(await res.text()).slice(0, 200)}`);
+      return res.json() as Promise<{ id: string }>;
+    },
     /** Gmail API (users/me), e.g. gmail("threads", { q }) */
     gmail: async <T>(path: string, params: Record<string, string | string[]>) => {
       const q = new URLSearchParams();
