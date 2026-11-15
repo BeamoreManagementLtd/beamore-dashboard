@@ -280,6 +280,7 @@ const INSTRUCTIONS = {
 };
 const isInstruction = (t) => /separate invoice|per pdf|statement|attn|portal|quote the|perfect circle|only\b/i.test(t ?? "");
 const rows = [["Company", "Project", "Project number", "DfE project number", "PO number", "Send invoice to", "CC on invoice", "Invoicing instructions", "Clerk of works", "Send reports to", "CC on reports", "Status", "Job no."]];
+const instructions = [];
 const block = [null]; // per row: { first, last } of its company's block (null for the header and the spare rows at the bottom)
 spine.forEach((s, i) => {
   const inv = s.inv ?? s.invGeneral;
@@ -290,6 +291,7 @@ spine.forEach((s, i) => {
   const firstOfCompany = spine[i - 1]?.group !== s.group;
   rows.push([firstOfCompany ? s.group : "", s.site, uniq([...s.proj, ...c.proj].filter((x) => !DFE.test(x))).join(" / "), uniq([...s.proj, ...c.proj].filter((x) => DFE.test(x)).map((x) => x.replace(/\s/g, "").toUpperCase())).join(" / "), uniq([...s.po, ...c.po]).join(" / "), inv?.to ?? "", inv?.cc ?? "", howTo, s.clerk, s.reportTo, s.reportCc, s.project ? STAGE[s.project.stage] ?? s.project.stage : "", s.project?.number ? String(s.project.number) : ""]);
   block.push({ first: firstOfCompany, last: false });
+  if (howTo) instructions.push({ company: s.group, project: s.site, job: s.project?.number ?? null, instruction: howTo });
   if (spine[i + 1]?.group !== s.group) {
     for (let k = 0; k < SPARE; k++) { rows.push(Array(13).fill("")); block.push({ first: false, last: k === SPARE - 1 }); }
   }
@@ -298,6 +300,8 @@ console.log(`${spine.length} projects; ${matched} matched to the dashboard; ${sp
 for (const l of report) console.log(" -", l);
 const NEW_CLIENTS = 40; // empty rows at the bottom for new clients
 for (let k = 0; k < NEW_CLIENTS; k++) rows.push(Array(13).fill(""));
+// the instructions on their own, for the record
+fs.writeFileSync(dst.replace(/\.(xlsx|json)$/, "-instructions.json"), JSON.stringify(instructions, null, 1));
 fs.writeFileSync(dst.replace(/\.xlsx$/, ".json"), JSON.stringify(rows, null, 1));
 
 if (dst.endsWith(".xlsx")) {
