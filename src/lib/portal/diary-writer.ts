@@ -23,7 +23,9 @@ import { setCell, cellStyle, greenVersion } from "./diary-cells.mjs";
  */
 const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 const FIRST_WRITABLE = "2026-11";
-const DIARY_YEAR = "2026";
+/** Diary file for a year ("2026" -> Drive id), from the diary sync. */
+const diaryFile = (conn: { diary_files?: Record<string, string> | null; diary_file_id?: string | null }, year: string) =>
+  conn.diary_files?.[year] ?? (year === "2026" ? conn.diary_file_id ?? null : null);
 const QUIET_MS = 10 * 60 * 1000;
 const XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 
@@ -95,7 +97,8 @@ export async function writeInvoiceToDiary(admin: SupabaseClient, uploadId: strin
   if (!visits.length) return { state: "needs_review", note: "The invoice doesn't list the dates worked, so it can't go in the diary automatically" };
   const months = [...new Set(visits.map((v) => v.date.slice(0, 7)))];
   if (months.some((m) => m < FIRST_WRITABLE)) return { state: "needs_review", note: `Work in ${months.filter((m) => m < FIRST_WRITABLE).join(", ")}: months before November 2026 aren't written automatically` };
-  if (months.some((m) => !m.startsWith(DIARY_YEAR))) return { state: "needs_review", note: "Work in 2027: the 2027 diary isn't set up yet" };
+  const year = months[0].slice(0, 4);
+  if (months.some((m) => !m.startsWith(year))) return { state: "needs_review", note: "This invoice covers two different years; please enter it by hand" };
 
   // ---- exact diary names for each site wording
   const wordings = [...new Set(visits.map((v) => v.site.trim()))];
@@ -115,8 +118,8 @@ export async function writeInvoiceToDiary(admin: SupabaseClient, uploadId: strin
 
   // ---- the diary itself
   const g = await driveClient(admin);
-  const fileId = g.connection.diary_file_id as string | null;
-  if (!fileId) return { state: "waiting", note: "Diary not found yet (the diary sync hasn't run)" };
+  const fileId = diaryFile(g.connection, year);
+  if (!fileId) return { state: "waiting", note: `Waiting for Diary ${year}.xlsx to be created in the Diary folder` };
   const meta = await g.json<{ modifiedTime: string; headRevisionId: string; md5Checksum: string }>(`files/${fileId}`, { fields: "modifiedTime,headRevisionId,md5Checksum", supportsAllDrives: "true" });
   if (Date.now() - Date.parse(meta.modifiedTime) < QUIET_MS) return { state: "waiting", note: "The diary was changed in the last 10 minutes; will try again shortly" };
   const raw = Buffer.from(await g.download(fileId));
@@ -251,6 +254,15 @@ export function companyLabel(person: string, companies: string[]) {
  * someone only works through (e.g. an agency) aren't shown. Same care as invoice writing: only those cells change.
  */
 export async function labelDiaryCompanies(admin: SupabaseClient, { write = true } = {}) {
+  const g0 = await driveClient(admin);
+  const files: Record<string, string> = { ...(g0.connection.diary_files ?? {}) };
+  if (!files["2026"] && g0.connection.diary_file_id) files["2026"] = g0.connection.diary_file_id;
+  const results: { changed: number; note: string }[] = [];
+  for (const year of Object.keys(files).sort()) results.push(await labelOneDiary(admin, files[year], year, { write }));
+  return { changed: results.reduce((n, r) => n + r.changed, 0), note: results.map((r) => r.note).filter(Boolean).join("; ") };
+}
+
+async function labelOneDiary(admin: SupabaseClient, fileId: string, year: string, { write = true } = {}) {
   const { data: links } = await admin.from("clerk_companies").select("company_name,clerks(name)").eq("kind", "own").eq("status", "Enabled");
   const byPerson = new Map<string, string[]>();
   for (const l of links ?? []) {
@@ -258,14 +270,12 @@ export async function labelDiaryCompanies(admin: SupabaseClient, { write = true 
     if (n) byPerson.set(norm(n), [...(byPerson.get(norm(n)) ?? []), l.company_name]);
   }
   const g = await driveClient(admin);
-  const fileId = g.connection.diary_file_id as string | null;
-  if (!fileId) return { changed: 0, note: "Diary not found yet" };
   const meta = await g.json<{ modifiedTime: string; headRevisionId: string }>(`files/${fileId}`, { fields: "modifiedTime,headRevisionId", supportsAllDrives: "true" });
-  if (write && Date.now() - Date.parse(meta.modifiedTime) < QUIET_MS) return { changed: 0, note: "Diary changed in the last 10 minutes; try later" };
+  if (write && Date.now() - Date.parse(meta.modifiedTime) < QUIET_MS) return { changed: 0, note: `Diary ${year} changed in the last 10 minutes; try later` };
   const raw = Buffer.from(await g.download(fileId));
   const wb = await loadWorkbook(raw);
   const changes: { sheet: string; ref: string; value: string }[] = [];
-  for (let m = Number(FIRST_WRITABLE.slice(5)) - 1; m < 12; m++) {
+  for (let m = year === FIRST_WRITABLE.slice(0, 4) ? Number(FIRST_WRITABLE.slice(5)) - 1 : 0; m < 12; m++) {
     const ws = wb.getWorksheet(MONTHS[m]);
     if (!ws) continue;
     const starts: number[] = [];
@@ -305,5 +315,5 @@ export async function labelDiaryCompanies(admin: SupabaseClient, { write = true 
   const after = await g.json<{ md5Checksum: string }>(`files/${fileId}`, { fields: "md5Checksum", supportsAllDrives: "true" });
   if (after.md5Checksum !== createHash("md5").update(out).digest("hex")) throw new Error("The diary on Drive doesn't match what was saved");
   await admin.from("portal_audit").insert({ actor: "dashboard", action: "diary-company-labels", detail: { changes } });
-  return { changed: changes.length, note: `${changes.length} name cells labelled` };
+  return { changed: changes.length, note: `Diary ${year}: ${changes.length} name cells labelled` };
 }
