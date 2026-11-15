@@ -34,7 +34,7 @@ export async function buildDueList(db: SupabaseClient, me: Profile): Promise<Due
   const [profiles, chases, queue, projects, compliance, tasks, unmatchedSites, unmatchedRefs, runs, signoffs, planned] = await Promise.all([
     db.from("profiles").select("id,full_name,email,role"),
     db.from("invoices").select("id,number,due,amount_due,clients(name),chase_state(status,next_action,next_action_due,promised_date,owner_id)").gt("amount_due", 0).lt("due", t),
-    db.from("report_queue").select("checker,due"),
+    db.from("report_queue").select("checker,due,project_name"),
     db.from("projects").select("id,display_name,next_action,next_action_due,owner_id").not("next_action_due", "is", null).lte("next_action_due", addDays(t, 14)),
     db.from("clerk_compliance").select("clerk_id,dbs_recheck,chartership_renewal,pi_insurance_expiry,pl_insurance_expiry,cscs_expiry,onboarding_started,onboarding_complete,clerks(name,active)"),
     db.from("tasks").select("id,title,kind,due,link,owner_id").is("done_at", null),
@@ -98,7 +98,7 @@ export async function buildDueList(db: SupabaseClient, me: Profile): Promise<Due
     const late = mine.filter((r) => r.due && r.due < t).length;
     const earliest = mine.map((r) => r.due).filter(Boolean).sort()[0] ?? null;
     if (c === "Unknown")
-      items.push({ key: "reports-nochecker", kind: "Reports", title: `${mine.length} report${mine.length > 1 ? "s" : ""} with no checker`, detail: "Add these projects to the report scanner's checker list", due: earliest, link: "/reports?checker=Unknown", ...ownerOf(null, directorName) });
+      items.push({ key: "reports-nochecker", kind: "Reports", title: `${mine.length} report${mine.length > 1 ? "s" : ""} with no checker`, detail: `Decide who checks ${[...new Set(mine.map((r) => r.project_name).filter(Boolean))].slice(0, 6).join(", ")}${mine.length > 6 ? "…" : ""} and add them to the report scanner's checker list`, due: earliest, link: "/reports?checker=Unknown", ...ownerOf(null, "Judy") });
     else
       items.push({ key: `reports-${c}`, kind: "Reports", title: `Check ${mine.length} report${mine.length > 1 ? "s" : ""}`, detail: late ? `${late} past due` : undefined, due: earliest, link: `/reports?checker=${encodeURIComponent(c)}`, ...ownerOf(null, c) });
   }
