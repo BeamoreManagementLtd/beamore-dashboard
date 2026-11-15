@@ -87,8 +87,9 @@ async function writeOne(g: Awaited<ReturnType<typeof driveClient>>, fileId: stri
   const fill = (row: { r: number; v: Record<string, string> }, p: P) => {
     set(row, "Status", STAGE[p.stage] ?? p.stage, true);
     set(row, "Job no.", p.number ? String(p.number) : "");
-    set(row, "Project number", p.dfe_project_number ?? "");
-    set(row, "PO number", p.po_number ?? "");
+    // numbers only when they have a digit in them (the dashboard has a few bare "SRP" / "number" values)
+    if (/\d/.test(p.dfe_project_number ?? "")) set(row, "Project number", p.dfe_project_number!);
+    if (/\d/.test(p.po_number ?? "")) set(row, "PO number", p.po_number!);
     set(row, "Clerk of works", clerkOf(p));
     set(row, "Send reports to", emails(p.report_to));
     set(row, "CC on reports", emails(p.report_cc));
