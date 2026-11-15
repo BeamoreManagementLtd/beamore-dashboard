@@ -5,6 +5,7 @@ import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { fd, fdt } from "@/lib/format";
 import { draftFor } from "@/lib/reports/pipeline";
 import { userConnection } from "@/lib/google-user";
+import { EXAMPLES } from "@/lib/reports/examples";
 import { assignChecker, sendReport, markDone, ignoreReport, checkAgain, sendClerkEmail } from "../actions";
 
 export const dynamic = "force-dynamic";
@@ -29,12 +30,18 @@ function clerkNote(r: Record<string, unknown>, sender: string) {
     ...issues.map((i) => i.text),
   ].filter(Boolean) as string[];
   const tips = ((r.clerk_points ?? []) as string[]).filter(Boolean);
+  const allIssues = (r.issues ?? []) as Issue[];
+  const photoHelp = !!(f.mixed || f.stretched || f.enlarged || allIssues.some((i) => i.kind === "photos" && i.severity !== "low"));
+  const detailHelp = allIssues.some((i) => i.kind === "vague" && i.severity !== "low");
   if (!fixed.length && !tips.length) return `Hi ${clerk},\n\nThanks for your report (${r.file_name}). It needed no changes before it went out. Great work.\n\nKind regards,\n${sender}`;
   return [
     `Hi ${clerk},`, "",
     `Thanks for your report (${r.file_name}). A few things needed fixing before it went to the client:`,
     ...fixed.map((x) => `- ${x}`),
     ...(tips.length ? ["", "For your next reports, it would help if you could:", ...tips.map((x) => `- ${x}`)] : []),
+    // pictures from Christian's report where they'd help (the line becomes the picture when it's sent)
+    ...(photoHelp ? ["", EXAMPLES.photos.intro, EXAMPLES.photos.marker] : []),
+    ...(detailHelp ? ["", EXAMPLES.detail.intro, EXAMPLES.detail.marker] : []),
     "", "Any questions, just give me a shout.", "", "Kind regards,", sender,
   ].join("\n");
 }
@@ -132,7 +139,7 @@ export default async function ReportPage({ params, searchParams }: { params: Pro
           <section className="panel">
             <h2>Email to the clerk</h2>
             {r.clerk_email_sent_at ? <p className="callout good">Sent to the clerk {fdt(r.clerk_email_sent_at)} by {nameOf(r.clerk_email_sent_by) ?? ""}.</p>
-              : <p className="small muted">What had to be fixed and what to do better next time. Change anything you like, then send it, or leave it.</p>}
+              : <p className="small muted">What had to be fixed and what to do better next time, with examples from Christian Tate&apos;s reports where they help (each [Example: …] line becomes the picture; delete the line to leave it out). Change anything you like, then send it, or leave it.</p>}
             {conn ? (
               <form action={sendClerkEmail.bind(null, id)} className="form">
                 <div className="field"><label htmlFor="cto">To</label><input id="cto" name="to" defaultValue={(r.clerks as unknown as { email?: string } | null)?.email ?? ""} placeholder="the clerk's email" /></div>

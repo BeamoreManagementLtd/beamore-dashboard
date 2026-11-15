@@ -92,7 +92,11 @@ export async function sendClerkEmail(reportId: string, form: FormData) {
   const admin = createServiceClient();
   try {
     const { sendReportEmail } = await import("@/lib/google-user");
-    await sendReportEmail(admin, me.id, { to, cc: emails(form.get("cc")), subject: String(form.get("subject") ?? "").trim(), body: String(form.get("body") ?? "") });
+    const { withExamples } = await import("@/lib/reports/examples");
+    // example lines left in the draft become the pictures from Christian's report
+    const body = String(form.get("body") ?? "");
+    const { html, inline } = await withExamples(admin, body);
+    await sendReportEmail(admin, me.id, { to, cc: emails(form.get("cc")), subject: String(form.get("subject") ?? "").trim(), body, ...(inline.length ? { html, inline } : {}) });
   } catch (e) {
     redirect(`/reports/${reportId}?error=${encodeURIComponent(e instanceof Error ? e.message : "Couldn't send")}`);
   }

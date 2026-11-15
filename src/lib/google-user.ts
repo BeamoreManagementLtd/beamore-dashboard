@@ -59,15 +59,29 @@ const enc = (s: string) => (/^[\x20-\x7e]*$/.test(s) ? s : `=?UTF-8?B?${Buffer.f
  * Sends one email from this team member's own Gmail: a checked report (PDF attached) to the client's list, or the
  * note about a report to its clerk (no attachment). Only ever on their click (Ronan, 15 Nov 2026).
  */
-export async function sendReportEmail(admin: SupabaseClient, profileId: string, m: { to: string[]; cc: string[]; subject: string; body: string; fileName?: string; pdf?: Buffer }) {
+export async function sendReportEmail(admin: SupabaseClient, profileId: string, m: {
+  to: string[]; cc: string[]; subject: string; body: string; fileName?: string; pdf?: Buffer;
+  /** an HTML version with pictures inside it (the examples in a note to a clerk) */
+  html?: string; inline?: { cid: string; name: string; mime: string; data: Buffer }[];
+}) {
   const { access, email } = await accessFor(admin, profileId);
-  const b = `beamore${Date.now()}`;
+  const b = `beamore${Date.now()}`, rel = `${b}rel`, alt = `${b}alt`;
   const CRLF = "\r\n";
   const wrap = (s: string) => s.replace(/(.{76})/g, `$1${CRLF}`);
+  const b64 = (s: string | Buffer) => wrap(Buffer.from(s).toString("base64"));
+  // plain text, or plain text + HTML with its pictures (multipart/related inside multipart/alternative)
+  const bodyPart = m.html ? [
+    `--${b}`, `Content-Type: multipart/alternative; boundary="${alt}"`, "",
+    `--${alt}`, "Content-Type: text/plain; charset=UTF-8", "Content-Transfer-Encoding: base64", "", b64(m.body.replace(/^\[Example: [^\]]+\]$/gm, "(picture in the email)")),
+    `--${alt}`, `Content-Type: multipart/related; boundary="${rel}"`, "",
+    `--${rel}`, "Content-Type: text/html; charset=UTF-8", "Content-Transfer-Encoding: base64", "", b64(m.html),
+    ...(m.inline ?? []).flatMap((i) => [`--${rel}`, `Content-Type: ${i.mime}; name="${i.name}"`, `Content-ID: <${i.cid}>`, `Content-Disposition: inline; filename="${i.name}"`, "Content-Transfer-Encoding: base64", "", b64(i.data)]),
+    `--${rel}--`, `--${alt}--`,
+  ] : [`--${b}`, "Content-Type: text/plain; charset=UTF-8", "Content-Transfer-Encoding: base64", "", b64(m.body)];
   const mime = [
     `From: ${email}`, `To: ${m.to.join(", ")}`, ...(m.cc.length ? [`Cc: ${m.cc.join(", ")}`] : []), `Subject: ${enc(m.subject)}`,
     "MIME-Version: 1.0", `Content-Type: multipart/mixed; boundary="${b}"`, "",
-    `--${b}`, "Content-Type: text/plain; charset=UTF-8", "Content-Transfer-Encoding: base64", "", wrap(Buffer.from(m.body).toString("base64")),
+    ...bodyPart,
     ...(m.pdf && m.fileName ? [`--${b}`, `Content-Type: application/pdf; name="${m.fileName.replace(/"/g, "")}"`, `Content-Disposition: attachment; filename="${m.fileName.replace(/"/g, "")}"`, "Content-Transfer-Encoding: base64", "", wrap(m.pdf.toString("base64"))] : []),
     `--${b}--`, "",
   ].join(CRLF);
