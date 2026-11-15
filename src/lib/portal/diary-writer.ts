@@ -233,6 +233,113 @@ export async function writePendingToDiary(admin: SupabaseClient) {
   return written;
 }
 
+// ---------------------------------------------------------------- holidays (Ronan, 15 Nov 2026)
+/**
+ * Puts a holiday into the diary the way the team does it by hand: "Holiday" (or Sick, etc.) in that clerk's Comments
+ * cell on the salmon side, for each weekday of it. Same rules as the invoice writer: months from November 2026 only,
+ * only that clerk's block, only empty Comments cells (a day that already has a comment is left and reported), not
+ * while the diary was changed in the last 10 minutes, nothing else in the file touched, Drive keeps the old version.
+ * The diary sync then ticks the holiday off as "in the diary".
+ */
+export async function writeHolidayToDiary(admin: SupabaseClient, absenceId: string): Promise<Outcome> {
+  const { data: h } = await admin.from("absences").select("id,clerk_id,date_from,date_to,part_day,kind,status,synced_to_diary_at,clerks(name)").eq("id", absenceId).single();
+  const clerkName = (h?.clerks as unknown as { name: string } | null)?.name;
+  if (!h || !clerkName || h.status === "cancelled") return { state: "not_applicable", note: "No holiday to write" };
+  if (h.synced_to_diary_at) return { state: "written", note: "Already in the diary" };
+  const days: string[] = [];
+  for (let t = Date.parse(`${h.date_from}T00:00:00Z`); t <= Date.parse(`${h.date_to}T00:00:00Z`); t += 864e5) {
+    const d = new Date(t);
+    if (d.getUTCDay() !== 0 && d.getUTCDay() !== 6) days.push(d.toISOString().slice(0, 10));
+  }
+  if (!days.length) return { state: "not_applicable", note: "No weekdays in this holiday" };
+  if (days.length > 31) return { state: "needs_review", note: "Longer than a month; please put it in the diary by hand" };
+  const months = [...new Set(days.map((d) => d.slice(0, 7)))];
+  if (months.some((m) => m < FIRST_WRITABLE)) return { state: "needs_review", note: "Months before November 2026 aren't written automatically" };
+  const year = months[0].slice(0, 4);
+  if (months.some((m) => !m.startsWith(year))) return { state: "needs_review", note: "This holiday runs into the next year; please put it in both diaries by hand" };
+  // words the diary sync reads back as a holiday (diary-parse.mjs), so it can tick this one off
+  const kind = /holiday|annual leave|sick|day off/i.test(h.kind ?? "") ? h.kind : "Day off";
+  const word = `${kind}${h.part_day ? ` (${h.part_day})` : ""}`;
+
+  const g = await driveClient(admin);
+  const fileId = diaryFile(g.connection, year);
+  if (!fileId) return { state: "waiting", note: `Waiting for Diary ${year}.xlsx to be created in the Diary folder` };
+  const meta = await g.json<{ modifiedTime: string; headRevisionId: string }>(`files/${fileId}`, { fields: "modifiedTime,headRevisionId", supportsAllDrives: "true" });
+  if (Date.now() - Date.parse(meta.modifiedTime) < QUIET_MS) return { state: "waiting", note: "The diary was changed in the last 10 minutes; will try again shortly" };
+  const raw = Buffer.from(await g.download(fileId));
+  const wb = await loadWorkbook(raw);
+
+  const changes: { sheet: string; ref: string }[] = [];
+  const already: string[] = [], taken: string[] = [];
+  for (const month of months) {
+    const sheet = MONTHS[Number(month.slice(5)) - 1];
+    const ws = wb.getWorksheet(sheet);
+    if (!ws) return { state: "needs_review", note: `No ${sheet} sheet in the diary` };
+    const starts: number[] = [];
+    ws.getRow(2).eachCell((c, col) => { if (/^1st location$/i.test(String(cellVal(c) ?? "").trim())) starts.push(col); });
+    const s = starts.at(-1);
+    if (!s || !/^comments$/i.test(String(cellVal(ws.getCell(2, s + 6)) ?? "").trim())) return { state: "needs_review", note: `The ${sheet} sheet's layout isn't the usual one` };
+    const nameCol = s - 2, dateCol = s - 1, commentCol = s + 6;
+    const rows: number[] = [];
+    for (let r = 3; r <= ws.rowCount; r++) {
+      const v = cellVal(ws.getCell(r, nameCol));
+      if (typeof v === "string" && norm(v.split("\n")[0]) === norm(clerkName)) rows.push(r);
+    }
+    if (!rows.length) return { state: "needs_review", note: `${clerkName} has no block in the ${sheet} diary` };
+    const anchor = rows.find((r) => cellVal(ws.getCell(r, dateCol)) instanceof Date);
+    if (!anchor) return { state: "needs_review", note: `${clerkName}'s ${sheet} block has no dates` };
+    const a = cellVal(ws.getCell(anchor, dateCol)) as Date;
+    const dateOf = (r: number) => new Date(Date.UTC(a.getUTCFullYear(), a.getUTCMonth(), a.getUTCDate() + (r - anchor))).toISOString().slice(0, 10);
+    const rowOf = new Map(rows.map((r) => [dateOf(r), r]));
+    for (const d of days.filter((x) => x.startsWith(month))) {
+      const r = rowOf.get(d);
+      if (!r) return { state: "needs_review", note: `No row for ${d} in ${clerkName}'s ${sheet} block` };
+      const now = String(cellVal(ws.getCell(r, commentCol)) ?? "").trim();
+      if (/holiday|annual leave|\ba\/l\b|on leave|sick|day off/i.test(now)) { already.push(d); continue; }
+      if (now) { taken.push(d); continue; }
+      changes.push({ sheet, ref: `${colName(commentCol)}${r}` });
+    }
+  }
+  if (!changes.length) return taken.length ? { state: "needs_review", note: `Comments already written on ${taken.join(", ")}; please add the holiday by hand` } : { state: "written", note: "Already in the diary" };
+
+  const zip = await JSZip.loadAsync(raw);
+  const wbXml = await zip.file("xl/workbook.xml")!.async("string");
+  const rels = await zip.file("xl/_rels/workbook.xml.rels")!.async("string");
+  for (const sheet of [...new Set(changes.map((c) => c.sheet))]) {
+    const rid = new RegExp(`<(?:\\w+:)?sheet\\b[^>]*name="${sheet}"[^>]*r:id="([^"]+)"`).exec(wbXml)?.[1] ?? new RegExp(`<(?:\\w+:)?sheet\\b[^>]*r:id="([^"]+)"[^>]*name="${sheet}"`).exec(wbXml)?.[1];
+    const target = rid && (new RegExp(`<Relationship\\b[^>]*Id="${rid}"[^>]*Target="([^"]+)"`).exec(rels)?.[1] || new RegExp(`<Relationship\\b[^>]*Target="([^"]+)"[^>]*Id="${rid}"`).exec(rels)?.[1]);
+    if (!target) throw new Error(`can't find the ${sheet} sheet inside the file`);
+    const p = target.startsWith("/") ? target.slice(1) : `xl/${target}`;
+    let xml = await zip.file(p)!.async("string");
+    for (const c of changes.filter((x) => x.sheet === sheet)) {
+      try { xml = setCell(xml, c.ref, word); } catch { return { state: "needs_review", note: `Couldn't find the Comments cell ${c.ref} on ${sheet}; please add the holiday by hand` }; }
+    }
+    zip.file(p, xml);
+  }
+  const out = await zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE", compressionOptions: { level: 6 } });
+  const latest = await g.json<{ headRevisionId: string }>(`files/${fileId}`, { fields: "headRevisionId", supportsAllDrives: "true" });
+  if (latest.headRevisionId !== meta.headRevisionId) return { state: "waiting", note: "The diary changed while preparing; will try again shortly" };
+  await g.replaceContent(fileId, out, XLSX);
+  const after = await g.json<{ md5Checksum: string }>(`files/${fileId}`, { fields: "md5Checksum", supportsAllDrives: "true" });
+  if (after.md5Checksum !== createHash("md5").update(out).digest("hex")) throw new Error("The diary on Drive doesn't match what was saved");
+  return { state: "written", note: `"${word}" written for ${changes.length} day${changes.length === 1 ? "" : "s"}${taken.length ? `; ${taken.join(", ")} already had a comment, so add those by hand` : ""}` };
+}
+
+/** Every 15 minutes: holidays waiting to go into the diary (one at a time). */
+export async function writePendingHolidays(admin: SupabaseClient) {
+  const { data } = await admin.from("absences").select("id").eq("diary_state", "waiting").neq("status", "cancelled").order("date_from").limit(5);
+  let written = 0;
+  for (const r of data ?? []) {
+    let o: Outcome;
+    try { o = await writeHolidayToDiary(admin, r.id); }
+    catch (e) { o = { state: "needs_review", note: `Couldn't write to the diary: ${e instanceof Error ? e.message.slice(0, 200) : "error"}` }; }
+    await admin.from("absences").update({ diary_state: o.state === "not_applicable" ? "needs_review" : o.state, diary_note: o.note }).eq("id", r.id);
+    if (o.state === "written") written++;
+    if (o.state === "waiting") break;
+  }
+  return written;
+}
+
 // ---------------------------------------------------------------- company names under clerks' names (Ronan, 15 Nov 2026)
 // companyLabel (the company to show for a person) lives in contact-sheet.mjs so the Contact details tab uses the same rule
 export { companyLabel };

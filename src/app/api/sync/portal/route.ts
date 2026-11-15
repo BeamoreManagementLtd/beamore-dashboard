@@ -1,7 +1,8 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createServiceClient } from "@/lib/supabase/server";
 import { processPending } from "@/lib/portal/process";
-import { writePendingToDiary } from "@/lib/portal/diary-writer";
+import { writePendingToDiary, writePendingHolidays } from "@/lib/portal/diary-writer";
+import { findHolidayEmails } from "@/lib/holidays";
 import { writeContactsIfNeeded } from "@/lib/portal/contacts-writer";
 import { writeProjectsTab } from "@/lib/portal/projects-writer";
 
@@ -18,13 +19,16 @@ export async function GET(request: NextRequest) {
   try {
     const r = await processPending(admin);
     const diary = await writePendingToDiary(admin);
+    // holidays added on the dashboard, into the diary's Comments column; and new holiday emails from clerks
+    const holidays = await writePendingHolidays(admin).catch(() => 0);
+    const holidayEmails = await findHolidayEmails(admin).catch(() => 0);
     // a clerk saved their details or a new clerk was added: the diary's Contact details tab
     const contacts = await writeContactsIfNeeded(admin).catch((e) => ({ changed: 0, waiting: false, note: e instanceof Error ? e.message : String(e) }));
     // email list changes made on the dashboard that aren't in the diary's Projects tab yet
     const { count: listChanges } = await admin.from("projects").select("id", { count: "exact", head: true }).not("details->_lists_pending", "is", null);
     if (listChanges) await writeProjectsTab(admin).catch(() => undefined);
-    await admin.from("sync_runs").update({ finished_at: new Date().toISOString(), ok: r.failed === 0, message: `${r.done} processed, ${r.failed} failed, ${diary} invoices written to the diary${contacts ? `, contact details: ${contacts.note || "no change"}` : ""}` }).eq("id", run?.id);
-    return NextResponse.json({ ...r, diary, contacts });
+    await admin.from("sync_runs").update({ finished_at: new Date().toISOString(), ok: r.failed === 0, message: `${r.done} processed, ${r.failed} failed, ${diary} invoices and ${holidays} holidays written to the diary, ${holidayEmails} holiday emails found${contacts ? `, contact details: ${contacts.note || "no change"}` : ""}` }).eq("id", run?.id);
+    return NextResponse.json({ ...r, diary, holidays, holidayEmails, contacts });
   } catch (e) {
     const m = e instanceof Error ? e.message : String(e);
     await admin.from("sync_runs").update({ finished_at: new Date().toISOString(), ok: false, message: m }).eq("id", run?.id);

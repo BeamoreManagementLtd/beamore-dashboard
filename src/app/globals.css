@@ -251,3 +251,6 @@ form.chip .chip-x:hover{background:var(--bad-bg,#fde8e8);color:var(--bad,#b42318
 .dv-today{background:var(--surface-2)}
 .dv-late{box-shadow:inset 3px 0 0 var(--warn)}
 @media (prefers-color-scheme:dark){.dv-planned{background:#3a3a3a;color:#eee}.dv-charged{background:#5a3324;color:#ffe3d6}.dv-away{background:#1f3347;color:#d6e8fb}}
+.dv-req{border-top:1px solid var(--line);padding:10px 0}
+.dv-req:first-of-type{border-top:0}
+.dv-req .field{min-width:130px}

@@ -250,13 +250,14 @@ export async function buildDueList(db: SupabaseClient, me: Profile): Promise<Due
   }
 
   // ---- holidays: dashboard entries still to go in the diary, and planned (grey) visits on holiday days
-  const { data: hols } = await db.from("absences").select("id,clerk_id,date_from,date_to,part_day,source,synced_to_diary_at,clerks(name)")
+  const { data: hols } = await db.from("absences").select("id,clerk_id,date_from,date_to,part_day,source,synced_to_diary_at,diary_state,diary_note,clerks(name)")
     .gte("date_to", t).neq("status", "cancelled");
   const span = (a: { date_from: string; date_to: string }) => (a.date_from === a.date_to ? a.date_from : `${a.date_from} – ${a.date_to}`);
   for (const h of hols ?? []) {
     const name = (h.clerks as unknown as { name: string } | null)?.name ?? "Clerk";
-    if (h.source === "dashboard" && !h.synced_to_diary_at)
-      items.push({ key: `hol-${h.id}`, kind: "Personnel", title: `Add ${name}'s holiday to the diary`, detail: `${span(h)}${h.part_day ? ` (${h.part_day})` : ""}: put "Holiday" in the comments`, due: addDays(h.date_from, -7) < t ? t : addDays(h.date_from, -7), link: "/personnel", ...ownerOf(null, "Judy") });
+    // the dashboard now writes holidays into the diary itself; only ones it couldn't write are left for a person
+    if (h.source === "dashboard" && !h.synced_to_diary_at && h.diary_state !== "waiting" && h.diary_state !== "written")
+      items.push({ key: `hol-${h.id}`, kind: "Personnel", title: `Add ${name}'s holiday to the diary`, detail: `${span(h)}${h.part_day ? ` (${h.part_day})` : ""}: put "Holiday" in the comments${h.diary_note ? ` (${h.diary_note})` : ""}`, due: addDays(h.date_from, -7) < t ? t : addDays(h.date_from, -7), link: `/diary?week=${h.date_from}&clerk=${h.clerk_id}`, ...ownerOf(null, "Judy") });
     const { data: clash } = await db.from("diary_visits").select("visit_date,site_as_typed").eq("clerk_id", h.clerk_id).eq("side", "planned")
       .gte("visit_date", h.date_from < t ? t : h.date_from).lte("visit_date", h.date_to).order("visit_date").limit(5);
     if (clash?.length)
