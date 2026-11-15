@@ -150,6 +150,7 @@ ${STANDARD}
  - copied: whole sections that look copied unchanged from the previous report
  - follow-up: problems raised in the previous report not mentioned again
  - vague: observations with nothing specific (no location, no detail, no action)
+ - (the ten standard health and safety items at the start are checked separately: don't raise deleted or empty H&S rows)
  - safety: health and safety concerns that may need escalating to the client straight away (high)
  - photos: from the photo figures given: far fewer than usual (medium), reused from the previous report (medium), too low detail to print well; missing captions is only low. Stretched, sideways, oversized and small-on-the-page photos are put right automatically: don't raise those
  - programme: DfE report whose progress vs programme box falls short of the method above (missing or a few lines = high; weak = medium; percentages written in = low). For other clients, a missing or thin progress summary = medium

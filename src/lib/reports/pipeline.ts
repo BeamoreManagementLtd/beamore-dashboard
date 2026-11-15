@@ -4,7 +4,7 @@ import sharp from "sharp";
 import { driveClient } from "@/lib/google";
 import { projectMatcher } from "@/lib/project-match";
 import { sendReportEmail } from "@/lib/google-user";
-import { readReport, photoStats, shrinkPhotos, trackSpelling, addComments, saveReport, photoHashes, reusedCount, uncaptioned, unticked, rotatePhoto, fixPhotoShapes, uniformPhotos } from "./docx.mjs";
+import { readReport, photoStats, shrinkPhotos, trackSpelling, addComments, saveReport, photoHashes, reusedCount, uncaptioned, unticked, rotatePhoto, fixPhotoShapes, uniformPhotos, healthSafety } from "./docx.mjs";
 
 /** 0-100: how much the report needed fixing (must-checks count most). Lateness is shown separately. */
 /**
@@ -241,6 +241,16 @@ export async function checkOne(admin: SupabaseClient, id: string) {
   const progGaps = programmeGaps(prog);
   if (prog && prog.verdict !== "good" && prog.verdict !== "not_in_form" && !ai.issues.some((i) => i.kind === "programme"))
     extra.push({ severity: prog.verdict === "missing" && prog.dfe ? "high" : "medium", kind: "programme", text: `${prog.dfe ? "Progress vs programme" : "Progress summary"} ${prog.verdict === "missing" ? "not done" : "falls short"}: ${progGaps.join("; ") || prog.note}`, p: prog.p });
+  // the ten H&S items at the start of the report: none deleted or left empty, and properly filled in (Ronan, 15 Nov
+  // 2026). Not held against the first couple of reports on a job, when there may genuinely be little to say.
+  const onDfeForm = prog?.dfe ?? /\bDfE\b|CQM|TAS20/i.test(r.paragraphs.slice(0, 60).map((p) => p.text).join(" "));
+  const hs = healthSafety(r, onDfeForm);
+  // the DfE CQM monthly report has a written H&S section rather than the ten rows, so it isn't checked this way
+  const cqm = /CQM|Construction Quality\s+Monitoring/i.test(r.paragraphs.slice(0, 40).map((p) => p.text).join(" "));
+  const early = cqm || Number(/\d+/.exec(ai.report_number ?? "")?.[0] ?? 99) <= 2;
+  const hsGone = hs.filter((h) => h.status === "missing" || h.status === "empty"), hsThin = hs.filter((h) => h.status === "thin");
+  if (!early && hsGone.length) extra.push({ severity: hsGone.length >= 5 ? "high" : "medium", kind: "other", text: `Health and safety: ${hs.length - hsGone.length - hsThin.length} of the ${hs.length} standard items filled in properly. ${hsGone.map((h) => `${h.label} ${h.status === "missing" ? "deleted" : "left empty"}`).join("; ")}${hsThin.length ? `; only "N/A"/"none" for ${hsThin.map((h) => h.label).join(", ")}` : ""}`, p: null });
+  else if (!early && hsThin.length >= 3) extra.push({ severity: "low", kind: "other", text: `Health and safety: only "N/A"/"none" for ${hsThin.map((h) => h.label).join(", ")}`, p: null });
   const issues: Issue[] = [...extra, ...ai.issues].sort((a, b) => rank[a.severity] - rank[b.severity]);
   if (spelt.skipped.length) issues.push({ severity: "low", kind: "other", text: `Spelling not changed automatically (please fix by hand): ${spelt.skipped.slice(0, 8).map((s) => `${s.find} → ${s.replace}`).join(", ")}`, p: null });
   await addComments(r, issues.filter((i) => i.severity !== "low").slice(0, 15).map((i) => ({ p: i.p, text: `${i.severity === "high" ? "Must check: " : ""}${i.text}` })));
@@ -270,7 +280,7 @@ export async function checkOne(admin: SupabaseClient, id: string) {
     status: "ready", ai_summary: ai.summary, issues, spelling_fixed: spelt.applied,
     photos: { count: stats.count, blurry: stats.blurry, smallOnPage: stats.smallOnPage, stretched: stats.stretched, shrunk: shrunk.changed, rotated: rotated.length, reused, usual, uncaptioned: uncaptioned(r) },
     photo_hashes: hashes, photo_count: stats.count,
-    fixes: { spelling: applied, rotated: rotated.length, shrunk: shrunk.changed, stretched: shapes.stretched, enlarged: shapes.enlarged, uniform: uniform.changed, mixed: !uniform.wasUniform, side_cm: uniform.side ? +(uniform.side / 360000).toFixed(1) : null, renamed: renamedTo, words, programme: prog ?? null, standards: ai.standards ?? null },
+    fixes: { spelling: applied, rotated: rotated.length, shrunk: shrunk.changed, stretched: shapes.stretched, enlarged: shapes.enlarged, uniform: uniform.changed, mixed: !uniform.wasUniform, side_cm: uniform.side ? +(uniform.side / 360000).toFixed(1) : null, renamed: renamedTo, words, programme: prog ?? null, standards: ai.standards ?? null, health_safety: hs },
     // lateness is shown on its own on the Reports page
     score: qualityScore(issues, spelt.applied, 0, { renamed: !!renamedTo, mixedPhotos: !uniform.wasUniform, rotated: rotated.length, stretched: stats.stretched, oversized: shrunk.changed > 0 && raw.length > 10_000_000, standardsMissed: Object.values(ai.standards ?? {}).filter((v) => v === false).length }),
     clerk_points: [
@@ -279,6 +289,7 @@ export async function checkOne(admin: SupabaseClient, id: string) {
       ...(rotated.length ? ["Check photos are the right way up before inserting them"] : []),
       ...(stats.stretched ? ["Resize photos from a corner (or hold Shift) so they don't stretch out of shape"] : []),
       ...(raw.length > 10_000_000 ? [`Make photos smaller before inserting them: this report was ${(raw.length / 1e6).toFixed(0)} MB (Word: Picture Format > Compress Pictures)`] : []),
+      ...(!early && (hsGone.length || hsThin.length >= 3) ? [`Fill in all ${hs.length} health and safety items at the start of the report, properly, every time (don't delete any or leave them empty or just "N/A"): ${hs.filter((h) => h.status !== "ok").map((h) => h.label).join(", ")}. ${onDfeForm ? "Christian Tate's St Leonards diaries" : "Keith Osorio's Holiday Inn Camden reports"} fill in every one`] : []),
       ...(prog && (prog.verdict === "weak" || prog.verdict === "missing") ? [`${prog.dfe ? "Progress vs programme" : "Progress summary"}: ${progGaps.join("; ") || "follow the Beamore method"}`] : []),
       ...(ai.clerk_points ?? []),
     ].slice(0, 8),

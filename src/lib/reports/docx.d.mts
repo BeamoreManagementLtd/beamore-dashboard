@@ -15,6 +15,9 @@ export function addComments(r: Report, comments: { p: number | null; text: strin
 export function photoHashes(r: Report, sharp: typeof Sharp, stats: PhotoStats): Promise<string[]>;
 export function reusedCount(now: string[] | null | undefined, before: string[] | null | undefined): number;
 export function uncaptioned(r: Report): number;
+export const HS_ITEMS: { dfe: [string, RegExp][]; beamore: [string, RegExp][] };
+export type HsItem = { label: string; status: "missing" | "empty" | "thin" | "ok" };
+export function healthSafety(r: Report, dfe: boolean): HsItem[];
 export function unticked(r: Report): number;
 export function fillBlank(r: Report, label: string, value: string): boolean;
 export function rotatePhoto(r: Report, sharp: typeof Sharp, path: string, degrees: 90 | 180 | 270): Promise<void>;

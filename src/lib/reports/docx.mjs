@@ -67,6 +67,77 @@ export async function readReport(buf) {
   return { zip, xml, spans, paragraphs, blanks: [...new Set(blanks)].slice(0, 30), placeholders: placeholders.slice(0, 20), shown, media };
 }
 
+/**
+ * The ten health and safety items at the start of every report (Ronan, 15 Nov 2026: "we like to have the 10 health
+ * and safety issues at the start of each report... some of the guys delete these or leave some of these empty").
+ * The DfE form has its own fixed ten (the HSQW top 10); Beamore's own report has ten as in Keith Osorio's Holiday Inn
+ * reports. Each item: missing (row deleted), empty, thin ("N/A", "None", "Good"...) or ok.
+ */
+export const HS_ITEMS = {
+  dfe: [
+    ["Work at height", /work(ing)?\s+(at|from)\s+heights?/i],
+    ["Slips and trips", /slips?\b/i],
+    ["Design hazards", /design\s+hazards?/i],
+    ["Pedestrian and vehicle segregation", /pedestrian\s+(and|&)\s+vehicle|segregation/i],
+    ["Housekeeping", /house\s*keeping/i],
+    ["Site access and security", /site\s+access|security/i],
+    ["Site fencing", /fencing|hoarding/i],
+    ["Plant operations and heavy vehicles", /plant\s+operations?|heavy\s+vehicles?/i],
+    ["Temporary works", /temporary\s+works?/i],
+    ["Excavations", /excavations?/i],
+  ],
+  beamore: [
+    ["Site access and security", /site\s+access|security/i],
+    ["Working at height", /work(ing)?\s+(at|from)\s+heights?/i],
+    ["Scaffolding", /scaffold/i],
+    ["Lifting operations", /lifting/i],
+    ["Slips, trips and falls", /slips?\b/i],
+    ["Site hoarding / fencing", /hoarding|fencing/i],
+    ["Housekeeping", /house\s*keeping/i],
+    ["H&S notice boards and communication", /notice\s*boards?|communication|briefing/i],
+    ["Welfare", /welfare/i],
+    ["Fire plan and signage", /fire\s+(plan|points?|safety)|signage/i],
+  ],
+};
+const THIN = /^(n\/?a|none|nil|no|ok|good|yes|tbc|-+|no change|nothing (to report|noted)( yet)?|none (noted|observed|to report)( (yet|at present|at this time))?|not (applicable|relevant)( at this stage)?)\.?$/i;
+
+export function healthSafety(r, dfe) {
+  // every table row in order, as cell texts
+  const rows = (r.xml.match(/<w:tr\b[\s\S]*?<\/w:tr>/g) ?? []).map((row) => (row.match(/<w:tc\b[\s\S]*?<\/w:tc>/g) ?? []).map((c) => textOf(c).replace(/\s+/g, " ").trim()));
+  // the H&S part: from its heading row (or the start) to the People and Equipment / Quality section
+  let from = rows.findIndex((c) => /^health\s*(&|and)\s*safety\b/i.test(c[0] ?? "") && !/personnel/i.test(c[0]));
+  if (from < 0) from = 0;
+  let to = rows.findIndex((c, k) => k > from && /^(people and equipment|quality\s*(&|and)\s*workmanship)/i.test(c[0] ?? ""));
+  if (to < 0) to = rows.length;
+  const part = rows.slice(from, to);
+  const items = dfe ? HS_ITEMS.dfe : HS_ITEMS.beamore;
+  // a row's label: a short first cell, or the form's instruction text followed by the label ("To include HSQW top 10
+  // H&S issues... Work at Height")
+  const isLabel = (c0 = "", re) => c0.length <= 70 ? re.test(c0) : /HSQW|add rows/i.test(c0) && re.test(c0.slice(-45));
+  const labelOf = (c) => items.findIndex(([, re]) => isLabel(c[0], re));
+  return items.map(([label, re], n) => {
+    const k = part.findIndex((c) => isLabel(c[0], re));
+    if (k < 0) return { label, status: "missing" };
+    // what the clerk wrote: the rest of that row, or (Christian's layout) the rows under it before the next item
+    let text = part[k].slice(1).filter((x) => !/^photo(graph)?s?\s*\d*$/i.test(x)).join(" ").trim();
+    for (let j = k + 1; !text && j < part.length && labelOf(part[j]) < 0; j++) {
+      const t = part[j].filter((x) => !/^photo(graph)?s?\s*\d*$|^cow (narrative|observations)/i.test(x)).join(" ").trim();
+      if (t.length > 40) text = t;
+    }
+    // or written in the paragraphs under the heading, outside the cells (Christian Tate's layout)
+    if (!text) {
+      const at = r.paragraphs.findIndex((p) => p.text.replace(/\s+/g, " ").trim() === part[k][0]);
+      for (let j = at + 1; at >= 0 && j < r.paragraphs.length && !text; j++) {
+        const t = r.paragraphs[j].text.replace(/\s+/g, " ").trim();
+        if (items.some(([, re2]) => isLabel(t, re2)) || /^(people and equipment|quality\s*(&|and)\s*workmanship)/i.test(t)) break;
+        if (t.length > 40 && !/^health\s*(&|and)\s*safety$/i.test(t)) text = t;
+      }
+    }
+    void n;
+    return { label, status: !text ? "empty" : THIN.test(text) || text.length < 25 ? "thin" : "ok" };
+  });
+}
+
 /** Photo checks: needs sharp (passed in so this file stays free of native modules). */
 export async function photoStats(r, sharp) {
   const out = [];
