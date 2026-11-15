@@ -4,15 +4,37 @@
  */
 const escXml = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
-/** Replaces the contents of one existing cell with plain text, keeping its style. */
-export function setCell(xml, ref, text) {
+/**
+ * Replaces the contents of one existing cell with plain text, keeping its style (or using `style`, a cellXfs index,
+ * when given). An empty text leaves the cell empty.
+ */
+export function setCell(xml, ref, text, style) {
   const re = new RegExp(String.raw`<((?:\w+:)?)c\b([^>]*?)\br="${ref}"([^>]*?)(\/>|>[\s\S]*?<\/\1c>)`, "g");
   const m = [...xml.matchAll(re)];
   if (m.length !== 1) throw new Error(`cell ${ref} isn't in the sheet as expected`);
   const [whole, pre, a, b] = m[0];
-  const attrs = `${a} r="${ref}"${b}`.replace(/\s+t="[^"]*"/, "").replace(/\s*\/$/, "");
-  const fresh = `<${pre}c ${attrs.trim().replace(/\s+/g, " ")} t="inlineStr"><${pre}is><${pre}t xml:space="preserve">${escXml(text)}</${pre}t></${pre}is></${pre}c>`;
+  let attrs = `${a} r="${ref}"${b}`.replace(/\s+t="[^"]*"/, "").replace(/\s*\/$/, "");
+  if (style != null) attrs = /\bs="\d+"/.test(attrs) ? attrs.replace(/\bs="\d+"/, `s="${style}"`) : `${attrs} s="${style}"`;
+  attrs = attrs.trim().replace(/\s+/g, " ");
+  const fresh = text === "" ? `<${pre}c ${attrs}/>`
+    : `<${pre}c ${attrs} t="inlineStr"><${pre}is><${pre}t xml:space="preserve">${escXml(text)}</${pre}t></${pre}is></${pre}c>`;
   return xml.slice(0, m[0].index) + fresh + xml.slice(m[0].index + whole.length);
+}
+
+/** Sets the widths of some columns ({ 6: 30 } = column F, 30 characters wide); other columns keep theirs. */
+export function setColWidths(xml, widths) {
+  const m = /<((?:\w+:)?)cols>([\s\S]*?)<\/\1cols>/.exec(xml);
+  if (!m) return xml;
+  const pre = m[1], set = new Set(Object.keys(widths).map(Number));
+  const kept = [...m[2].matchAll(/<(?:\w+:)?col\b[^>]*\/>/g)].map((c) => c[0]).flatMap((c) => {
+    const min = Number(/min="(\d+)"/.exec(c)?.[1]), max = Number(/max="(\d+)"/.exec(c)?.[1]);
+    const out = [];
+    for (let i = min; i <= max; i++) if (!set.has(i)) out.push(c.replace(/min="\d+"/, `min="${i}"`).replace(/max="\d+"/, `max="${i}"`));
+    return out.length === max - min + 1 ? [c] : out;
+  });
+  const added = Object.entries(widths).map(([i, w]) => `<${pre}col min="${i}" max="${i}" width="${w}" customWidth="1"/>`);
+  const all = [...kept, ...added].sort((x, y) => Number(/min="(\d+)"/.exec(x)[1]) - Number(/min="(\d+)"/.exec(y)[1]));
+  return xml.slice(0, m.index) + `<${pre}cols>${all.join("")}</${pre}cols>` + xml.slice(m.index + m[0].length);
 }
 
 /** The opening tag and style index of one cell. */

@@ -7,6 +7,7 @@ import { driveClient } from "@/lib/google";
 import { loadWorkbook } from "@/lib/sync/load-workbook.mjs";
 import { matchSites } from "./read-document";
 import { setCell, cellStyle, greenVersion } from "./diary-cells.mjs";
+import { companyLabel } from "./contact-sheet.mjs";
 
 /**
  * Writes a clerk's invoice into the salmon (charged) side of Diary 2026.xlsx (Ronan, 15 Nov 2026). Same rules as the
@@ -233,20 +234,8 @@ export async function writePendingToDiary(admin: SupabaseClient) {
 }
 
 // ---------------------------------------------------------------- company names under clerks' names (Ronan, 15 Nov 2026)
-const COMPANYISH = /\b(ltd|limited|llp|plc|group|associates|contracting|contractors|services|solutions|consult\w*|inspections?|surveys?|management|construction|partnership|& sons?|and sons?)\b/i;
-
-/** The company to show under a person's name, if they invoice through one (their own name as a sole trader doesn't count). */
-export function companyLabel(person: string, companies: string[]) {
-  const last = norm(person.split(/\s+/).at(-1) ?? "");
-  const firm = companies.filter((c) => COMPANYISH.test(c) || !norm(c).includes(last));
-  const seen = new Map<string, string>();
-  for (const c of firm) {
-    const k = norm(c.replace(/\b(ltd|limited)\b\.?/gi, ""));
-    const cur = seen.get(k);
-    if (!cur || (/\b(ltd|limited)\b/i.test(c) && !/\b(ltd|limited)\b/i.test(cur))) seen.set(k, c);
-  }
-  return seen.size ? [...seen.values()].join(" / ") : null;
-}
+// companyLabel (the company to show for a person) lives in contact-sheet.mjs so the Contact details tab uses the same rule
+export { companyLabel };
 
 /**
  * Puts each clerk's own company in brackets on a second line under their name, in both name columns of every month
