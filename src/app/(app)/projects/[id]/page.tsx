@@ -25,8 +25,9 @@ export default async function Project({ params }: { params: Promise<{ id: string
   const monthStart = `${t.slice(0, 7)}-01`;
   const { data: p } = await db.from("projects").select("*,clients(name)").eq("id", id).maybeSingle();
   if (!p) notFound();
-  const [wf, { data: clerkList }, { data: plan }] = await Promise.all([loadWorkflow(db, p), db.from("clerks").select("id,name").eq("active", true).order("name"),
-    db.from("project_planned_months").select("month,building,me").eq("project_id", p.id).order("month")]);
+  const [wf, { data: clerkList }, { data: plan }, { data: draftInv }] = await Promise.all([loadWorkflow(db, p), db.from("clerks").select("id,name").eq("active", true).order("name"),
+    db.from("project_planned_months").select("month,building,me").eq("project_id", p.id).order("month"),
+    db.from("xero_draft_invoices").select("number,issued,subtotal,contact").eq("project_id", p.id).order("issued")]);
   const [{ data: info }, { data: pevents }] = await Promise.all([
     db.from("project_info").select("id,item,requested_on,received_on,hint,hint_thread,auto").eq("project_id", id).order("created_at"),
     db.from("project_events").select("id,happened_at,source,kind,who,body").eq("project_id", id).order("happened_at", { ascending: false }).limit(40),
@@ -235,6 +236,7 @@ export default async function Project({ params }: { params: Promise<{ id: string
         </section>
         <section className="panel">
           <h2>Outstanding invoices</h2>
+          {!!draftInv?.length && <p className="callout warn small">Draft{draftInv.length > 1 ? "s" : ""} in Xero, not sent: {draftInv.map((d) => `${d.number} £${Math.round(Number(d.subtotal ?? 0)).toLocaleString("en-GB")} (${d.issued})`).join(", ")}</p>}
           {!invoices?.length ? <p className="empty">Nothing outstanding.</p> : (
             <table><tbody>{invoices.map((i) => {
               const raw = i.chase_state as unknown;

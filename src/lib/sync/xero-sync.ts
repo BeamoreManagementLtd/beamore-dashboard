@@ -190,6 +190,17 @@ export async function syncXero(admin: SupabaseClient) {
     if (unmatched.size)
       await admin.from("unmatched_invoice_refs").insert([...unmatched].map(([reference_key, u]) => ({ reference_key, ...u, last_seen: today })));
 
+    // ---- draft sales invoices (never approved or sent): listed so none are forgotten, and so a job with a draft
+    // doesn't look uninvoiced
+    const drafts = await allPages<XInvoice>(get, "Invoices", "Invoices", { where: 'Type=="ACCREC"', Statuses: "DRAFT" });
+    const draftRows = drafts.map((i) => ({
+      xero_invoice_id: i.InvoiceID, number: i.InvoiceNumber ?? null, contact: i.Contact?.Name ?? null, reference: i.Reference ?? null,
+      issued: day(i.DateString), subtotal: i.SubTotal ?? i.Total ?? null,
+      project_id: refProject(i.Reference) ?? (i.LineItems?.length ? lineProject(i.LineItems) : null), synced_at: new Date().toISOString(),
+    }));
+    await admin.from("xero_draft_invoices").delete().neq("xero_invoice_id", "");
+    if (draftRows.length) { const { error } = await admin.from("xero_draft_invoices").insert(draftRows); if (error) throw new Error(`drafts: ${error.message}`); }
+
     // ---- finance (director-only table)
     // BankSummary rows are [account, opening, received, spent, closing]. Cash at bank = closing balances of the bank
     // accounts, leaving out charge/credit cards (as Xero's own cash figure does).
@@ -221,7 +232,7 @@ export async function syncXero(admin: SupabaseClient) {
     if (fe) throw new Error(`finance: ${fe.message}`);
 
     await admin.from("sync_files").upsert({ key: "xero_year_invoices", modified_time: yearStarted, read_at: yearStarted });
-    const msg = `${year.length ? `${year.length} invoices since ${YEAR_START} updated, ` : ""}${open.length} outstanding invoices, ${closed.length} closed since last sync, ${unmatched.size} references with no project`;
+    const msg = `${year.length ? `${year.length} invoices since ${YEAR_START} updated, ` : ""}${open.length} outstanding invoices, ${closed.length} closed since last sync, ${unmatched.size} references with no project, ${draftRows.length} drafts not yet sent`;
     await finish(true, msg);
     return { ok: true, message: msg };
   } catch (e) {

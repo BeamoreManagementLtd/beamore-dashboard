@@ -28,6 +28,7 @@ type Facts = {
   visits?: { last_visit: string | null; visits: number; charged_visits: number; clerk_names: string[] | null };
   reports?: { last_report: string | null; reports: number };
   invoices: { issued: string | null; amount_due: number | null; status: string | null }[]; // newest first
+  drafts?: { number: string | null; issued: string | null; subtotal: number | null }[]; // draft invoices in Xero, not sent
   clerkName?: string | null;
   clerkMeName?: string | null;
   mePlanned?: boolean;      // the cost sheet plans M&E days
@@ -97,11 +98,14 @@ export function buildWorkflow(p: WorkflowProject, f: Facts): Workflow {
 
   const lastVisit = f.visits?.last_visit;
   const lastReport = f.reports?.last_report;
-  const lastInv = live[0]?.issued;
+  const lastSent = live[0]?.issued;
+  const lastDraft = (f.drafts ?? []).map((d) => d.issued).filter(Boolean).sort().pop() ?? null;
+  const lastInv = [lastSent, lastDraft].filter(Boolean).sort().pop() ?? undefined;
+  const draftNote = lastDraft && lastDraft === lastInv ? " (draft in Xero, not sent)" : "";
   const liveSteps: Step[] = [
     step("L1", "Site visits", !!lastVisit, `last ${fmt(lastVisit)}`, { how: "auto" }),
     step("L2", "Reports", !!lastReport, `last ${fmt(lastReport)}`, { how: "auto" }),
-    step("L3", "Invoiced", !!lastInv, `last ${fmt(lastInv)}`, { how: "auto" }),
+    step("L3", "Invoiced", !!lastInv, `last ${fmt(lastInv)}${draftNote}`, { how: "auto" }),
   ];
 
   const prevMonth = new Date(); prevMonth.setDate(1); prevMonth.setMonth(prevMonth.getMonth() - 1);
@@ -186,7 +190,7 @@ export function buildWorkflow(p: WorkflowProject, f: Facts): Workflow {
     const who = f.clerkName || f.clerkMeName
       ? [f.clerkName && `${f.clerkName} (building)`, f.clerkMeName && `${f.clerkMeName} (M&E)`].filter(Boolean).join(" and ")
       : clerkNames.slice(0, 2).join(" and ") || undefined;
-    status = { text: `Live${who ? ` with ${who}` : ""}. Last visit ${fmt(lastVisit) || "none yet"}, last report ${fmt(lastReport) || "none yet"}, last invoice ${fmt(lastInv) || "none yet"}.`, waitingOn: null };
+    status = { text: `Live${who ? ` with ${who}` : ""}. Last visit ${fmt(lastVisit) || "none yet"}, last report ${fmt(lastReport) || "none yet"}, last invoice ${fmt(lastInv) || "none yet"}${draftNote}.`, waitingOn: null };
   }
   const extra: string[] = [];
   if (current === "live" && missing.length) extra.push(`Still waiting on the client for ${list(missing.map((i) => i.item))}.`);
@@ -223,7 +227,7 @@ export async function loadWorkflows(db: SupabaseClient, projects: WorkflowProjec
   const ids = projects.map((p) => p.id);
   const clerkIds = [...new Set(projects.flatMap((p) => [p.clerk_id, p.clerk_me_id]).filter(Boolean))] as string[];
   type Row = { project_id: string };
-  const [steps, info, visits, reports, invoices, contacts, events, clerks, mePlan] = await Promise.all([
+  const [steps, info, visits, reports, invoices, contacts, events, clerks, mePlan, drafts] = await Promise.all([
     many<Row & ManualStep>(db, "project_steps", "project_id,step,done_at,done_by,note", ids),
     many<Row & Facts["info"][number]>(db, "project_info", "project_id,item,requested_on,received_on", ids, (q) => q.order("created_at")),
     many<Row & NonNullable<Facts["visits"]>>(db, "project_visit_summary", "project_id,last_visit,visits,charged_visits,clerk_names", ids),
@@ -233,6 +237,7 @@ export async function loadWorkflows(db: SupabaseClient, projects: WorkflowProjec
     many<Row & { happened_at: string; who: string | null }>(db, "project_events", "project_id,happened_at,who", ids, (q) => q.eq("kind", "Possible go-ahead").order("happened_at", { ascending: false })),
     clerkIds.length ? db.from("clerks").select("id,name").in("id", clerkIds).then((r) => r.data ?? []) : Promise.resolve([] as { id: string; name: string }[]),
     many<Row>(db, "project_planned_months", "project_id", ids, (q) => q.gt("me", 0)),
+    many<Row & { number: string | null; issued: string | null; subtotal: number | null }>(db, "xero_draft_invoices", "project_id,number,issued,subtotal", ids),
   ]);
   const mePlanned = new Set(mePlan.map((m) => m.project_id));
   const group = <T extends Row>(rows: T[]) => { const m = new Map<string, T[]>(); for (const r of rows) m.set(r.project_id, [...(m.get(r.project_id) ?? []), r]); return m; };
@@ -246,6 +251,7 @@ export async function loadWorkflows(db: SupabaseClient, projects: WorkflowProjec
       visits: g.visits.get(p.id)?.[0],
       reports: g.reports.get(p.id)?.[0],
       invoices: g.invoices.get(p.id) ?? [],
+      drafts: drafts.filter((d) => d.project_id === p.id),
       clerkName: p.clerk_id ? clerkName.get(p.clerk_id) : null,
       clerkMeName: p.clerk_me_id ? clerkName.get(p.clerk_me_id) : null,
       mePlanned: mePlanned.has(p.id),

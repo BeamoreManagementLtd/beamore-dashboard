@@ -65,6 +65,8 @@ export async function setupProjectTracking(admin: SupabaseClient) {
     const onSite = new Map((vis ?? []).filter((v) => v.charged_visits > 0 && v.last_visit >= visitSince).map((v) => [v.project_id as string, v.last_visit as string]));
     const lastInv = new Map<string, string>();
     for (const i of recent ?? []) if ((lastInv.get(i.project_id) ?? "") < i.issued) lastInv.set(i.project_id, i.issued);
+    const { data: drafts } = await admin.from("xero_draft_invoices").select("project_id,issued").not("project_id", "is", null);
+    for (const d of drafts ?? []) if (d.issued && (lastInv.get(d.project_id) ?? "") < d.issued) lastInv.set(d.project_id, d.issued);
     const wantedAll = (projs ?? [])
       .filter((p) => (p.stage === "live" && (lastInv.has(p.id) || onSite.has(p.id) || (p.stage_changed_at ?? "") >= visitSince))
         || p.stage === "won_arranging" || (p.stage === "won_preparing" && !!p.start_date && p.start_date <= soon))

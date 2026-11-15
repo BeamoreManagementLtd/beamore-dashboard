@@ -172,6 +172,22 @@ export async function buildDueList(db: SupabaseClient, me: Profile): Promise<Due
       items.push({ key: `pricereq-${q.id}`, kind: "Projects", title: `Pricing request? ${q.subject ?? ""}`.slice(0, 120), detail: `From ${q.from_name ?? "?"}. Create the enquiry or mark it as not a request`, due: q.received_at?.slice(0, 10) ?? t, link: "/projects/requests", ...(director ? ownerOf(me.id, null) : ownerOf(null, directorName)) });
   }
 
+  // ---- draft invoices sitting in Xero for over a week (contacts held on purpose, e.g. Portakabin, left out)
+  if (director) {
+    const [{ data: drafts }, { data: held }] = await Promise.all([
+      db.from("xero_draft_invoices").select("number,contact,issued,subtotal").lte("issued", addDays(t, -7)),
+      db.from("held_draft_contacts").select("contact"),
+    ]);
+    const heldSet = new Set((held ?? []).map((h) => h.contact.toLowerCase()));
+    const waiting = (drafts ?? []).filter((d) => !heldSet.has((d.contact ?? "").toLowerCase()));
+    if (waiting.length) {
+      const total = waiting.reduce((s, d) => s + Number(d.subtotal ?? 0), 0);
+      const oldest = waiting.map((d) => d.issued).sort()[0];
+      items.push({ key: "xero-drafts", kind: "Xero", title: `${waiting.length} draft invoice${waiting.length > 1 ? "s" : ""} in Xero not sent (£${Math.round(total).toLocaleString("en-GB")} ex VAT)`,
+        detail: `${waiting.map((d) => d.number).join(", ")}. Oldest dated ${oldest}. Approve and send in Xero, or delete if not needed`, due: t, link: "/finance", ...ownerOf(me.id, null) });
+    }
+  }
+
   // ---- the DfE check couldn't decide: ask the director rather than guess
   if (director) {
     const { data: unsure } = await db.from("projects").select("id,display_name,dfe_evidence").is("is_dfe", null).like("dfe_evidence", "Unsure%");
