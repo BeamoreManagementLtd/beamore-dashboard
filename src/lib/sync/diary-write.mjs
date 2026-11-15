@@ -184,6 +184,11 @@ export async function writeDiary(admin, d, label) {
       const cs = clientsFor(e.label);
       return cs.length ? cs.map((client_id) => ({ ...base, project_id: null, client_id })) : [{ ...base, project_id: null, client_id: null }];
     });
+    // invoicing instructions now live in the dashboard (Ronan, 15 Nov 2026: no notes column in the diary), so a row
+    // without a note keeps the one the project or client already had
+    const before = must(await admin.from("invoice_contacts").select("project_id,client_id,notes").not("notes", "is", null), "old notes");
+    const noteFor = (r) => before.find((b) => (r.project_id ? b.project_id === r.project_id : !b.project_id && b.client_id === r.client_id))?.notes ?? null;
+    for (const r of rows) if (!r.notes) r.notes = noteFor(r);
     must(await admin.from("invoice_contacts").delete().neq("label", ""), "clear contacts");
     must(await admin.from("invoice_contacts").insert(rows), "contacts");
     contacts = new Set(rows.filter((r) => r.project_id || r.client_id).map((r) => r.label)).size;
