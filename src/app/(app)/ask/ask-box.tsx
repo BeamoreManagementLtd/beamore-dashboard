@@ -6,12 +6,19 @@ import { ask } from "./actions";
 type Turn = { role: "user" | "assistant"; text: string };
 const EXAMPLES = ["Which jobs still need a clerk?", "What's overdue for Gleeds?", "When does Dave Finn's insurance expire?", "What's outstanding for Cannon Wharf?"];
 
-/** Turns "/projects/abc" style paths in the answer into links. */
-function Answer({ text }: { text: string }) {
-  const parts = text.split(/(\/(?:projects|personnel|clerk-portal|invoices|due|reports|workflows|finance)(?:\/[\w-]+)?(?:\?[\w=&-]+)?)/g);
-  return <div className="ask-answer">{parts.map((p, i) => (i % 2 ? <Link key={i} href={p}>{p.startsWith("/projects") ? "open project" : p.startsWith("/personnel") ? "open clerk" : "open"}</Link> : <span key={i}>{p}</span>))}</div>;
+const LINK = /(\/(?:projects|personnel|clerk-portal|invoices|due|reports|workflows|finance)(?:\/[\w-]+)?(?:\?[\w=&-]+)?)/g;
+/** Bold (**text**) and dashboard paths ("/projects/abc") in the answer become bold text and links. */
+function Inline({ text }: { text: string }) {
+  return <>{text.split(/\*\*(.+?)\*\*/g).map((chunk, b) => (b % 2 ? <b key={b}>{chunk}</b> : chunk.split(LINK).map((p, i) => (i % 2
+    ? <Link key={`${b}-${i}`} href={p}>{p.startsWith("/projects") ? "open project" : p.startsWith("/personnel") ? "open clerk" : "open"}</Link>
+    : <span key={`${b}-${i}`}>{p}</span>))))}</>;
 }
-
+function Answer({ text }: { text: string }) {
+  return <div className="ask-answer">{text.split("\n").map((line, i) => {
+    const bullet = /^\s*[-*•]\s+/.test(line);
+    return <div key={i} className={bullet ? "ask-li" : undefined}>{bullet ? "• " : ""}<Inline text={line.replace(/^\s*[-*•]\s+/, "").replace(/^#+\s*/, "")} /></div>;
+  })}</div>;
+}
 export function AskBox({ compact = false }: { compact?: boolean }) {
   const [turns, setTurns] = useState<Turn[]>([]);
   const [q, setQ] = useState("");
