@@ -1,8 +1,11 @@
-# Usage: powershell -File scriptsrrange-diary-clerks.ps1 -In <built diary.xlsx> -Out <out.xlsx> -NewClerks 'Name One','Name Two'
-# blocks at the bottom), blocks added for new clerks, and estimated profit from the grey side. Ronan, 15 Nov 2026.
-param([string]$In = (Join-Path 'C:\Users\ronan\AppData\Local\Temp\claude\85de278c0c8731ab\7fbbb915-2e43-4285-97b9-4b2d7a08c73c\scratchpad\d27' 'Diary 2027.xlsx'), [string]$Out = (Join-Path 'C:\Users\ronan\AppData\Local\Temp\claude\85de278c0c8731ab\7fbbb915-2e43-4285-97b9-4b2d7a08c73c\scratchpad\d27' 'Diary 2027 v2.xlsx'))
+# After scripts/build-diary-year.mjs, in Excel on the office PC (Ronan, 15 Nov 2026):
+#  - clerks in alphabetical order by first name (Ronan's own block stays at the top, the two spare "Others" blocks
+#    at the bottom), moved by Excel itself so each block keeps its formulas, colours and merged name cell
+#  - a block for each new clerk (a copy of an ordinary clerk's block), added to the Total Subcontractors sums
+#  - estimated profit from the grey (planned) side, beside the actual profit
+# Usage: powershell -File scriptsarrange-diary-clerks.ps1 -In "Diary 2027 built.xlsx" -Out "Diary 2027.xlsx" -NewClerks 'Ben Lacey','Paul Hankin'
+param([Parameter(Mandatory)][string]$In, [Parameter(Mandatory)][string]$Out, [string[]]$NewClerks = @())
 $ErrorActionPreference = 'Stop'
-$NewClerks = @('Ben Lacey', 'Paul Hankin', 'Stephen Brewer')
 $Months = @('January','February','March','April','May','June','July','August','September','October','November','December')
 $H = 36  # rows per clerk: the header row, 31 days, sum, VAT, total, blank
 $xl = New-Object -ComObject Excel.Application
