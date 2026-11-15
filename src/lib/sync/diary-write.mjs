@@ -30,7 +30,10 @@ export async function writeDiary(admin, d, label) {
   }
 
   // ---- projects by name or diary spelling, plus sites someone has linked by hand
-  const projects = must(await admin.from("projects").select("id,name,diary_aliases"), "projects");
+  const projects = must(await admin.from("projects").select("id,number,name,diary_aliases"), "projects");
+  const byNumber = new Map(projects.map((p) => [p.number, p.id]));
+  // the diary's Projects tab, when it has one, is where the team now keeps contacts and numbers (15 Nov 2026)
+  const tab = d.projectsTab?.length ? d.projectsTab : null;
   const byKey = new Map();
   // names first, then diary spellings: a spelling linked to one project wins when two projects share a name
   for (const p of projects) if (siteKey(p.name)) byKey.set(siteKey(p.name), p.id);
@@ -147,7 +150,7 @@ export async function writeDiary(admin, d, label) {
   // ---- chase / invoice contacts from the "Invoice emails" tab: matched to a project by any part of the label after the
   // client ("Mott MacDonald - Sheffield - St Peters Batley"), otherwise to the client by its Xero name ("… - General")
   let contacts = 0;
-  if (d.invoiceEmails?.length) {
+  if (tab || d.invoiceEmails?.length) {
     const keys = [...byKey.keys()];
     const loose = (k) => {
       if (byKey.has(k)) return byKey.get(k);
@@ -165,7 +168,14 @@ export async function writeDiary(admin, d, label) {
         return ck.length >= 4 && k.length >= 4 && (k.startsWith(ck) || ck.startsWith(k)) && Math.min(ck.length, k.length) / Math.max(ck.length, k.length) >= 0.6;
       }).map((c) => c.id);
     };
-    const rows = d.invoiceEmails.flatMap((e) => {
+    const rows = tab ? tab.filter((t) => t.invoiceTo.length).flatMap((t) => {
+      // Projects tab: the job number says which project; a "(all projects)" row is the client's default
+      const base = { label: `${t.company} - ${t.project}`, to_emails: t.invoiceTo, cc_emails: t.invoiceCc, notes: t.invoiceNotes };
+      const project = (t.job && byNumber.get(t.job)) || (/^\(all projects\)$/i.test(t.project) ? null : loose(siteKey(t.project)));
+      if (project) return [{ ...base, project_id: project, client_id: null }];
+      const cs = clientsFor(t.company);
+      return cs.length ? cs.map((client_id) => ({ ...base, project_id: null, client_id })) : [{ ...base, project_id: null, client_id: null }];
+    }) : d.invoiceEmails.flatMap((e) => {
       // "WSP- St Marks", "Springstead - Bellway": split on a dash with a space on either side; try later parts first
       const parts = e.label.split(/\s*[-–]\s+|\s+[-–]\s*/);
       const project = /general/i.test(e.label) ? null : [...parts.slice(1).reverse(), parts[0]].map((p) => loose(siteKey(p))).find(Boolean) ?? null;
@@ -203,7 +213,14 @@ export async function writeDiary(admin, d, label) {
 
   // "Report emails" → distribution list
   const distProjects = new Set();
-  for (const e of d.reportEmails ?? []) {
+  if (tab) for (const t of tab) {
+    const pid = (t.job && byNumber.get(t.job)) || siteProject(t.project);
+    if (!pid || !t.reportTo.length) continue;
+    setP(pid, { report_to: t.reportTo.join("; "), report_cc: t.reportCc.join("; ") || null });
+    tick(pid, /distribution list/i, `From the diary (Projects): to ${t.reportTo.join(", ")}${t.reportCc.length ? `; cc ${t.reportCc.join(", ")}` : ""}`);
+    distProjects.add(pid);
+  }
+  for (const e of tab ? [] : d.reportEmails ?? []) {
     const pid = siteProject(e.site);
     if (!pid) continue;
     setP(pid, { report_to: e.to.join("; "), report_cc: e.cc.join("; ") || null, inspection_frequency: e.inspection, reporting_frequency: e.reporting });
@@ -214,7 +231,23 @@ export async function writeDiary(admin, d, label) {
 
   // "Invoice POs" → PO number and the DfE (SRP) project number
   const poProjects = new Set();
-  for (const p of d.invoicePOs ?? []) {
+  // Projects tab: its PO and DfE numbers are the ones to use (the team keeps them there now), first one if several
+  if (tab) for (const t of tab) {
+    const pid = (t.job && byNumber.get(t.job)) || siteProject(t.project);
+    if (!pid) continue;
+    const po = t.po.split(/\s*\/\s*/).map((x) => x.trim()).find((x) => /\d/.test(x));
+    const dfe = [...`${t.dfe} ${t.projectNumber}`.matchAll(/\b(SRP|FS|FE|PSBP)\s?(\d{3,4})\b/gi)].map((m) => `${m[1].toUpperCase()}${m[2]}`)[0];
+    if (po) {
+      if (current.get(pid)?.po_number !== po) setP(pid, { po_number: po });
+      tick(pid, /\bPO\b/, `From the diary (Projects): ${t.po}`);
+      poProjects.add(pid);
+    }
+    if (dfe) {
+      if (current.get(pid)?.dfe_project_number !== dfe) setP(pid, { dfe_project_number: dfe });
+      tick(pid, /DfE project number/i, `From the diary (Projects): ${dfe}`);
+    }
+  }
+  for (const p of tab ? [] : d.invoicePOs ?? []) {
     const pid = siteProject(p.site);
     if (!pid) continue;
     const all = `${p.poText} ${p.projectNumber} ${p.other}`;
@@ -256,6 +289,7 @@ export async function writeDiary(admin, d, label) {
   const matched = rows.filter((r) => r.project_id).length;
   const planned = d.visits.filter((v) => v.side === "planned").length / 2;
   return `${d.visits.length / 2 - planned} days charged and ${planned} planned, ${latest.size} clerks, ${abs.length} holidays, ` +
-    `${contacts} of ${d.invoiceEmails?.length ?? 0} invoice email rows matched, ${distLists} distribution lists, ${pos} PO numbers, ${clerkContacts} clerk contact details, ` +
+    (tab ? `Projects tab: ${tab.length} projects, ${contacts} with invoice contacts matched, ` : `${contacts} of ${d.invoiceEmails?.length ?? 0} invoice email rows matched, `) +
+    `${distLists} distribution lists, ${pos} PO numbers, ${clerkContacts} clerk contact details, ` +
     `${unmatched.size} site names not matched (${((matched / Math.max(rows.length, 1)) * 100).toFixed(0)}% of days matched to a project)`;
 }

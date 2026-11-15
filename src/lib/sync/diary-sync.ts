@@ -43,7 +43,7 @@ export async function syncDiary(admin: SupabaseClient, { force = false } = {}) {
     }
     // visits, holidays and invoice tables come from every year; the other tabs (rates, emails, POs, contacts) from the
     // newest diary, falling back to older ones for anything it doesn't have yet
-    type Parsed = ReturnType<typeof parseDiary> & { reportEmails: unknown[]; invoicePOs: unknown[]; contactDetails: unknown[] };
+    type Parsed = ReturnType<typeof parseDiary> & { reportEmails: unknown[]; invoicePOs: unknown[]; contactDetails: unknown[]; projectsTab: unknown[] };
     const parsed: Parsed[] = [];
     for (let i = 0; i < years.length; i++) {
       const wb = new ExcelJS.Workbook();
@@ -55,7 +55,7 @@ export async function syncDiary(admin: SupabaseClient, { force = false } = {}) {
     const merged = {
       visits: parsed.flatMap((p) => p.visits), absences: parsed.flatMap((p) => p.absences), invoiceLines: parsed.flatMap((p) => p.invoiceLines),
       rates: newestFirst.flatMap((p) => p.rates), clerks: [...new Set(parsed.flatMap((p) => p.clerks))],
-      invoiceEmails: pick("invoiceEmails"), reportEmails: pick("reportEmails"), invoicePOs: pick("invoicePOs"), contactDetails: pick("contactDetails"),
+      invoiceEmails: pick("invoiceEmails"), reportEmails: pick("reportEmails"), invoicePOs: pick("invoicePOs"), contactDetails: pick("contactDetails"), projectsTab: pick("projectsTab"),
     };
     const msg = await writeDiary(admin, merged as unknown as Parameters<typeof writeDiary>[1], "Diary 20") + (years.length > 1 ? ` (diaries ${years.join(" and ")})` : "");
     await admin.from("google_connection").update({ diary_file_id: files["2026"], diary_files: files, diary_modified_time: stamp }).eq("id", 1);

@@ -139,5 +139,24 @@ export function parseDiary(wb, { year = 2026, fileLabel = "Diary 2026.xlsx" } = 
     const row = cd.getRow(r), first = str(row.getCell(1)), last = str(row.getCell(2));
     if (first && last) contactDetails.push({ name: `${first} ${last}`, email: emails(str(row.getCell(3)))[0] ?? null, email2: emails(str(row.getCell(4)))[0] ?? null, phone: str(row.getCell(5)) || null });
   }
-  return { visits, absences, invoiceLines, rates, invoiceEmails, reportEmails, invoicePOs, contactDetails, clerks: [...clerks] };
+  // "Projects" tab (Ronan, 15 Nov 2026): one row per project, replacing the three tabs above as the place the team keeps
+  // invoice and report contacts, PO and project numbers. Columns found by their heading.
+  const projectsTab = [];
+  const pt = wb.getWorksheet("Projects");
+  if (pt) {
+    const col = {};
+    pt.getRow(1).eachCell((c, n) => { col[str(c)] = n; });
+    const get = (row, h) => (col[h] ? str(row.getCell(col[h])) : "");
+    if (col.Company && col.Project) for (let r = 2; r <= pt.rowCount; r++) {
+      const row = pt.getRow(r), project = get(row, "Project");
+      if (!project) continue;
+      projectsTab.push({
+        company: get(row, "Company"), project, job: Number(get(row, "Job no.")) || null,
+        projectNumber: get(row, "Project number"), dfe: get(row, "DfE project number"), po: get(row, "PO number"),
+        invoiceTo: emails(get(row, "Send invoice to")), invoiceCc: emails(get(row, "CC on invoice")), invoiceNotes: get(row, "Invoice notes") || null,
+        reportTo: emails(get(row, "Send reports to")), reportCc: emails(get(row, "CC on reports")), clerk: get(row, "Clerk of works") || null,
+      });
+    }
+  }
+  return { visits, absences, invoiceLines, rates, invoiceEmails, reportEmails, invoicePOs, contactDetails, projectsTab, clerks: [...clerks] };
 }
