@@ -4,6 +4,7 @@ import { requireProfile } from "@/lib/auth";
 import { insuranceSummary, fmtDate, gbp, type Policy } from "@/lib/portal/data";
 import { aiConfigured } from "@/lib/portal/read-document";
 import { resolveUpload, rereadUpload, removeUpload, setExpected, setAccess } from "./actions";
+import { viewAs } from "@/app/portal/actions";
 
 export const metadata = { title: "Clerk portal · Beamore" };
 
@@ -169,7 +170,7 @@ export default async function ClerkPortalAdmin({ searchParams }: { searchParams:
           <section className="panel tbl-wrap">
             <p className="muted small">Clerks sign in with their @beamore.co.uk Google account. Only Ronan and Judy get the dashboard; everyone else only sees their own portal.</p>
             <table>
-              <thead><tr><th>Clerk</th><th>Email</th><th>Billing</th><th>Portal</th><th>Invoice upload</th><th>Invoices</th></tr></thead>
+              <thead><tr><th>Clerk</th><th>Email</th><th>Billing</th><th>Portal</th><th>Invoice upload</th><th>Invoices</th><th></th></tr></thead>
               <tbody>
                 {(clerks ?? []).map((c) => (
                   <tr key={c.id}>
@@ -179,6 +180,7 @@ export default async function ClerkPortalAdmin({ searchParams }: { searchParams:
                     <td>{toggle(c, "portal_access", c.portal_access, ["Access on", "No access"])}</td>
                     <td>{toggle(c, "invoice_upload", c.invoice_upload, ["Allowed", "Not allowed"])}</td>
                     <td>{toggle(c, "invoices_paused", c.invoices_paused, ["Paused", "Active"])}</td>
+                    <td><form action={viewAs}><input type="hidden" name="clerk" value={c.id} /><button className="btn">View as</button></form></td>
                   </tr>
                 ))}
               </tbody>

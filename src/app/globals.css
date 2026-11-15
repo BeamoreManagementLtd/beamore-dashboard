@@ -210,3 +210,4 @@ a.pcard:hover{transform:translateY(-2px);box-shadow:0 6px 18px rgba(0,0,0,.07)}
   .ptable td{border:0;padding:0}
   .ptable .clip{max-width:none}
 }
+.viewas{display:flex;align-items:center;justify-content:center;gap:12px;padding:8px 16px;background:var(--ronan-soft);color:var(--ronan);font-size:13px;margin:0}

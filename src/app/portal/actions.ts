@@ -12,6 +12,7 @@ const MAX = 25 * 1024 * 1024;
 export async function startUpload(a: { kind: Kind; docType: string | null; fileName: string; mime: string; bytes: number }) {
   const me = await requirePortalUser();
   if (!me.clerk) return { ok: false as const, message: "Only clerks can upload here." };
+  if (me.viewingAs) return { ok: false as const, message: "You're viewing as this clerk, so uploads are switched off." };
   if (!["invoice", "insurance", "qualification"].includes(a.kind)) return { ok: false as const, message: "Unknown upload." };
   if (a.bytes > MAX) return { ok: false as const, message: "That file is over 25 MB. Please send a smaller copy or email it to us." };
   if (a.kind === "invoice" && !me.clerk.invoice_upload) return { ok: false as const, message: "Invoice upload isn't switched on for your account yet. Please email your invoice to Beamore." };
@@ -45,4 +46,17 @@ export async function finishUpload(receipt: string) {
   }
   after(() => processUpload(admin, u.id).catch(() => undefined)); // the hourly job retries anything left over
   return { ok: true as const };
+}
+
+/** Staff only: look at the portal as one clerk sees it, or stop. */
+export async function viewAs(fd: FormData) {
+  const { cookies } = await import("next/headers");
+  const { requireProfile } = await import("@/lib/auth");
+  const { redirect } = await import("next/navigation");
+  await requireProfile();
+  const id = String(fd.get("clerk") ?? "");
+  const jar = await cookies();
+  if (id) jar.set("portal_as", id, { httpOnly: true, secure: true, sameSite: "lax", path: "/", maxAge: 3600 });
+  else jar.delete("portal_as");
+  redirect(id ? "/portal" : "/clerk-portal?tab=people");
 }

@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { requirePortalUser } from "@/lib/portal/auth";
 import { PortalNav } from "./portal-nav";
+import { viewAs } from "./actions";
 
 export const metadata = { title: "Beamore portal" };
 
@@ -20,6 +21,9 @@ export default async function PortalLayout({ children }: { children: React.React
           <form action="/auth/signout" method="post"><button className="btn">Sign out</button></form>
         </div>
       </header>
+      {me.viewingAs && (
+        <form action={viewAs} className="viewas"><span>Viewing as <b>{me.clerk?.name}</b> (what they see; uploads are off)</span><button className="btn">Stop</button></form>
+      )}
       {me.clerk && <PortalNav />}
       <main className="portal-main">{children}</main>
       <footer className="portal-foot muted small">Beamore Management Ltd · Questions? Email <a href="mailto:ronan@beamore.co.uk">ronan@beamore.co.uk</a></footer>
