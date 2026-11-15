@@ -104,7 +104,7 @@ async function applyInsurance(admin: SupabaseClient, u: Row, r: Record<string, u
     const cover = p.cover_gbp === null ? null : Math.round(p.cover_gbp * 100);
     const label = p.type === "PI" ? "Professional indemnity" : p.type === "PL" ? "Public liability" : p.type === "EL" ? "Employers liability" : p.description || "Other cover";
     if (p.expires && p.expires < today()) problems.push(`${label}: this certificate expired on ${p.expires}. Please upload the renewed one`);
-    if (p.type === "PI" && cover !== null && cover < PI_MIN_PENCE) problems.push(`${label}: cover is £${(cover / 100).toLocaleString("en-GB")}; Beamore asks for £1 million`);
+    if (p.type === "PI" && cover !== null && cover < PI_MIN_PENCE) problems.push(`${label}: cover is £${(cover / 100).toLocaleString("en-GB")}; Beamore needs at least £500,000`);
     if (p.type === "PL" && cover !== null && cover < PL_MIN_PENCE) problems.push(`${label}: cover is £${(cover / 100).toLocaleString("en-GB")}; public liability must be at least £1 million`);
     if (!p.expires) forBeamore.push(`${label}: no expiry date could be read`);
     await admin.from("insurance_policies").insert({

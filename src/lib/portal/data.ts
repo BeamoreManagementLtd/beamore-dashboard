@@ -1,7 +1,7 @@
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
-export const PI_MIN_PENCE = 100_000_000; // £1m professional indemnity, required
+export const PI_MIN_PENCE = 50_000_000; // £500,000 professional indemnity, required (Ronan, 15 Nov 2026)
 export const PL_MIN_PENCE = 100_000_000; // £1m public liability, if they have it
 
 export const QUAL_TYPES = ["CSCS card", "MCIOB", "MICWCI", "MCABE", "SMSTS / SSSTS", "First aid", "Degree / HNC / HND", "CV", "Other"];
@@ -32,7 +32,7 @@ export async function myPolicies(db: SupabaseClient, clerkId: string) {
   return (data ?? []) as Policy[];
 }
 
-/** The newest policy of each type, and whether the £1m PI requirement is met today. */
+/** The newest policy of each type, and whether the £500,000 PI requirement is met today. */
 export function insuranceSummary(policies: Policy[]) {
   const t = today();
   const latest = new Map<string, Policy>();
@@ -48,7 +48,7 @@ export function insuranceSummary(policies: Policy[]) {
     piText: !pi ? "No professional indemnity certificate on file"
       : !pi.expires ? "Professional indemnity on file, expiry date not read yet"
       : pi.expires < t ? `Professional indemnity expired on ${fmtDate(pi.expires)}`
-      : (pi.cover_pence ?? 0) < PI_MIN_PENCE ? `Professional indemnity cover is ${gbp(pi.cover_pence)} (we need £1m)`
+      : (pi.cover_pence ?? 0) < PI_MIN_PENCE ? `Professional indemnity cover is ${gbp(pi.cover_pence)} (we need at least £500,000)`
       : `Professional indemnity in date until ${fmtDate(pi.expires)}${pi.expires <= soon ? " (renewal due soon)" : ""}`,
   };
 }
