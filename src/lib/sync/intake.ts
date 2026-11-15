@@ -5,6 +5,7 @@ import { driveClient } from "@/lib/google";
 import { INFO_DFE, INFO_STANDARD } from "@/lib/project-info";
 import { ensureProjectFolder, saveProjectAttachments, onWon } from "@/lib/project-setup";
 import { loadWorkflows, WORKFLOW_COLUMNS, type WorkflowProject } from "@/lib/workflow";
+import { appendToRegister } from "@/lib/sync/register-sync";
 
 /**
  * Project intake (hourly, read only):
@@ -285,6 +286,10 @@ export async function runIntake(admin: SupabaseClient) {
       }
     }
 
+    // ---- 6. new projects get their row (BM number) in the Cost Proposals Register
+    let registerRows = 0;
+    try { registerRows = await appendToRegister(admin); } catch { /* try next hour */ }
+
     // ---- 4. replies to cost proposals that look like a go-ahead (logged once per message)
     const replies = await q('(subject:proposal OR subject:"fee") (instruct OR "go ahead" OR "pleased to confirm" OR "happy to proceed" OR appoint OR "purchase order") -from:me newer_than:14d', 20);
     for (const m of replies.messages ?? []) {
@@ -299,7 +304,7 @@ export async function runIntake(admin: SupabaseClient) {
       goAheads++;
     }
 
-    const msgText = `${classified} projects checked for DfE, ${started} checklists started, ${hinted} checklist items found in email, ${sentFound} proposals found sent, ${replies4} client replies, ${setupDone} folders made, ${requestsSent} info requests seen sent, ${filesSaved} attachments saved to Drive, ${applicants} job applications, ${readyToStart} ready to start, ${startedOnSite} started on site, ${goAheads} possible go-aheads, ${priceRequests} possible pricing requests`;
+    const msgText = `${classified} projects checked for DfE, ${started} checklists started, ${hinted} checklist items found in email, ${sentFound} proposals found sent, ${replies4} client replies, ${setupDone} folders made, ${requestsSent} info requests seen sent, ${filesSaved} attachments saved to Drive, ${applicants} job applications, ${readyToStart} ready to start, ${startedOnSite} started on site, ${goAheads} possible go-aheads, ${priceRequests} possible pricing requests, ${registerRows} added to the register`;
     await finish(true, msgText);
     return { ok: true, message: msgText };
   } catch (e) {

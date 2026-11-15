@@ -4,6 +4,7 @@ import { driveClient } from "@/lib/google";
 import { siteKey } from "@/lib/site-key.mjs";
 import { readDiaryFront } from "@/lib/sync/diary-front.mjs";
 import { clerkKey } from "@/lib/site-key.mjs";
+import { draftExpiryChasers } from "@/lib/clerk-expiry";
 
 /**
  * Project details from the front page of the newest CoW diary in each active project's folder
@@ -150,7 +151,11 @@ export async function syncProjectDetails(admin: SupabaseClient) {
       }
     }
 
-    const msg = `${linked} projects linked to their Drive folder, ${read} CoW diaries read, ${meFound} M&E clerks from M&E reports, ${unchanged} unchanged, ${pos} PO numbers found in email, ${ticked} checklist items filled in`;
+    // clerks' renewals due within 30 days: one renewal-request draft each
+    let expiryDrafts = 0;
+    try { expiryDrafts = await draftExpiryChasers(admin); } catch { /* try again tomorrow */ }
+
+    const msg = `${expiryDrafts} renewal-request drafts, ${linked} projects linked to their Drive folder, ${read} CoW diaries read, ${meFound} M&E clerks from M&E reports, ${unchanged} unchanged, ${pos} PO numbers found in email, ${ticked} checklist items filled in`;
     await finish(true, msg);
     return { ok: true, message: msg };
   } catch (e) {

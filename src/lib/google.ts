@@ -78,6 +78,12 @@ export async function driveClient(admin: SupabaseClient) {
   };
   return {
     connection: c,
+    /** New content for an existing Drive file (a new version; Drive keeps the old ones). Only used to append to the register. */
+    replaceContent: async (fileId: string, body: Buffer, contentType: string) => {
+      const res = await fetch(`https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=media`, { method: "PATCH", headers: { Authorization: `Bearer ${access}`, "Content-Type": contentType }, body: new Uint8Array(body), cache: "no-store" });
+      if (!res.ok) throw new Error(`Google Drive update ${res.status}: ${(await res.text()).slice(0, 200)}`);
+      return res.json() as Promise<{ id: string }>;
+    },
     /** Upload a file to Drive (multipart body built by the caller). */
     upload: async (body: Buffer, contentType: string) => {
       const res = await fetch("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id", { method: "POST", headers: { Authorization: `Bearer ${access}`, "Content-Type": contentType }, body: new Uint8Array(body), cache: "no-store" });

@@ -75,7 +75,7 @@ export async function xeroClient(admin: SupabaseClient) {
     }).eq("id", 1);
     if (e) throw new Error(`Saving the refreshed Xero token failed: ${e.message}`);
   }
-  const call = async <T>(method: "GET" | "PUT", path: string, params: Record<string, string | number>, body?: unknown): Promise<T> => {
+  const call = async <T>(method: "GET" | "PUT" | "POST", path: string, params: Record<string, string | number>, body?: unknown): Promise<T> => {
     const url = `${API}/api.xro/2.0/${path}?${new URLSearchParams(Object.entries(params).map(([k, v]) => [k, String(v)]))}`;
     for (let attempt = 0; ; attempt++) {
       const res = await fetch(url, {
@@ -95,6 +95,8 @@ export async function xeroClient(admin: SupabaseClient) {
   const get = <T>(path: string, params: Record<string, string | number> = {}) => call<T>("GET", path, params);
   /** Creates records (e.g. draft invoices). Needs the write scope (accounting.invoices). */
   const put = <T>(path: string, body: unknown, params: Record<string, string | number> = {}) => call<T>("PUT", path, params, body);
-  return Object.assign(get, { put });
+  /** Updates a record (only used to archive tracking options for finished and lost projects). */
+  const post = <T>(path: string, body: unknown) => call<T>("POST", path, {}, body);
+  return Object.assign(get, { put, post });
 }
 export type XeroGet = Awaited<ReturnType<typeof xeroClient>>;

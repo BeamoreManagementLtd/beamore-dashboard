@@ -64,7 +64,7 @@ export async function syncProposalPlans(admin: SupabaseClient, opts: { limit?: n
         files.push(...await list(`'${sub.id}' in parents and (mimeType = '${XLSX}' or mimeType = '${GSHEET}') and trashed = false`));
       const rank = (f: F) => (/attendance/i.test(f.name) ? 1 : 0);
       files.sort((a, b) => rank(a) - rank(b) || b.modifiedTime.localeCompare(a.modifiedTime));
-      if (files[0] && files[0].id === p.plan_file_id && files[0].modifiedTime === p.plan_file_modified) { unchanged++; continue; }
+      if (files[0] && files[0].id === p.plan_file_id && Date.parse(files[0].modifiedTime) === Date.parse(p.plan_file_modified ?? "")) { unchanged++; continue; }
       let done = false;
       for (const f of files.slice(0, 6)) {
         const buf = f.mimeType === GSHEET ? await g.exportXlsx(f.id) : await g.download(f.id);
