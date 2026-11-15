@@ -62,7 +62,7 @@ const ALSO_GENERAL = { "mott macdonald - newcastle": /newcastle/i };
 // ---------------------------------------------------------------- 2. Invoice POs: PO and project numbers
 const codes = (t) => {
   const s = String(t ?? "");
-  const proj = [...s.matchAll(/\b(SRP\s?\d{3,4}|[A-Z]{2}MS\d{4}|SOCM\d{4}|FS\d{4}|\d{9}(?:[-.]\d{3})?)\b/g)].map((m) => m[1].replace(/\s/g, ""));
+  const proj = [...s.matchAll(/\b(SRP\s?\d{3,4}|[A-Z]{2}MS\d{4}|SOCM\d{4}|FS\d{4}|FE\d{3,4}|PSBP\d{4}|\d{9}(?:[-.]\d{3})?)\b/g)].map((m) => m[1].replace(/\s/g, ""));
   const po = [...s.replace(/\b(SRP\s?\d{3,4}|[A-Z]{2}MS\d{4}|SOCM\d{4}|FS\d{4}|\d{9}(?:[-.]\d{3})?)\b/g, "").matchAll(/\b(MM\d{6,}|D-PO-E\d+|P\d{6}UK\d{3}|MLIMPD\d+|UK\d{6,}|\d{5,8})\b/g)].map((m) => m[1]);
   return { po, proj };
 };
@@ -251,23 +251,25 @@ for (const s of spine) {
 report.push(`Xero invoices filled numbers for ${fromXero} projects`);
 
 // ---------------------------------------------------------------- 5. the tab
+// the DfE's own numbers for the job (SRP1234, FS0433, FE016, PSBP2226)
+const DFE = /^(SRP|FS|FE|PSBP)\s?\d{3,4}$/i;
 const SPARE = 3; // empty rows left under each company for new projects
 const uniq = (a) => [...new Map(a.filter((x) => x && /\d/.test(x)).map((x) => [x.replace(/\s/g, "").toUpperCase(), x])).values()];
 const uniqText = (a) => [...new Set(a.filter(Boolean))];
 const order = new Map(); spine.forEach((x) => { if (!order.has(x.group)) order.set(x.group, order.size); });
 spine.sort((a, b) => order.get(a.group) - order.get(b.group));
-const rows = [["Company", "Project", "Project number", "PO number", "Send invoice to", "CC on invoice", "Invoice notes", "Clerk of works", "Send reports to", "CC on reports", "Status", "Job no."]];
+const rows = [["Company", "Project", "Project number", "DfE project number", "PO number", "Send invoice to", "CC on invoice", "Invoice notes", "Clerk of works", "Send reports to", "CC on reports", "Status", "Job no."]];
 spine.forEach((s, i) => {
   const inv = s.inv ?? s.invGeneral;
   const c = codes(inv?.notes);
   const invNotes = uniqText([inv?.notes, s.inv ? null : s.invGeneral ? `From "${s.invGeneral.label}"` : null, ...s.notes]).join(". ");
-  rows.push([s.group, s.site, uniq([...s.proj, ...c.proj]).join(" / "), uniq([...s.po, ...c.po]).join(" / "), inv?.to ?? "", inv?.cc ?? "", invNotes, s.clerk, s.reportTo, s.reportCc, s.project ? STAGE[s.project.stage] ?? s.project.stage : "", s.project?.number ? String(s.project.number) : ""]);
-  if (spine[i + 1]?.group !== s.group) for (let k = 0; k < SPARE; k++) rows.push([s.group, ...Array(11).fill("")]);
+  rows.push([s.group, s.site, uniq([...s.proj, ...c.proj].filter((x) => !DFE.test(x))).join(" / "), uniq([...s.proj, ...c.proj].filter((x) => DFE.test(x)).map((x) => x.replace(/\s/g, "").toUpperCase())).join(" / "),uniq([...s.po, ...c.po]).join(" / "), inv?.to ?? "", inv?.cc ?? "", invNotes, s.clerk, s.reportTo, s.reportCc, s.project ? STAGE[s.project.stage] ?? s.project.stage : "", s.project?.number ? String(s.project.number) : ""]);
+  if (spine[i + 1]?.group !== s.group) for (let k = 0; k < SPARE; k++) rows.push([s.group, ...Array(12).fill("")]);
 });
 console.log(`${spine.length} projects; ${matched} matched to the dashboard; ${spine.filter((s) => s.inv).length} with their own invoice contacts, ${spine.filter((s) => !s.inv && s.invGeneral).length} from a company-wide entry, ${spine.filter((s) => !s.inv && !s.invGeneral).length} with none; ${fromEmail} helped by the email search`);
 for (const l of report) console.log(" -", l);
 const NEW_CLIENTS = 40; // empty rows at the bottom for new clients
-for (let k = 0; k < NEW_CLIENTS; k++) rows.push(Array(12).fill(""));
+for (let k = 0; k < NEW_CLIENTS; k++) rows.push(Array(13).fill(""));
 fs.writeFileSync(dst.replace(/\.xlsx$/, ".json"), JSON.stringify(rows, null, 1));
 
 if (dst.endsWith(".xlsx")) {
@@ -276,7 +278,7 @@ if (dst.endsWith(".xlsx")) {
   const headFont = await fontOf(zip, Number(cellStyle(cd, "A1").s)), bodyFont = await fontOf(zip, Number(cellStyle(cd, "A2").s));
   // the shading Judy and Anél use: a grey header, then white and light grey lines in turn
   const [head, white, grey] = await solidStyles(zip, [{ font: headFont, rgb: "FFBDBDBD" }, { font: bodyFont, rgb: "FFFFFFFF" }, { font: bodyFont, rgb: "FFF3F3F3" }]);
-  await addSheet(zip, "Projects", rows, { styleOf: (i) => (i === 0 ? head : i % 2 ? white : grey), widths: [24, 30, 22, 22, 40, 50, 45, 30, 60, 40, 11, 8], freeze: { cols: 2, rows: 1 }, replace: process.env.REPLACE === "1" });
+  await addSheet(zip, "Projects", rows, { styleOf: (i) => (i === 0 ? head : i % 2 ? white : grey), widths: [24, 30, 22, 16, 22, 40, 50, 45, 30, 60, 40, 11, 8], freeze: { cols: 2, rows: 1 }, replace: process.env.REPLACE === "1" });
   fs.writeFileSync(dst, await zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE", compressionOptions: { level: 6 } }));
   console.log("written", dst);
 }

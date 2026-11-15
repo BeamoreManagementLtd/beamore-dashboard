@@ -21,7 +21,7 @@ const QUIET_MS = 10 * 60 * 1000;
 const XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 const RUNNING = ["live", "won_arranging", "won_preparing", "on_hold"];
 const STAGE: Record<string, string> = { live: "Live", complete: "Finished", won_arranging: "Starting", won_preparing: "Starting", on_hold: "On hold", lost: "Lost", enquiry: "Quote", sent: "Quote" };
-const COLS = ["Company", "Project", "Project number", "PO number", "Send invoice to", "CC on invoice", "Invoice notes", "Clerk of works", "Send reports to", "CC on reports", "Status", "Job no."] as const;
+const COLS = ["Company", "Project", "Project number", "DfE project number", "PO number", "Send invoice to", "CC on invoice", "Invoice notes", "Clerk of works", "Send reports to", "CC on reports", "Status", "Job no."] as const;
 type Col = (typeof COLS)[number];
 
 const key = (s: unknown) => String(s ?? "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/&/g, "and").replace(/\b(the|school|academy|primary|college|ltd|limited)\b/g, "").replace(/[^a-z0-9]/g, "");
@@ -88,7 +88,7 @@ async function writeOne(g: Awaited<ReturnType<typeof driveClient>>, fileId: stri
     set(row, "Status", STAGE[p.stage] ?? p.stage, true);
     set(row, "Job no.", p.number ? String(p.number) : "");
     // numbers only when they have a digit in them (the dashboard has a few bare "SRP" / "number" values)
-    if (/\d/.test(p.dfe_project_number ?? "")) set(row, "Project number", p.dfe_project_number!);
+    if (/\d/.test(p.dfe_project_number ?? "")) set(row, at.has("DfE project number") ? "DfE project number" : "Project number", p.dfe_project_number!);
     if (/\d/.test(p.po_number ?? "")) set(row, "PO number", p.po_number!);
     set(row, "Clerk of works", clerkOf(p));
     set(row, "Send reports to", emails(p.report_to));
