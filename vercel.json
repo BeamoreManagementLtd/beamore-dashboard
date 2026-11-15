@@ -10,6 +10,7 @@
     { "path": "/api/sync/details", "schedule": "35 5 * * *" },
     { "path": "/api/sync/tracking", "schedule": "55 5 * * *" },
     { "path": "/api/sync/portal", "schedule": "*/15 * * * *" },
-    { "path": "/api/sync/diary-labels", "schedule": "45 5 * * *" }
+    { "path": "/api/sync/diary-labels", "schedule": "45 5 * * *" },
+    { "path": "/api/sync/todoist", "schedule": "*/10 * * * *" }
   ]
 }
