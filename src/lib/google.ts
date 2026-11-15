@@ -116,6 +116,21 @@ export async function driveClient(admin: SupabaseClient) {
       (await call(`https://www.googleapis.com/drive/v3/${path}?${new URLSearchParams(params)}`)).json() as Promise<T>,
     download: async (fileId: string) => (await call(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media&supportsAllDrives=true`)).arrayBuffer(),
     /** A Google Sheet saved as .xlsx (Sheets can't be downloaded directly). */
+    /** A Google Doc saved as PDF (Drive limits this to 10 MB). */
+    exportPdf: async (fileId: string) =>
+      (await call(`https://www.googleapis.com/drive/v3/files/${fileId}/export?mimeType=application%2Fpdf`)).arrayBuffer(),
+    /** Puts a file in a folder; with `as` set to a Google type, Drive converts it (e.g. Word -> Google Doc). */
+    putFile: async (name: string, parent: string, body: Buffer, contentType: string, as?: string) => {
+      const boundary = `beamore${Date.now()}`;
+      const meta = JSON.stringify({ name, parents: [parent], ...(as ? { mimeType: as } : {}) });
+      const multipart = Buffer.concat([
+        Buffer.from(`--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${meta}\r\n--${boundary}\r\nContent-Type: ${contentType}\r\n\r\n`),
+        body, Buffer.from(`\r\n--${boundary}--`),
+      ]);
+      const res = await fetch("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&supportsAllDrives=true&fields=id,name", { method: "POST", headers: { Authorization: `Bearer ${access}`, "Content-Type": `multipart/related; boundary=${boundary}` }, body: new Uint8Array(multipart), cache: "no-store" });
+      if (!res.ok) throw new Error(`Google Drive upload ${res.status}: ${(await res.text()).slice(0, 200)}`);
+      return res.json() as Promise<{ id: string; name: string }>;
+    },
     exportXlsx: async (fileId: string) =>
       (await call(`https://www.googleapis.com/drive/v3/files/${fileId}/export?mimeType=${encodeURIComponent("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")}`)).arrayBuffer(),
   };

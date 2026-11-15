@@ -1,0 +1,236 @@
+import "server-only";
+import type { SupabaseClient } from "@supabase/supabase-js";
+import sharp from "sharp";
+import { driveClient } from "@/lib/google";
+import { projectMatcher } from "@/lib/project-match";
+import { sendReportEmail } from "@/lib/google-user";
+import { readReport, photoStats, shrinkPhotos, trackSpelling, addComments, saveReport, cleanCopy } from "./docx.mjs";
+import { checkReport, type Issue } from "./check";
+
+/**
+ * Report checking (Ronan, 15 Nov 2026), replacing the "Ready To Check" and turnaround spreadsheets:
+ *  1. find: every Word report in a project's report folders (Schools/Others → project → Diaries, M&E Diaries, Reports…)
+ *     that has no PDF yet; a PDF with the same name means it's been done
+ *  2. check: once the clerk has finished with it (30 minutes untouched), the AI fixes spelling as tracked changes, shrinks
+ *     oversized photos and comments on anything the checker should look at; the Word file keeps its place and name, and
+ *     Drive keeps the clerk's version in its history
+ *  3. approve and send: the checker's click makes the PDF (with their edits), saves it next to the Word file and emails
+ *     it from their own Gmail to the project's report list, using the team's standard email
+ */
+const MAIN_FOLDERS = new Set(["0B5LaG4Rs3CgQd2VIeW5Ya3F3SnM", "0B5LaG4Rs3CgQaElqRFNsNWRQcUk"]); // Work/Schools, Work/Others
+const REPORT_FOLDER = /^(m&e |mep )?(diar(ies|y)|diaires|reports?|monthly reports?|site diar(ies|y))\s*$/i;
+const DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+const SETTLE_MS = 30 * 60 * 1000;
+const base = (name: string) => name.replace(/\.(docx?|pdf)$/i, "").toLowerCase().replace(/\s*\(\d+\)\s*$/, "").replace(/(\s+copy)+$/, "").replace(/[^a-z0-9]/g, "");
+
+type DriveFile = { id: string; name: string; parents?: string[]; createdTime: string; modifiedTime: string };
+type Folder = { id: string; name: string; parents?: string[] };
+
+async function listAll(g: Awaited<ReturnType<typeof driveClient>>, q: string) {
+  const out: DriveFile[] = [];
+  let pageToken: string | undefined;
+  do {
+    const r = await g.json<{ files: DriveFile[]; nextPageToken?: string }>("files", { q, fields: "nextPageToken,files(id,name,parents,createdTime,modifiedTime)", pageSize: "1000", includeItemsFromAllDrives: "true", supportsAllDrives: "true", ...(pageToken ? { pageToken } : {}) });
+    out.push(...r.files); pageToken = r.nextPageToken;
+  } while (pageToken);
+  return out;
+}
+
+/** 1. Finds new Word reports and reports that have since got a PDF. */
+export async function scanReports(admin: SupabaseClient) {
+  const g = await driveClient(admin);
+  const { data: last } = await admin.from("sync_files").select("modified_time").eq("key", "report_scan").maybeSingle();
+  const started = new Date().toISOString();
+  const since = last?.modified_time ? new Date(Date.parse(last.modified_time) - 3600_000).toISOString() : new Date(Date.now() - 21 * 864e5).toISOString();
+  const pdfSince = last?.modified_time ? since : new Date(Date.now() - 60 * 864e5).toISOString();
+  const [docs, pdfs] = await Promise.all([
+    listAll(g, `mimeType='${DOCX}' and trashed=false and modifiedTime > '${since}'`),
+    listAll(g, `mimeType='application/pdf' and trashed=false and modifiedTime > '${pdfSince}'`),
+  ]);
+
+  // folders: report folder → project folder → Schools/Others
+  const folders = new Map<string, Folder | null>();
+  const folder = async (id?: string) => {
+    if (!id) return null;
+    if (!folders.has(id)) folders.set(id, await g.json<Folder>(`files/${id}`, { fields: "id,name,parents", supportsAllDrives: "true" }).catch(() => null));
+    return folders.get(id) ?? null;
+  };
+  const { data: projects } = await admin.from("projects").select("id,name,diary_aliases,drive_folder_id,clerk_id,clerk_me_id,report_checker_id");
+  const match = projectMatcher((projects ?? []).map((p) => ({ id: p.id, name: p.name, diary_aliases: p.diary_aliases ?? [] })));
+  const byFolder = new Map((projects ?? []).filter((p) => p.drive_folder_id).map((p) => [p.drive_folder_id as string, p]));
+  // who checks: the project's checker, else who the old spreadsheet gave it to
+  const [{ data: staff }, { data: oldQueue }] = await Promise.all([admin.from("profiles").select("id,full_name,email"), admin.from("report_queue").select("project_id,checker")]);
+  const byFirst = (n?: string | null) => (n ? (staff ?? []).find((s) => (s.full_name ?? s.email).toLowerCase().startsWith(n.toLowerCase().replace(/é/g, "e")) || (s.full_name ?? "").toLowerCase().replace(/é/g, "e").startsWith(n.toLowerCase()))?.id ?? null : null);
+
+  let found = 0;
+  for (const f of docs) {
+    if (f.name.startsWith("~$")) continue;
+    const rf = await folder(f.parents?.[0]);
+    if (!rf || !REPORT_FOLDER.test(rf.name.trim())) continue;
+    const pf = await folder(rf.parents?.[0]);
+    if (!pf || !MAIN_FOLDERS.has(pf.parents?.[0] ?? "")) continue;
+    const p = byFolder.get(pf.id) ?? (projects ?? []).find((x) => x.id === match.fromReference(pf.name));
+    const kind = /m&e|mep/i.test(rf.name) ? "me" : "building";
+    const { data: existing } = await admin.from("reports").select("id,status").eq("drive_file_id", f.id).maybeSingle();
+    if (existing) { await admin.from("reports").update({ file_name: f.name, modified_at: f.modifiedTime }).eq("id", existing.id); continue; }
+    await admin.from("reports").insert({
+      drive_file_id: f.id, file_name: f.name, folder_id: rf.id, folder_name: rf.name.trim(), project_folder_id: pf.id, project_folder_name: pf.name,
+      project_id: p?.id ?? null, kind, clerk_id: p ? (kind === "me" ? p.clerk_me_id ?? p.clerk_id : p.clerk_id) : null,
+      uploaded_at: f.createdTime, modified_at: f.modifiedTime,
+      checker_id: p?.report_checker_id ?? byFirst((oldQueue ?? []).find((q) => q.project_id === p?.id && q.checker && q.checker !== "Unknown")?.checker),
+    });
+    found++;
+  }
+
+  // a PDF of the same name in the same folder: that report is done
+  let done = 0;
+  const open = new Map<string, { id: string; base: string }[]>();
+  for (const r of (await admin.from("reports").select("id,folder_id,file_name").in("status", ["new", "checking", "ready", "failed", "approved"])).data ?? []) {
+    open.set(r.folder_id, [...(open.get(r.folder_id) ?? []), { id: r.id, base: base(r.file_name) }]);
+  }
+  for (const pdf of pdfs) {
+    const hit = (open.get(pdf.parents?.[0] ?? "") ?? []).find((r) => r.base === base(pdf.name));
+    if (!hit) continue;
+    await admin.from("reports").update({ status: "done", pdf_file_id: pdf.id, done_at: pdf.createdTime, updated_at: started }).eq("id", hit.id).neq("status", "sent");
+    done++;
+  }
+  // reports nobody's checking yet: the project's checker, or the old spreadsheet's choice once that person has a login
+  for (const r of (await admin.from("reports").select("id,project_id").is("checker_id", null).in("status", ["new", "checking", "ready", "failed"])).data ?? []) {
+    const p = (projects ?? []).find((x) => x.id === r.project_id);
+    const who = p?.report_checker_id ?? byFirst((oldQueue ?? []).find((q) => q.project_id === r.project_id && q.checker && q.checker !== "Unknown")?.checker);
+    if (who) await admin.from("reports").update({ checker_id: who }).eq("id", r.id);
+  }
+  await admin.from("sync_files").upsert({ key: "report_scan", file_id: "drive", modified_time: started, read_at: started });
+  return { found, done };
+}
+
+/** 2. Checks reports the clerks have finished with, oldest first, within the time given. */
+export async function checkWaiting(admin: SupabaseClient, budgetMs = 200_000) {
+  const t0 = Date.now();
+  const { data: waiting } = await admin.from("reports").select("id").eq("status", "new").lt("modified_at", new Date(Date.now() - SETTLE_MS).toISOString()).order("uploaded_at").limit(25);
+  let checked = 0, failed = 0;
+  for (const w of waiting ?? []) {
+    if (Date.now() - t0 > budgetMs) break;
+    try { await checkOne(admin, w.id); checked++; } catch (e) {
+      failed++;
+      await admin.from("reports").update({ status: "failed", error: (e instanceof Error ? e.message : String(e)).slice(0, 500), updated_at: new Date().toISOString() }).eq("id", w.id);
+    }
+  }
+  return { checked, failed };
+}
+
+export async function checkOne(admin: SupabaseClient, id: string) {
+  const { data: rep } = await admin.from("reports").update({ status: "checking", error: null }).eq("id", id).select("*").single();
+  if (!rep) throw new Error("No such report");
+  const g = await driveClient(admin);
+  const meta = await g.json<{ headRevisionId: string; modifiedTime: string; size: string }>(`files/${rep.drive_file_id}`, { fields: "headRevisionId,modifiedTime,size", supportsAllDrives: "true" });
+  const raw = Buffer.from(await g.download(rep.drive_file_id));
+  const r = await readReport(raw);
+  const stats = await photoStats(r, sharp);
+
+  // what the check needs to know about the job
+  const { data: p } = rep.project_id ? await admin.from("projects").select("id,name,dfe_project_number,po_number,clerk_id,clerk_me_id,clients(name)").eq("id", rep.project_id).single() : { data: null };
+  const clerkIds = [p?.clerk_id, p?.clerk_me_id].filter(Boolean) as string[];
+  const { data: clerks } = clerkIds.length ? await admin.from("clerks").select("id,name").in("id", clerkIds) : { data: [] };
+  const since = new Date(Date.now() - 21 * 864e5).toISOString().slice(0, 10);
+  const { data: visits } = rep.project_id ? await admin.from("diary_visits").select("visit_date,side,clerks(name)").eq("project_id", rep.project_id).gte("visit_date", since).order("visit_date") : { data: [] };
+  const visitList = [...new Set((visits ?? []).map((v) => `${v.visit_date} ${(v.clerks as unknown as { name?: string } | null)?.name ?? ""}${v.side === "planned" ? " (planned)" : ""}`.trim()))];
+  const { data: prev } = rep.project_id ? await admin.from("reports").select("report_number,visit_date,text_snapshot").eq("project_id", rep.project_id).eq("kind", rep.kind).neq("id", id).not("text_snapshot", "is", null).order("uploaded_at", { ascending: false }).limit(1).maybeSingle() : { data: null };
+  const thumbs: Buffer[] = [];
+  for (const ph of stats.list.filter((x) => x.used).slice(0, 6)) {
+    try { thumbs.push(await sharp(await r.zip.file(ph.path)!.async("nodebuffer"), { failOn: "none" }).rotate().resize({ width: 360, height: 360, fit: "inside" }).jpeg({ quality: 60 }).toBuffer()); } catch { /* skip */ }
+  }
+
+  const ai = await checkReport({
+    fileName: rep.file_name, folder: rep.folder_name ?? "", project: p?.name ?? rep.project_folder_name ?? "", client: (p?.clients as unknown as { name?: string } | null)?.name ?? null,
+    projectNumbers: [p?.dfe_project_number, p?.po_number].filter((x): x is string => !!x && /\d/.test(x)),
+    expectedClerks: (clerks ?? []).map((c) => c.name), diaryVisits: visitList,
+    previous: prev ? { number: prev.report_number, date: prev.visit_date, text: prev.text_snapshot ?? "" } : null,
+    paragraphs: r.paragraphs, blanks: r.blanks, placeholders: r.placeholders,
+    photos: { count: stats.count, blurry: stats.blurry, smallOnPage: stats.smallOnPage, stretched: stats.stretched, mb: raw.length / 1e6 },
+    thumbnails: thumbs, today: new Date().toISOString().slice(0, 10),
+  });
+
+  // put the fixes into the Word file: spelling as tracked changes, issues as comments, smaller photos
+  const shrunk = await shrinkPhotos(r, sharp, stats);
+  const spelt = trackSpelling(r, ai.spelling);
+  const rank = { high: 0, medium: 1, low: 2 } as const;
+  const issues: Issue[] = [...ai.issues].sort((a, b) => rank[a.severity] - rank[b.severity]);
+  if (spelt.skipped.length) issues.push({ severity: "low", kind: "other", text: `Spelling not changed automatically (please fix by hand): ${spelt.skipped.slice(0, 8).map((s) => `${s.find} → ${s.replace}`).join(", ")}`, p: null });
+  await addComments(r, issues.filter((i) => i.severity !== "low").slice(0, 15).map((i) => ({ p: i.p, text: `${i.severity === "high" ? "Must check: " : ""}${i.text}` })));
+  const out = await saveReport(r);
+
+  // only if the clerk hasn't changed it while we were checking
+  const now = await g.json<{ headRevisionId: string }>(`files/${rep.drive_file_id}`, { fields: "headRevisionId", supportsAllDrives: "true" });
+  if (now.headRevisionId !== meta.headRevisionId) {
+    await admin.from("reports").update({ status: "new", modified_at: new Date().toISOString() }).eq("id", id);
+    return;
+  }
+  await g.replaceContent(rep.drive_file_id, out, DOCX);
+  const after = await g.json<{ headRevisionId: string }>(`files/${rep.drive_file_id}`, { fields: "headRevisionId", supportsAllDrives: "true" });
+  const visitFromName = /(\d{1,2})[.\-_ ](\d{1,2})[.\-_ ](\d{2,4})/.exec(rep.file_name);
+  const nameDate = visitFromName ? `${visitFromName[3].length === 2 ? `20${visitFromName[3]}` : visitFromName[3]}-${visitFromName[2].padStart(2, "0")}-${visitFromName[1].padStart(2, "0")}` : null;
+  await admin.from("reports").update({
+    status: "ready", ai_summary: ai.summary, issues, spelling_fixed: spelt.applied,
+    photos: { count: stats.count, blurry: stats.blurry, smallOnPage: stats.smallOnPage, stretched: stats.stretched, shrunk: shrunk.changed },
+    size_before: raw.length, size_after: out.length, checked_revision: after.headRevisionId, checked_at: new Date().toISOString(),
+    visit_date: ai.visit_date && /^\d{4}-\d{2}-\d{2}$/.test(ai.visit_date) ? ai.visit_date : (nameDate && !Number.isNaN(Date.parse(nameDate)) ? nameDate : null),
+    report_number: ai.report_number, clerk_name: ai.clerk_name,
+    text_snapshot: r.paragraphs.map((x) => x.text).filter((x) => x.trim()).join("\n").slice(0, 20000),
+    modified_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+  }).eq("id", id);
+}
+
+const fill = (t: string, v: Record<string, string>) => t.replace(/\{(\w+)\}/g, (m, k) => v[k] ?? m);
+const ukDate = (d: string | null) => (d ? new Date(`${d}T00:00:00Z`).toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric", timeZone: "UTC" }) : "");
+
+/** The standard email filled in for one report (the checker can still change it before sending). */
+export async function draftFor(admin: SupabaseClient, reportId: string, sender: { full_name: string | null; email: string }) {
+  const [{ data: rep }, { data: s }] = await Promise.all([
+    admin.from("reports").select("*,projects(name,report_to,report_cc)").eq("id", reportId).single(),
+    admin.from("report_settings").select("*").eq("id", 1).single(),
+  ]);
+  const p = (rep?.projects ?? null) as { name?: string; report_to?: string | null; report_cc?: string | null } | null;
+  const v = { project: p?.name ?? rep?.project_folder_name ?? "", report_number: rep?.report_number ?? "", visit_date: ukDate(rep?.visit_date ?? null), clerk: rep?.clerk_name ?? "", sender_name: sender.full_name ?? sender.email, sender_first_name: (sender.full_name ?? sender.email).split(" ")[0] };
+  const emails = (s?: string | null) => [...new Set((s ?? "").match(/[A-Za-z0-9._%+'-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g) ?? [])];
+  return {
+    to: emails(p?.report_to), cc: emails(p?.report_cc),
+    subject: fill(s?.email_subject ?? "", v).replace(/\s+–\s+(?=–|$)/g, " ").replace(/\s{2,}/g, " ").trim(),
+    body: fill(s?.email_body ?? "", v),
+  };
+}
+
+/** 3. The checker's "Approve and send": PDF made from the checked Word file, saved next to it, emailed from their Gmail. */
+export async function approveAndSend(admin: SupabaseClient, reportId: string, who: { id: string; full_name: string | null }, m: { to: string[]; cc: string[]; subject: string; body: string }) {
+  if (!m.to.length) throw new Error("Nobody to send it to: add the report list on the project's page");
+  const { data: rep } = await admin.from("reports").select("*").eq("id", reportId).single();
+  if (!rep) throw new Error("No such report");
+  if (rep.status === "sent") throw new Error("Already sent");
+  const g = await driveClient(admin);
+  await admin.from("reports").update({ status: "approved", approved_by: who.id, approved_at: new Date().toISOString(), error: null }).eq("id", reportId);
+  try {
+    // the Word file as it is now (with the checker's edits), tracked changes left in accepted and comments taken out
+    const clean = await cleanCopy(Buffer.from(await g.download(rep.drive_file_id)));
+    const work = await conversionFolder(g);
+    const tmp = await g.putFile(`${rep.file_name.replace(/\.docx?$/i, "")} (for PDF)`, work, clean, DOCX, "application/vnd.google-apps.document");
+    const pdf = Buffer.from(await g.exportPdf(tmp.id));
+    const pdfName = `${rep.file_name.replace(/\.docx?$/i, "")}.pdf`;
+    const saved = await g.putFile(pdfName, rep.folder_id, pdf, "application/pdf");
+    const sent = await sendReportEmail(admin, who.id, { ...m, fileName: pdfName, pdf });
+    const at = new Date().toISOString();
+    await admin.from("reports").update({ status: "sent", pdf_file_id: saved.id, sent_at: at, done_at: at, sent_by: who.id, sent_to: m.to, sent_cc: m.cc, gmail_message_id: sent.id, updated_at: at }).eq("id", reportId);
+    if (rep.project_id) await admin.from("project_events").insert({ project_id: rep.project_id, source: "team", kind: "Report sent", who: who.full_name ?? sent.from, body: `${pdfName} sent from ${sent.from} to ${m.to.join(", ")}${m.cc.length ? `, cc ${m.cc.join(", ")}` : ""}` });
+    return { pdfName, from: sent.from };
+  } catch (e) {
+    await admin.from("reports").update({ status: "ready", error: `Not sent: ${(e instanceof Error ? e.message : String(e)).slice(0, 400)}` }).eq("id", reportId);
+    throw e;
+  }
+}
+
+/** A folder for the Google copies the PDFs are made from (kept, never deleted). */
+async function conversionFolder(g: Awaited<ReturnType<typeof driveClient>>) {
+  const name = "Report PDFs - working copies (dashboard)";
+  const found = await g.json<{ files: { id: string }[] }>("files", { q: `name = '${name}' and mimeType = 'application/vnd.google-apps.folder' and trashed = false`, fields: "files(id)", pageSize: "1" });
+  if (found.files[0]) return found.files[0].id;
+  return (await g.post<{ id: string }>("https://www.googleapis.com/drive/v3/files?fields=id", { name, mimeType: "application/vnd.google-apps.folder" })).id;
+}

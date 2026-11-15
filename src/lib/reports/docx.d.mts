@@ -1,0 +1,16 @@
+import type JSZip from "jszip";
+import type Sharp from "sharp";
+export type Report = {
+  zip: JSZip; xml: string; spans: { start: number; end: number }[]; paragraphs: { i: number; text: string }[];
+  blanks: string[]; placeholders: { i: number; text: string }[]; shown: { path: string; cx: number; cy: number; cropped: boolean }[]; media: string[];
+};
+export type Photo = { path: string; bytes: number; width: number; height: number; used: number; stretched: boolean; shownCm: number; dpi: number | null; blurry: boolean; smallOnPage: boolean; large: boolean };
+export type PhotoStats = { count: number; blurry: number; smallOnPage: number; large: number; stretched: number; bytes: number; list: Photo[] };
+export function paragraphSpans(xml: string): { start: number; end: number }[];
+export function readReport(buf: Buffer): Promise<Report>;
+export function photoStats(r: Report, sharp: typeof Sharp): Promise<PhotoStats>;
+export function shrinkPhotos(r: Report, sharp: typeof Sharp, stats: PhotoStats): Promise<{ changed: number; before: number; after: number }>;
+export function trackSpelling(r: Report, fixes: { p: number; find: string; replace: string }[]): { applied: number; skipped: { p: number; find: string; replace: string }[] };
+export function addComments(r: Report, comments: { p: number | null; text: string }[]): Promise<number>;
+export function saveReport(r: Report): Promise<Buffer>;
+export function cleanCopy(buf: Buffer): Promise<Buffer>;

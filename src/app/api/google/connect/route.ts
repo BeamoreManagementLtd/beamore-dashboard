@@ -1,12 +1,19 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { requireDirector } from "@/lib/auth";
+import { requireDirector, requireProfile } from "@/lib/auth";
 import { googleAuthorizeUrl } from "@/lib/google";
+import { userAuthorizeUrl } from "@/lib/google-user";
 
-/** Director only: asks Google for read-only Drive access so the dashboard can read the diary. */
+/**
+ * Director: connects the dashboard's Google Drive and Gmail (?for= absent).
+ * Anyone on the team (?for=me): connects their own Gmail, only to send reports they approve.
+ */
 export async function GET(request: NextRequest) {
-  await requireDirector();
+  const forMe = request.nextUrl.searchParams.get("for") === "me";
+  const me = forMe ? await requireProfile() : await requireDirector();
   const state = crypto.randomUUID();
-  const res = NextResponse.redirect(googleAuthorizeUrl(`${request.nextUrl.origin}/api/google/callback`, state));
+  const redirect = `${request.nextUrl.origin}/api/google/callback`;
+  const res = NextResponse.redirect(forMe ? userAuthorizeUrl(redirect, state, me.email) : googleAuthorizeUrl(redirect, state));
   res.cookies.set("google_state", state, { httpOnly: true, secure: true, sameSite: "lax", maxAge: 600, path: "/api/google" });
+  res.cookies.set("google_for", forMe ? "me" : "dashboard", { httpOnly: true, secure: true, sameSite: "lax", maxAge: 600, path: "/api/google" });
   return res;
 }
