@@ -195,7 +195,9 @@ export default async function Project({ params }: { params: Promise<{ id: string
       <div className="grid2">
         <section className="panel">
           <h2>Days by month</h2>
-          {p.plan_file && <p className="small muted">Plan from {p.plan_file} ({planTotal} days in all). The latest cost sheet is read every morning.</p>}
+          {p.plan_file && (planTotal > 0
+            ? <p className="small muted">Plan from {p.plan_file} ({planTotal} days in all). The latest cost sheet is read every morning.</p>
+            : <p className="small muted">{p.plan_file}.</p>)}
           {!rows.size ? <p className="empty">No diary days or cost sheet plan yet.</p> : (
             <table>
               <thead><tr><th>Month</th><th className="num" title="From the latest cost sheet">Plan</th><th className="num" title="Grey side of the diary">In diary</th><th className="num">Building</th><th className="num">M&amp;E</th><th className="num">Charged</th></tr></thead>
