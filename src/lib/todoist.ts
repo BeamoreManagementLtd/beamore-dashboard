@@ -90,7 +90,26 @@ export async function syncTodoist(admin: SupabaseClient) {
   type Sec = { id: string; name: string; project_id: string };
   const known = new Map<string, Sec>(Object.entries((st as { sections?: Record<string, Sec> } | null)?.sections ?? {}));
   for (const x of r.sections ?? []) { if (x.is_deleted || x.is_archived) known.delete(x.id); else known.set(x.id, { id: x.id, name: x.name, project_id: x.project_id }); }
-  const allSecs = [...known.values()].filter((x) => x.project_id === projectId || x.project_id === teamId);
+  let allSecs = [...known.values()].filter((x) => x.project_id === projectId || x.project_id === teamId);
+  // tidy-up: an earlier version made the shared columns again on every run. On a full read, keep one of each
+  // (the one with cards, else the oldest) and delete only the EMPTY copies of the dashboard's own column names.
+  if (r.items && (st?.sync_token == null || !st?.sections || Object.keys((st as { sections?: object }).sections ?? {}).length === 0)) {
+    const ours = (n: string) => n === DUE || /^\S+'s list$/.test(n);
+    const count = new Map<string, number>();
+    for (const i of r.items) if (i.section_id && !finished(i)) count.set(i.section_id, (count.get(i.section_id) ?? 0) + 1);
+    const del: Cmd[] = [];
+    for (const name of new Set(allSecs.filter((x) => ours(x.name)).map((x) => x.name))) {
+      const same = allSecs.filter((x) => x.name === name).sort((p, q) => (count.get(q.id) ?? 0) - (count.get(p.id) ?? 0) || Number(q.project_id === teamId) - Number(p.project_id === teamId));
+      for (const x of same.slice(1)) if (!count.get(x.id)) del.push({ type: "section_delete", args: { id: x.id } });
+    }
+    if (del.length) {
+      await send(del);
+      const gone = new Set(del.map((d) => d.args.id as string));
+      for (const id of gone) known.delete(id);
+      allSecs = allSecs.filter((x) => !gone.has(x.id));
+      await admin.from("portal_audit").insert({ actor: "dashboard", action: "todoist-duplicate-columns-removed", detail: { count: del.length } });
+    }
+  }
   let dueSec: string | null = allSecs.find((x) => x.name === DUE && x.project_id === teamId)?.id ?? st?.due_section_id ?? null;
   const personSec = new Map<string, StaffPerson>(); // section id -> person
   const sectionFor = new Map<string, string>();      // person email -> section id (the Beamore project's, preferably)
