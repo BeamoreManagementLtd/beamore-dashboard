@@ -10,7 +10,8 @@ export async function addTask(form: FormData) {
   const db = await createClient();
   const owner = String(form.get("owner_id") ?? "");
   const { error } = await db.from("tasks").insert({
-    title, due: String(form.get("due") ?? "") || null, owner_id: owner === "" ? me.id : owner === "none" ? null : owner, kind: "Added by " + (me.full_name ?? me.email).split(" ")[0],
+    title, due: String(form.get("due") ?? "") || null, owner_id: owner === "" ? me.id : owner === "none" || owner.startsWith("name:") ? null : owner,
+    owner_name: owner.startsWith("name:") ? owner.slice(5) : null, kind: "Added by " + (me.full_name ?? me.email).split(" ")[0],
   });
   if (error) throw new Error(error.message);
   revalidatePath("/due");

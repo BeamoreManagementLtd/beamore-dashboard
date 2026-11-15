@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { requireProfile } from "@/lib/auth";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createServiceClient } from "@/lib/supabase/server";
+import { staffPeople } from "@/lib/staff";
 import { buildDueList, isMine, type DueItem } from "@/lib/due";
 import { fd } from "@/lib/format";
 import { addTask, completeTask } from "./actions";
@@ -11,7 +12,7 @@ export default async function Due({ searchParams }: { searchParams: Promise<{ wh
   const me = await requireProfile();
   const { who = "all" } = await searchParams;
   const db = await createClient();
-  const [items, { data: people }] = await Promise.all([buildDueList(db, me), db.from("profiles").select("id,full_name,email").order("full_name")]);
+  const [items, people] = await Promise.all([buildDueList(db, me), staffPeople(createServiceClient())]);
   const t = new Date().toLocaleDateString("en-CA", { timeZone: "Europe/London" });
   const shown = who === "mine" ? items.filter((i) => isMine(i, me)) : items;
   const groups = new Map<string, DueItem[]>();
@@ -35,7 +36,7 @@ export default async function Due({ searchParams }: { searchParams: Promise<{ wh
           <div className="field"><label htmlFor="o">For</label>
             <select id="o" name="owner_id" defaultValue="">
               <option value="">Me</option>
-              {(people ?? []).filter((p) => p.id !== me.id).map((p) => <option key={p.id} value={p.id}>{p.full_name ?? p.email}</option>)}
+              {people.filter((p) => p.email !== me.email).map((p) => <option key={p.email} value={p.profileId ?? `name:${p.first}`}>{p.name}</option>)}
               <option value="none">Anyone</option>
             </select>
           </div>

@@ -39,6 +39,6 @@ export async function submitJoin(token: string, form: FormData) {
     } catch { failed.push(...files.map(([, l]) => l)); }
   }
   const { data: judy } = await admin.from("profiles").select("id").ilike("full_name", "Judy%").limit(1);
-  await admin.from("tasks").insert({ owner_id: judy?.[0]?.id ?? null, title: `Check ${name}'s new clerk form`, kind: "Personnel", link: `/personnel/${c.clerk_id}`, due: new Date().toISOString().slice(0, 10) });
+  await admin.from("tasks").insert({ owner_id: judy?.[0]?.id ?? null, owner_name: "Judy", title: `Check ${name}'s new clerk form`, kind: "Personnel", link: `/personnel/${c.clerk_id}`, due: new Date().toISOString().slice(0, 10) });
   redirect(`/join/${token}?done=1${failed.length ? `&failed=${encodeURIComponent(failed.join(", "))}` : ""}`);
 }

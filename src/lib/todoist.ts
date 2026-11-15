@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { buildDueList } from "@/lib/due";
 import type { Profile } from "@/lib/auth";
+import { staffPeople, type StaffPerson } from "@/lib/staff";
 
 /**
  * Two-way link with Ronan's Todoist (Todoist API v1, /sync). Everything lives in one Todoist project, "Beamore":
@@ -10,6 +11,9 @@ import type { Profile } from "@/lib/auth";
  *    dashboard tasks for Ronan appear there. Ticking off on either side ticks off the other.
  *  - section "From the dashboard": Ronan's due list (chases, set-ups, clerk renewals...), kept up to date. Items close by
  *    themselves once they're dealt with in the dashboard. Ticking one in Todoist just hides it in Todoist.
+ *  - one section per person ("Judy's list", "Anel's list"...): what Ronan adds there goes on that person's list in the
+ *    dashboard, and their dashboard tasks show there, both ways. A section is matched by the first name it starts with;
+ *    a section for someone without dashboard access still works (the task is shown under that name).
  * Needs TODOIST_API_TOKEN (Todoist > Settings > Integrations > Developer), added in Vercel by Ronan.
  */
 const API = "https://api.todoist.com/api/v1/sync";
@@ -77,24 +81,50 @@ export async function syncTodoist(admin: SupabaseClient) {
   const make: Cmd[] = [];
   if (!tasksSec) make.push({ type: "section_add", temp_id: "t", args: { name: TASKS, project_id: projectId } });
   if (!dueSec) make.push({ type: "section_add", temp_id: "d", args: { name: DUE, project_id: projectId } });
-  if (make.length) { const m = await send(make); tasksSec = tasksSec ?? m.t; dueSec = dueSec ?? m.d; }
+  const staff = await staffPeople(admin);
+  const others = staff.filter((p) => p.role !== "director");
+  const firstOf = (name: string) => name.trim().split(/[\s']/)[0].toLowerCase();
+  const personSec = new Map<string, StaffPerson>(); // section id -> person
+  const sectionFor = new Map<string, string>();      // person email -> section id
+  for (const x of secs) {
+    if (x.id === tasksSec || x.id === dueSec) continue;
+    const p = others.find((o) => firstOf(x.name) === o.first.toLowerCase());
+    if (p) { personSec.set(x.id, p); if (!sectionFor.has(p.email)) sectionFor.set(p.email, x.id); }
+  }
+  others.filter((p) => !sectionFor.has(p.email)).forEach((p, n) => make.push({ type: "section_add", temp_id: `s${n}`, args: { name: `${p.first}'s list`, project_id: projectId } }));
+  if (make.length) {
+    const m = await send(make); tasksSec = tasksSec ?? m.t; dueSec = dueSec ?? m.d;
+    others.filter((p) => !sectionFor.has(p.email)).forEach((p, n) => { if (m[`s${n}`]) { sectionFor.set(p.email, m[`s${n}`]); personSec.set(m[`s${n}`], p); } });
+  }
+  const secName = new Map(secs.map((x) => [x.id, x.name]));
+  /** Who an item belongs to, from the section it's in. */
+  const ownerFor = (sectionId: string | null) => {
+    if (!sectionId || sectionId === tasksSec) return { owner_id: me.id, owner_name: null as string | null };
+    const p = personSec.get(sectionId);
+    if (p) return { owner_id: p.profileId, owner_name: p.first };
+    const n = secName.get(sectionId);
+    return { owner_id: null, owner_name: n ? n.trim().split(/[\s']/)[0] : null }; // e.g. a list for someone not on the dashboard yet
+  };
   const items = (r.items ?? []).filter((i) => i.project_id === projectId);
 
   // ---- Todoist -> dashboard (anything in the Beamore project except the due-list mirror)
-  const { data: linked } = await admin.from("tasks").select("id,todoist_id,title,due,done_at").not("todoist_id", "is", null);
+  const { data: linked } = await admin.from("tasks").select("id,todoist_id,title,due,done_at,owner_id,owner_name").not("todoist_id", "is", null);
   const byTid = new Map((linked ?? []).map((t) => [t.todoist_id as string, t]));
   let added = 0, ticked = 0;
   for (const i of items.filter((x) => x.section_id !== dueSec)) {
+    // (sections for each person are created above, so ownerFor knows them)
     const t = byTid.get(i.id);
     if (!t) {
       if (finished(i)) continue;
-      await admin.from("tasks").insert({ owner_id: me.id, title: i.content.slice(0, 300), kind: "Todoist", due: i.due?.date?.slice(0, 10) ?? null, todoist_id: i.id });
+      await admin.from("tasks").insert({ ...ownerFor(i.section_id), title: i.content.slice(0, 300), kind: "Added by Ronan (Todoist)", due: i.due?.date?.slice(0, 10) ?? null, todoist_id: i.id });
       added++;
     } else if (finished(i)) {
       if (!t.done_at) { await admin.from("tasks").update({ done_at: new Date().toISOString() }).eq("id", t.id); ticked++; }
     } else {
       const due = i.due?.date?.slice(0, 10) ?? null;
-      if (t.title !== i.content || t.due !== due) await admin.from("tasks").update({ title: i.content.slice(0, 300), due, done_at: null }).eq("id", t.id);
+      const o = ownerFor(i.section_id);
+      if (t.title !== i.content || t.due !== due || t.owner_id !== o.owner_id || (o.owner_id === null && t.owner_name !== o.owner_name))
+        await admin.from("tasks").update({ title: i.content.slice(0, 300), due, ...o }).eq("id", t.id); // edited, or moved to someone else's list
     }
   }
   // due-list mirror: remember what Ronan ticked there so it isn't added back
@@ -103,13 +133,20 @@ export async function syncTodoist(admin: SupabaseClient) {
 
   // ---- dashboard -> Todoist: Ronan's own tasks
   const cmds: Cmd[] = [];
-  const { data: mine } = await admin.from("tasks").select("id,title,due,link,done_at,todoist_id").eq("owner_id", me.id);
-  const newTasks = (mine ?? []).filter((t) => !t.todoist_id && !t.done_at);
+  const { data: all } = await admin.from("tasks").select("id,title,due,link,done_at,todoist_id,owner_id,owner_name");
+  /** The Todoist section for a dashboard task: Ronan's, or that person's list (unassigned tasks aren't sent). */
+  const secOf = (t: { owner_id: string | null; owner_name: string | null }) => {
+    if (t.owner_id === me.id) return tasksSec;
+    const p = others.find((o) => (t.owner_id && o.profileId === t.owner_id) || (!t.owner_id && t.owner_name && o.first.toLowerCase() === t.owner_name.toLowerCase()));
+    return p ? sectionFor.get(p.email) ?? null : null;
+  };
+  const mine = (all ?? []).filter((t) => secOf(t));
+  const newTasks = mine.filter((t) => !t.todoist_id && !t.done_at);
   newTasks.forEach((t, n) => cmds.push({ type: "item_add", temp_id: `t${n}`, args: {
-    content: t.title, project_id: projectId, section_id: tasksSec, description: t.link ? `${SITE}${t.link}` : "", ...(t.due ? { due: { date: t.due } } : {}),
+    content: t.title, project_id: projectId, section_id: secOf(t), description: t.link ? `${SITE}${t.link}` : "", ...(t.due ? { due: { date: t.due } } : {}),
   } }));
   // ticked off in the dashboard: tick off in Todoist (it ignores items already completed)
-  const closedHere = (mine ?? []).filter((t) => t.todoist_id && t.done_at && !items.some((i) => i.id === t.todoist_id && finished(i)));
+  const closedHere = (all ?? []).filter((t) => t.todoist_id && t.done_at && !items.some((i) => i.id === t.todoist_id && finished(i)));
   const { data: closedBefore } = await admin.from("portal_audit").select("detail").eq("action", "todoist-closed").gte("at", new Date(Date.now() - 30 * 864e5).toISOString());
   const already = new Set((closedBefore ?? []).map((a) => (a.detail as { id: string }).id));
   const toClose = closedHere.filter((t) => !already.has(t.todoist_id!));
