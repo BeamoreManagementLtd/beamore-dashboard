@@ -10,10 +10,10 @@ export const maxDuration = 120;
 
 type Turn = { month: string; clerk: string; reports: number; avg_days: number; over_two_days: number; review_required: number; total_days: number; timed: number };
 type Issue = { severity: "high" | "medium" | "low"; text: string };
-const OPEN = ["new", "checking", "ready", "failed", "approved"];
+const OPEN = ["new", "checking", "ready", "failed", "approved", "sending"];
 const STATUS: Record<string, [string, string]> = {
   new: ["Waiting for the clerk to finish", "muted"], checking: ["Being checked", "info"], ready: ["Ready to check", "good"],
-  failed: ["Check failed", "bad"], approved: ["Sending…", "info"], sent: ["Sent", "good"], done: ["Done (PDF made)", "good"], ignored: ["Skipped", "muted"],
+  failed: ["Check failed", "bad"], approved: ["Approved: PDF being made in Word", "info"], sending: ["Sending…", "info"], sent: ["Sent", "good"], done: ["Done (PDF made)", "good"], ignored: ["Skipped", "muted"],
 };
 
 /** Reports: what needs checking (red/orange/green), what's missing, and how quickly clerks and the team get them out. */
@@ -34,6 +34,9 @@ export default async function Reports({ searchParams }: { searchParams: Promise<
     db.from("diary_visits").select("project_id,visit_date,projects(name,stage)").eq("side", "charged").gte("visit_date", addDays(t, -14)).lte("visit_date", addDays(t, -2)),
     db.from("reports").select("project_id,uploaded_at").gte("uploaded_at", addDays(t, -16)),
   ]);
+  const { data: helper } = await db.from("sync_files").select("modified_time").eq("key", "word_helper").maybeSingle();
+  const helperSeen = helper?.modified_time ?? null;
+  const helperLate = (open ?? []).some((r) => r.status === "approved") && (!helperSeen || Date.now() - Date.parse(helperSeen) > 10 * 60_000);
   const clerkDays = settings?.clerk_days ?? 1, teamDays = settings?.team_days ?? 1;
   const name = (id: string | null) => { const s = (staff ?? []).find((x) => x.id === id); return s ? (s.full_name ?? s.email).split(" ")[0] : null; };
 
@@ -92,7 +95,8 @@ export default async function Reports({ searchParams }: { searchParams: Promise<
       </div>
       {error && <p className="callout bad">{error}</p>}
       {refreshed && <p className="callout info">Looked just now: {refreshed}.</p>}
-      {sent && <p className="callout good">Sent. The PDF is saved next to the Word file.</p>}
+      {sent && <p className="callout good">Approved. The office PC makes the PDF in Word, saves it next to the report and it is sent from your email, usually within a few minutes.</p>}
+      {helperLate && <p className="callout warn">The office PC that makes the PDFs in Word hasn’t checked in {helperSeen ? `since ${fdt(helperSeen)}` : "yet"}: approved reports wait until it’s on.</p>}
       {lastRun?.[0] && <p className="small muted">Last looked {fdt(lastRun[0].finished_at)}: {lastRun[0].ok ? lastRun[0].message : <span className="neg">{lastRun[0].message}</span>}. Every 15 minutes. Clerks have {clerkDays} working day{clerkDays === 1 ? "" : "s"} after a visit; the team {teamDays} after upload.</p>}
 
       <div className="tiles">

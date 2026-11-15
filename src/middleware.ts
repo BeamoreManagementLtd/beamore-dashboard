@@ -22,7 +22,7 @@ export async function middleware(request: NextRequest) {
     url.pathname = user ? "/portal" : "/login";
     return NextResponse.redirect(url);
   }
-  const open = path.startsWith("/login") || path.startsWith("/auth") || path.startsWith("/api/sync") || path.startsWith("/join");
+  const open = path.startsWith("/login") || path.startsWith("/auth") || path.startsWith("/api/sync") || path.startsWith("/api/reports") || path.startsWith("/join"); // api: they check the key themselves
   if (!user && !open) {
     const url = request.nextUrl.clone();
     url.pathname = "/login";

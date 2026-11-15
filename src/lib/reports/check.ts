@@ -12,19 +12,19 @@ export type Issue = { severity: "high" | "medium" | "low"; kind: string; text: s
 export type Check = {
   summary: string; visit_date: string | null; report_number: string | null; clerk_name: string | null;
   spelling: { p: number; find: string; replace: string }[]; issues: Issue[];
-  fills: { label: string; value: string }[]; rotate: { photo: number; degrees: 90 | 180 | 270 }[]; clerk_points: string[];
+  rotate: { photo: number; degrees: 90 | 180 | 270 }[]; clerk_points: string[];
 };
 
 const str = { type: "string" }, nstr = { type: ["string", "null"] };
 const SCHEMA = {
-  type: "object", additionalProperties: false, required: ["summary", "visit_date", "report_number", "clerk_name", "spelling", "issues", "fills", "rotate", "clerk_points"],
+  type: "object", additionalProperties: false, required: ["summary", "visit_date", "report_number", "clerk_name", "spelling", "issues", "rotate", "clerk_points"],
   properties: {
     summary: { type: "string", description: "One or two plain sentences for the checker: is it fit to send, and the main thing to look at" },
     visit_date: { ...nstr, description: "Visit date this report covers, YYYY-MM-DD (the last one if several)" },
     report_number: { ...nstr, description: "The report/diary number as written, e.g. 34 or R17" },
     clerk_name: { ...nstr, description: "The clerk of works named in the report" },
     spelling: {
-      type: "array", description: "Clear spelling mistakes and typos only",
+      type: "array", description: "Spelling, grammar and punctuation corrections (applied automatically)",
       items: { type: "object", additionalProperties: false, required: ["p", "find", "replace"], properties: {
         p: { type: "integer", description: "Paragraph number it's in" }, find: { ...str, description: "The wrong text exactly as written (a word or short phrase)" }, replace: str } },
     },
@@ -35,10 +35,6 @@ const SCHEMA = {
         kind: { type: "string", enum: ["dates", "names", "numbering", "blank", "copied", "follow-up", "vague", "safety", "photos", "other"] },
         text: { ...str, description: "Short and specific, written for the checker" },
         p: { type: ["integer", "null"], description: "Paragraph number it's about, if any" } } },
-    },
-    fills: {
-      type: "array", description: "Empty boxes to fill, only from the facts given (project name, DfE/SRP number, visit date, report number, CoW name)",
-      items: { type: "object", additionalProperties: false, required: ["label", "value"], properties: { label: { ...str, description: "The label exactly as in the list of empty boxes" }, value: str } },
     },
     rotate: {
       type: "array", description: "Attached photos that are on their side or upside down",
@@ -94,7 +90,7 @@ export async function checkReport(input: CheckInput): Promise<Check> {
 
 ${STANDARD}
 
-1. Spelling and grammar: list clear spelling mistakes, typos, doubled words, US spellings (e.g. "color") and plain grammar errors (e.g. "the works was", "it's" for "its", a missing word). Keep each fix to a word or short phrase. Never change technical terms, product names, codes, people's or company names, abbreviations, or the clerk's style. "find" must be copied exactly from that paragraph.
+1. Spelling, grammar and punctuation (these are put right automatically, so be thorough but safe): spelling mistakes, typos, doubled words, US spellings (e.g. "color"), plain grammar errors (e.g. "the works was", "it's" for "its", a missing word), a missing capital at the start of a sentence, double spaces, a space before a full stop or comma. Keep each fix to a word or short phrase. Never change technical terms, product names, codes, people's or company names, abbreviations, or the clerk's style. "find" must be copied exactly from that paragraph.
 2. Issues for the person checking it, most important first, and only real ones:
  - dates: visit date doesn't match the file name, the heading, the diary, or a weekday doesn't match its date; a date in the future
  - names: wrong project, school or client name; a different clerk than expected
@@ -104,13 +100,12 @@ ${STANDARD}
  - follow-up: problems raised in the previous report not mentioned again
  - vague: observations with nothing specific (no location, no detail, no action)
  - safety: health and safety concerns that may need escalating to the client straight away (high)
- - photos: from the photo figures given: far fewer than usual (medium), reused from the previous report (medium), low detail or stretched; missing captions is only low
+ - photos: from the photo figures given: far fewer than usual (medium), reused from the previous report (medium), too low detail to print well; missing captions is only low. Stretched, sideways, oversized and small-on-the-page photos are put right automatically: don't raise those
  - other: unticked tick boxes, layout problems
  Severity: high = must be fixed or looked at before it goes; medium = should be fixed; low = minor.
 Give the paragraph number when an issue is about one place. Don't repeat spelling fixes as issues.
-3. fills: for empty boxes in the list that you can fill from the facts given (project name, DfE/SRP number, visit date as dd/mm/yyyy, the next report number after the previous one, the clerk's name). Nothing else, and never guess.
-4. rotate: attached photos (labelled Photo 1, 2...) that are on their side or upside down.
-5. clerk_points: what this clerk could do better next time, judged against the standard above: specific, friendly, no more than 5, not about spelling.`;
+3. rotate: attached photos (labelled Photo 1, 2...) that are on their side or upside down.
+4. clerk_points: what this clerk could do better next time, judged against the standard above: specific, friendly, no more than 5, not about spelling.`;
   const content: Anthropic.ContentBlockParam[] = [
     { type: "text", text: `${facts}\n\n${input.previous ? `PREVIOUS REPORT (for comparison, start of it):\n${input.previous.text.slice(0, 8000)}\n\n` : ""}THIS REPORT:\n${body}` },
     ...input.thumbnails.slice(0, 12).flatMap((b, k) => [

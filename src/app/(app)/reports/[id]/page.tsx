@@ -15,11 +15,12 @@ type Issue = { severity: "high" | "medium" | "low"; kind: string; text: string }
 /** A friendly note to the clerk: what had to be fixed in this report and what to do next time. */
 function clerkNote(r: Record<string, unknown>, sender: string) {
   const clerk = ((r.clerks as { name?: string } | null)?.name ?? (r.clerk_name as string | null) ?? "").split(" ")[0];
-  const f = (r.fixes ?? {}) as { spelling?: { find: string; replace: string }[]; filled?: { label: string }[]; rotated?: number; shrunk?: number };
+  const f = (r.fixes ?? {}) as { spelling?: { find: string; replace: string }[]; rotated?: number; shrunk?: number; stretched?: number; enlarged?: number };
   const issues = ((r.issues ?? []) as Issue[]).filter((i) => i.severity !== "low" && i.kind !== "safety");
   const fixed = [
     f.spelling?.length ? `${f.spelling.length} spelling/grammar correction${f.spelling.length === 1 ? "" : "s"} (e.g. ${f.spelling.slice(0, 3).map((s) => `"${s.find}" → "${s.replace}"`).join(", ")})` : null,
-    f.filled?.length ? `boxes left empty: ${f.filled.map((x) => x.label).join(", ")}` : null,
+    f.stretched ? `${f.stretched} photo${f.stretched === 1 ? "" : "s"} stretched out of shape (please keep the shift key down when resizing)` : null,
+    f.enlarged ? `${f.enlarged} photo${f.enlarged === 1 ? "" : "s"} too small to see on the page` : null,
     f.rotated ? `${f.rotated} photo${f.rotated === 1 ? "" : "s"} on their side` : null,
     f.shrunk ? `photos larger than needed (the file was ${(Number(r.size_before) / 1e6).toFixed(0)} MB; please resize before inserting)` : null,
     ...issues.map((i) => i.text),
@@ -54,7 +55,7 @@ export default async function ReportPage({ params, searchParams }: { params: Pro
   const issues = (r.issues ?? []) as Issue[];
   const photos = (r.photos ?? {}) as { count?: number; blurry?: number; smallOnPage?: number; stretched?: number; shrunk?: number };
   const mb = (n: number | null) => (n ? `${(n / 1e6).toFixed(1)} MB` : "—");
-  const open = ["new", "checking", "ready", "failed", "approved"].includes(r.status);
+  const open = ["new", "checking", "ready", "failed"].includes(r.status);
   const nameOf = (pid: string | null) => (staff ?? []).find((s) => s.id === pid)?.full_name ?? null;
 
   return (
@@ -68,6 +69,7 @@ export default async function ReportPage({ params, searchParams }: { params: Pro
       <div className="grid2">
         <section className="panel">
           <h2>What the check found</h2>
+          {(r.status === "approved" || r.status === "sending") && <p className="callout info">Approved{r.approved_at ? ` ${fdt(r.approved_at)}` : ""}. {r.pdf_made_at ? "Word has made the PDF; it's being sent as soon as it reaches Drive." : <>Waiting for the office PC to make the PDF in Word{r.pdf_requested_at && Date.now() - Date.parse(r.pdf_requested_at) > 15 * 60_000 ? <b> (over 15 minutes: is the office PC on?)</b> : null}.</>}</p>}
           {r.status === "new" && <p className="muted">Waiting for the clerk to finish with it (30 minutes untouched), then it&apos;s checked automatically.</p>}
           {r.status === "checking" && <p className="muted">Being checked now…</p>}
           {r.status === "failed" && <><p className="callout bad">The check failed: {r.error}</p><form action={checkAgain.bind(null, id)}><button className="btn">Try the check again</button></form></>}
@@ -77,11 +79,11 @@ export default async function ReportPage({ params, searchParams }: { params: Pro
             {r.spelling_fixed} spelling fix{r.spelling_fixed === 1 ? "" : "es"} put in as tracked changes; issues added as comments in the Word file.
             {" "}Photos: {photos.count ?? 0}{photos.blurry ? `, ${photos.blurry} low detail` : ""}{photos.smallOnPage ? `, ${photos.smallOnPage} shown small` : ""}{photos.stretched ? `, ${photos.stretched} stretched` : ""}{photos.shrunk ? `; ${photos.shrunk} made smaller` : ""}.
             {" "}File {mb(r.size_before)} → {mb(r.size_after)}. Checked {fdt(r.checked_at)}.</p>}
-          <p className="row" style={{ gap: 8 }}>
-            <a className="btn primary" href={`https://docs.google.com/document/d/${r.drive_file_id}/edit?rtpof=true`} target="_blank" rel="noreferrer">Open the report</a>
-            {r.folder_id && <a className="btn" href={`https://drive.google.com/drive/folders/${r.folder_id}`} target="_blank" rel="noreferrer">Open its folder</a>}
-          </p>
-          <p className="small muted">Accept or reject the tracked changes and deal with the comments in the report, then approve and send. Anything left will be accepted and the comments left out of the PDF.</p>
+          {/* open it in Word from Google Drive on your computer: opening it in Google Docs spoils the layout */}
+          {r.main_folder && <div className="field"><label className="small muted" htmlFor="wp">Open in Word: it&apos;s here on your computer (Google Drive)</label>
+            <input id="wp" readOnly value={`G:\\My Drive\\Work\\${r.main_folder}\\${r.project_folder_name}\\${r.folder_name}\\${r.file_name}`} style={{ width: "100%", fontFamily: "monospace", fontSize: 12 }} /></div>}
+          {r.folder_id && <p><a className="btn small" href={`https://drive.google.com/drive/folders/${r.folder_id}`} target="_blank" rel="noreferrer">Show its folder in Drive</a> <span className="small muted">(open it in Word from there, not Google Docs)</span></p>}
+          <p className="small muted">In Word, accept or reject the tracked changes and deal with the comments, save, then approve and send here. Anything left is accepted and the comments left out of the PDF.</p>
         </section>
 
         <section className="panel">
@@ -106,15 +108,16 @@ export default async function ReportPage({ params, searchParams }: { params: Pro
           <section className="panel">
             <h2>What was changed {typeof r.score === "number" && <span className={`pill ${r.score >= 85 ? "good" : r.score >= 65 ? "warn" : "bad"}`} title="Quality score: how much needed fixing">{r.score}/100</span>}</h2>
             {(() => {
-              const f = (r.fixes ?? {}) as { spelling?: { find: string; replace: string }[]; filled?: { label: string; value: string }[]; rotated?: number; shrunk?: number };
+              const f = (r.fixes ?? {}) as { spelling?: { find: string; replace: string }[]; rotated?: number; shrunk?: number; stretched?: number; enlarged?: number };
               return (
                 <ul className="plain small">
                   {!!f.spelling?.length && <li><b>Spelling and grammar ({f.spelling.length}):</b> {f.spelling.slice(0, 25).map((s) => `${s.find} → ${s.replace}`).join("; ")}</li>}
-                  {!!f.filled?.length && <li><b>Filled in:</b> {f.filled.map((x) => `${x.label}: ${x.value}`).join("; ")}</li>}
+                  {!!f.stretched && <li><b>Stretched photos put back in proportion:</b> {f.stretched}</li>}
+                  {!!f.enlarged && <li><b>Small photos made bigger:</b> {f.enlarged}</li>}
                   {!!f.rotated && <li><b>Photos turned upright:</b> {f.rotated}</li>}
                   {!!f.shrunk && <li><b>Photos made smaller:</b> {f.shrunk} ({mb(r.size_before)} → {mb(r.size_after)})</li>}
                   {r.renamed_from && <li><b>Renamed</b> from {r.renamed_from}</li>}
-                  {!f.spelling?.length && !f.filled?.length && !f.rotated && !f.shrunk && <li>Nothing needed changing.</li>}
+                  {!f.spelling?.length && !f.stretched && !f.enlarged && !f.rotated && !f.shrunk && <li>Nothing needed changing.</li>}
                 </ul>
               );
             })()}
@@ -134,7 +137,7 @@ export default async function ReportPage({ params, searchParams }: { params: Pro
             <p className="callout warn">To send reports from your own email, connect it once: <Link className="btn small" href="/api/google/connect?for=me">Connect my email</Link></p>
           ) : (
             <form action={sendReport.bind(null, id)} className="form">
-              <p className="small muted">Sends from {conn.email}. The PDF is made from the report as it is now, saved next to the Word file, and attached. To change who it goes to for every report, use the project&apos;s Email lists{p && <> (<Link href={`/projects/${p.id}`}>open the project</Link>)</>}.</p>
+              <p className="small muted">Sends from {conn.email}. Word makes the PDF from the report as it is now (on the office PC), it is saved next to the Word file and attached. To change who it goes to for every report, use the project&apos;s Email lists{p && <> (<Link href={`/projects/${p.id}`}>open the project</Link>)</>}.</p>
               <div className="field"><label htmlFor="to">To</label><input id="to" name="to" defaultValue={draft.to.join("; ")} required /></div>
               <div className="field"><label htmlFor="cc">CC</label><input id="cc" name="cc" defaultValue={draft.cc.join("; ")} /></div>
               <div className="field"><label htmlFor="su">Subject</label><input id="su" name="subject" defaultValue={draft.subject} required /></div>

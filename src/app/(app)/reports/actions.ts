@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { requireProfile } from "@/lib/auth";
 import { createServiceClient } from "@/lib/supabase/server";
 import { syncReports } from "@/lib/sync/reports-sync";
-import { scanReports, checkWaiting, checkOne, approveAndSend } from "@/lib/reports/pipeline";
+import { scanReports, checkWaiting, checkOne, approveReport } from "@/lib/reports/pipeline";
 
 const emails = (s: FormDataEntryValue | null) => [...new Set((String(s ?? "").match(/[A-Za-z0-9._%+'-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g) ?? []))];
 
@@ -46,9 +46,9 @@ export async function sendReport(reportId: string, form: FormData) {
   const me = await requireProfile();
   const to = emails(form.get("to")), cc = emails(form.get("cc"));
   try {
-    await approveAndSend(createServiceClient(), reportId, { id: me.id, full_name: me.full_name }, { to, cc, subject: String(form.get("subject") ?? "").trim(), body: String(form.get("body") ?? "") });
+    await approveReport(createServiceClient(), reportId, { id: me.id, full_name: me.full_name }, { to, cc, subject: String(form.get("subject") ?? "").trim(), body: String(form.get("body") ?? "") });
   } catch (e) {
-    redirect(`/reports/${reportId}?error=${encodeURIComponent(e instanceof Error ? e.message : "Couldn't send")}`);
+    redirect(`/reports/${reportId}?error=${encodeURIComponent(e instanceof Error ? e.message : "Couldn't approve")}`);
   }
   redirect(`/reports?sent=${encodeURIComponent(reportId)}`);
 }

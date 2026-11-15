@@ -4,7 +4,7 @@ import sharp from "sharp";
 import { driveClient } from "@/lib/google";
 import { projectMatcher } from "@/lib/project-match";
 import { sendReportEmail } from "@/lib/google-user";
-import { readReport, photoStats, shrinkPhotos, trackSpelling, addComments, saveReport, cleanCopy, photoHashes, reusedCount, uncaptioned, unticked, fillBlank, rotatePhoto } from "./docx.mjs";
+import { readReport, photoStats, shrinkPhotos, trackSpelling, addComments, saveReport, photoHashes, reusedCount, uncaptioned, unticked, rotatePhoto, fixPhotoShapes } from "./docx.mjs";
 
 /** 0-100: how much the report needed fixing (must-checks count most). Lateness is shown separately. */
 export function qualityScore(issues: { severity: string }[], spelling: number, lateDays: number) {
@@ -24,7 +24,8 @@ import { checkReport, type Issue } from "./check";
  *  3. approve and send: the checker's click makes the PDF (with their edits), saves it next to the Word file and emails
  *     it from their own Gmail to the project's report list, using the team's standard email
  */
-const MAIN_FOLDERS = new Set(["0B5LaG4Rs3CgQd2VIeW5Ya3F3SnM", "0B5LaG4Rs3CgQaElqRFNsNWRQcUk"]); // Work/Schools, Work/Others
+const MAIN_FOLDER_NAME: Record<string, string> = { "0B5LaG4Rs3CgQd2VIeW5Ya3F3SnM": "Schools", "0B5LaG4Rs3CgQaElqRFNsNWRQcUk": "Others" }; // under Work
+const MAIN_FOLDERS = new Set(Object.keys(MAIN_FOLDER_NAME));
 const REPORT_FOLDER = /^(m&e |mep )?(diar(ies|y)|diaires|reports?|monthly reports?|site diar(ies|y))\s*$/i;
 const DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 const SETTLE_MS = 30 * 60 * 1000;
@@ -83,7 +84,7 @@ export async function scanReports(admin: SupabaseClient) {
     await admin.from("reports").insert({
       drive_file_id: f.id, file_name: f.name, folder_id: rf.id, folder_name: rf.name.trim(), project_folder_id: pf.id, project_folder_name: pf.name,
       project_id: p?.id ?? null, kind, clerk_id: p ? (kind === "me" ? p.clerk_me_id ?? p.clerk_id : p.clerk_id) : null,
-      uploaded_at: f.createdTime, modified_at: f.modifiedTime,
+      uploaded_at: f.createdTime, modified_at: f.modifiedTime, main_folder: MAIN_FOLDER_NAME[pf.parents?.[0] ?? ""] ?? null,
       checker_id: p?.report_checker_id ?? byFirst((oldQueue ?? []).find((q) => q.project_id === p?.id && q.checker && q.checker !== "Unknown")?.checker),
     });
     found++;
@@ -173,8 +174,9 @@ export async function checkOne(admin: SupabaseClient, id: string) {
     const path = thumbPaths[t.photo - 1];
     if (path && !rotated.includes(path)) { await rotatePhoto(r, sharp, path, t.degrees); rotated.push(path); }
   }
+  // blank boxes are left for the clerk (Ronan, 15 Nov 2026); photo shapes and sizes are put right
+  const shapes = await fixPhotoShapes(r, await photoStats(r, sharp));
   const shrunk = await shrinkPhotos(r, sharp, await photoStats(r, sharp));
-  const filled = (ai.fills ?? []).filter((f) => f.value?.trim() && fillBlank(r, f.label, f.value.trim()));
   const spelt = trackSpelling(r, ai.spelling);
   const rank = { high: 0, medium: 1, low: 2 } as const;
   const issues: Issue[] = [...ai.issues].sort((a, b) => rank[a.severity] - rank[b.severity]);
@@ -197,7 +199,7 @@ export async function checkOne(admin: SupabaseClient, id: string) {
     status: "ready", ai_summary: ai.summary, issues, spelling_fixed: spelt.applied,
     photos: { count: stats.count, blurry: stats.blurry, smallOnPage: stats.smallOnPage, stretched: stats.stretched, shrunk: shrunk.changed, rotated: rotated.length, reused, usual, uncaptioned: uncaptioned(r) },
     photo_hashes: hashes, photo_count: stats.count, clerk_points: (ai.clerk_points ?? []).slice(0, 5),
-    fixes: { spelling: applied, filled, rotated: rotated.length, shrunk: shrunk.changed },
+    fixes: { spelling: applied, rotated: rotated.length, shrunk: shrunk.changed, stretched: shapes.stretched, enlarged: shapes.enlarged },
     score: qualityScore(issues, spelt.applied, 0), // lateness is shown on its own on the Reports page
     size_before: raw.length, size_after: out.length, checked_revision: after.headRevisionId, checked_at: new Date().toISOString(),
     visit_date: ai.visit_date && /^\d{4}-\d{2}-\d{2}$/.test(ai.visit_date) ? ai.visit_date : (nameDate && !Number.isNaN(Date.parse(nameDate)) ? nameDate : null),
@@ -241,46 +243,85 @@ export function standardName(rep: { file_name: string; report_number: string | n
   return `${num.padStart(2, "0")} - ${clean} - ${kind} - ${d}.${m}.${y}.docx`;
 }
 
-/** 3. The checker's "Approve and send": PDF made from the checked Word file, saved next to it, emailed from their Gmail. */
-export async function approveAndSend(admin: SupabaseClient, reportId: string, who: { id: string; full_name: string | null }, m: { to: string[]; cc: string[]; subject: string; body: string }) {
+
+/**
+ * 3. The checker's "Approve and send" (Ronan, 15 Nov 2026: the PDF must come from Word, not Google):
+ *  a. the email is kept with the report and the report is queued for its PDF
+ *  b. the helper on the office PC opens a copy in Word, accepts any tracked changes left, takes the comments out,
+ *     saves the PDF next to the report (Google Drive for desktop uploads it) and says so
+ *  c. the dashboard finds the PDF in Drive and emails it from the checker's own Gmail; then the Word file gets the
+ *     standard name too
+ */
+export async function approveReport(admin: SupabaseClient, reportId: string, who: { id: string; full_name: string | null }, m: { to: string[]; cc: string[]; subject: string; body: string }) {
   if (!m.to.length) throw new Error("Nobody to send it to: add the report list on the project's page");
   const { data: rep } = await admin.from("reports").select("*").eq("id", reportId).single();
   if (!rep) throw new Error("No such report");
   if (rep.status === "sent") throw new Error("Already sent");
-  const g = await driveClient(admin);
-  await admin.from("reports").update({ status: "approved", approved_by: who.id, approved_at: new Date().toISOString(), error: null }).eq("id", reportId);
-  try {
-    // the Word file as it is now (with the checker's edits), tracked changes left in accepted and comments taken out
-    // the standard file name for the Word file and its PDF (the clerk's name is kept on record)
-    const { data: proj } = rep.project_id ? await admin.from("projects").select("name").eq("id", rep.project_id).single() : { data: null };
-    const std = standardName(rep, proj?.name ?? rep.project_folder_name ?? "");
-    let fileName = rep.file_name;
-    if (std && std !== rep.file_name) {
-      await g.rename(rep.drive_file_id, std);
-      await admin.from("reports").update({ file_name: std, renamed_from: rep.file_name }).eq("id", reportId);
-      fileName = std;
-    }
-    const clean = await cleanCopy(Buffer.from(await g.download(rep.drive_file_id)));
-    const work = await conversionFolder(g);
-    const tmp = await g.putFile(`${fileName.replace(/\.docx?$/i, "")} (for PDF)`, work, clean, DOCX, "application/vnd.google-apps.document");
-    const pdf = Buffer.from(await g.exportPdf(tmp.id));
-    const pdfName = `${fileName.replace(/\.docx?$/i, "")}.pdf`;
-    const saved = await g.putFile(pdfName, rep.folder_id, pdf, "application/pdf");
-    const sent = await sendReportEmail(admin, who.id, { ...m, fileName: pdfName, pdf });
-    const at = new Date().toISOString();
-    await admin.from("reports").update({ status: "sent", pdf_file_id: saved.id, sent_at: at, done_at: at, sent_by: who.id, sent_to: m.to, sent_cc: m.cc, gmail_message_id: sent.id, updated_at: at }).eq("id", reportId);
-    if (rep.project_id) await admin.from("project_events").insert({ project_id: rep.project_id, source: "team", kind: "Report sent", who: who.full_name ?? sent.from, body: `${pdfName} sent from ${sent.from} to ${m.to.join(", ")}${m.cc.length ? `, cc ${m.cc.join(", ")}` : ""}` });
-    return { pdfName, from: sent.from };
-  } catch (e) {
-    await admin.from("reports").update({ status: "ready", error: `Not sent: ${(e instanceof Error ? e.message : String(e)).slice(0, 400)}` }).eq("id", reportId);
-    throw e;
-  }
+  if (!rep.main_folder) throw new Error("Can't tell where this report is on the office PC; please make the PDF in Word by hand");
+  const { data: proj } = rep.project_id ? await admin.from("projects").select("name").eq("id", rep.project_id).single() : { data: null };
+  const std = standardName(rep, proj?.name ?? rep.project_folder_name ?? "");
+  const pdfName = `${(std ?? rep.file_name).replace(/\.docx?$/i, "")}.pdf`;
+  await admin.from("reports").update({
+    status: "approved", approved_by: who.id, approved_at: new Date().toISOString(), error: null,
+    pending_email: { ...m, by: who.id, by_name: who.full_name }, pdf_name: pdfName, pdf_requested_at: new Date().toISOString(), pdf_made_at: null,
+  }).eq("id", reportId);
 }
 
-/** A folder for the Google copies the PDFs are made from (kept, never deleted). */
-async function conversionFolder(g: Awaited<ReturnType<typeof driveClient>>) {
-  const name = "Report PDFs - working copies (dashboard)";
-  const found = await g.json<{ files: { id: string }[] }>("files", { q: `name = '${name}' and mimeType = 'application/vnd.google-apps.folder' and trashed = false`, fields: "files(id)", pageSize: "1" });
-  if (found.files[0]) return found.files[0].id;
-  return (await g.post<{ id: string }>("https://www.googleapis.com/drive/v3/files?fields=id", { name, mimeType: "application/vnd.google-apps.folder" })).id;
+/** What the office PC's helper should turn into PDFs now. */
+export async function pdfQueue(admin: SupabaseClient) {
+  const { data } = await admin.from("reports").select("id,main_folder,project_folder_name,folder_name,file_name,pdf_name").eq("status", "approved").is("pdf_made_at", null).not("pdf_requested_at", "is", null).order("pdf_requested_at").limit(10);
+  return (data ?? []).map((r) => ({ id: r.id, main_folder: r.main_folder, project_folder: r.project_folder_name, report_folder: r.folder_name, file_name: r.file_name, pdf_name: r.pdf_name }));
+}
+
+/** The helper has saved the PDF (or couldn't): send it as soon as it's in Drive. */
+export async function pdfMade(admin: SupabaseClient, reportId: string, error?: string | null) {
+  if (error) {
+    await admin.from("reports").update({ status: "ready", error: `The office PC couldn't make the PDF in Word: ${error.slice(0, 300)}`, pdf_requested_at: null }).eq("id", reportId);
+    return false;
+  }
+  await admin.from("reports").update({ pdf_made_at: new Date().toISOString() }).eq("id", reportId);
+  // Drive for desktop usually uploads it within a minute or two; give it up to ~90 seconds here, the 5-minute job does the rest
+  for (let k = 0; k < 6; k++) {
+    if (await sendIfPdfReady(admin, reportId)) return true;
+    await new Promise((res) => setTimeout(res, 15_000));
+  }
+  return false;
+}
+
+/** Every approved report whose PDF has been made: send the ones whose PDF has reached Drive. */
+export async function sendReady(admin: SupabaseClient) {
+  const { data } = await admin.from("reports").select("id").eq("status", "approved").not("pdf_made_at", "is", null);
+  let sent = 0;
+  for (const r of data ?? []) if (await sendIfPdfReady(admin, r.id).catch(() => false)) sent++;
+  return sent;
+}
+
+async function sendIfPdfReady(admin: SupabaseClient, reportId: string) {
+  const { data: rep } = await admin.from("reports").select("*").eq("id", reportId).single();
+  if (!rep || rep.status !== "approved" || !rep.pdf_name || !rep.pending_email) return false;
+  const g = await driveClient(admin);
+  const q = `'${rep.folder_id}' in parents and name = '${String(rep.pdf_name).replace(/\\/g, "\\\\").replace(/'/g, "\\'")}' and mimeType = 'application/pdf' and trashed = false`;
+  const found = await g.json<{ files: { id: string; size?: string }[] }>("files", { q, fields: "files(id,size)", orderBy: "modifiedTime desc", pageSize: "1", supportsAllDrives: "true", includeItemsFromAllDrives: "true" });
+  const pdfFile = found.files[0];
+  if (!pdfFile || !Number(pdfFile.size)) return false; // not uploaded yet
+  const m = rep.pending_email as { to: string[]; cc: string[]; subject: string; body: string; by: string; by_name: string | null };
+  // claim it, so two runs can't send it twice
+  const { data: claimed } = await admin.from("reports").update({ status: "sending" }).eq("id", reportId).eq("status", "approved").select("id");
+  if (!claimed?.length) return false;
+  try {
+    const pdf = Buffer.from(await g.download(pdfFile.id));
+    const sent = await sendReportEmail(admin, m.by, { to: m.to, cc: m.cc, subject: m.subject, body: m.body, fileName: rep.pdf_name, pdf });
+    const at = new Date().toISOString();
+    await admin.from("reports").update({ status: "sent", pdf_file_id: pdfFile.id, sent_at: at, done_at: at, sent_by: m.by, sent_to: m.to, sent_cc: m.cc, gmail_message_id: sent.id, pending_email: null, updated_at: at }).eq("id", reportId);
+    if (rep.project_id) await admin.from("project_events").insert({ project_id: rep.project_id, source: "team", kind: "Report sent", who: m.by_name ?? sent.from, body: `${rep.pdf_name} sent from ${sent.from} to ${m.to.join(", ")}${m.cc.length ? `, cc ${m.cc.join(", ")}` : ""}` });
+    // the Word file gets the same standard name as its PDF
+    const wordName = String(rep.pdf_name).replace(/\.pdf$/i, ".docx");
+    if (wordName !== rep.file_name) {
+      try { await g.rename(rep.drive_file_id, wordName); await admin.from("reports").update({ file_name: wordName, renamed_from: rep.file_name }).eq("id", reportId); } catch { /* keeps its name */ }
+    }
+    return true;
+  } catch (e) {
+    await admin.from("reports").update({ status: "approved", error: `Not sent yet: ${(e instanceof Error ? e.message : String(e)).slice(0, 300)}` }).eq("id", reportId);
+    throw e;
+  }
 }

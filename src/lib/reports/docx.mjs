@@ -291,6 +291,46 @@ export async function rotatePhoto(r, sharp, path, degrees) {
   r.spans = paragraphSpans(r.xml);
 }
 
+/**
+ * Puts photo shapes right: stretched or squashed photos back in proportion (same width), and photos shown under 5 cm
+ * wide made 7 cm wide when they sit on their own (not in a table cell, where a bigger photo could upset the layout).
+ */
+export async function fixPhotoShapes(r, stats) {
+  const rels = await r.zip.file("word/_rels/document.xml.rels")?.async("string") ?? "";
+  const relPath = new Map([...rels.matchAll(/<Relationship\b[^>]*Id="([^"]+)"[^>]*Target="([^"]+)"/g)].map((m) => [m[1], `word/${m[2].replace(/^\.?\//, "")}`]));
+  const byPath = new Map(stats.list.map((p) => [p.path, p]));
+  let stretched = 0, enlarged = 0;
+  const xml = r.xml;
+  let out = "", last = 0;
+  for (const m of xml.matchAll(/<w:drawing>[\s\S]*?<\/w:drawing>/g)) {
+    let d = m[0];
+    const ph = byPath.get(relPath.get(/<a:blip\b[^>]*r:embed="([^"]+)"/.exec(d)?.[1] ?? "") ?? "");
+    const ext = /<wp:extent cx="(\d+)" cy="(\d+)"/.exec(d);
+    if (ph && ext && ph.width && ph.height && !/<a:srcRect\b[^>]*(l|t|r|b)="\d+"/.test(d)) {
+      let cx = +ext[1], cy = +ext[2];
+      const ratio = ph.height / ph.width;
+      if (Math.abs((cx / cy) / (ph.width / ph.height) - 1) > 0.08) { cy = Math.round(cx * ratio); stretched++; }
+      const cellAt = xml.lastIndexOf("<w:tc>", m.index), inCell = cellAt > xml.lastIndexOf("</w:tc>", m.index);
+      if (cx < 1_800_000 && /<wp:inline\b/.test(d)) {
+        // on its own: 7 cm wide; in a table cell: as wide as the cell allows (up to 9 cm), so the table keeps its shape
+        const cellW = inCell ? +(/<w:tcW w:w="(\d+)" w:type="dxa"/.exec(xml.slice(cellAt, m.index))?.[1] ?? 0) * 635 - 250_000 : 0;
+        // never bigger than the photo can print sharply (150 dots per inch)
+        const sharp150 = Math.round((ph.width / 150) * 914_400);
+        const target = Math.min(inCell ? Math.min(cellW, 3_240_000) : 2_520_000, sharp150);
+        if (target > cx * 1.15) { cx = target; cy = Math.round(cx * ratio); enlarged++; }
+      }
+      if (cx !== +ext[1] || cy !== +ext[2]) {
+        d = d.replace(/<wp:extent cx="\d+" cy="\d+"/, `<wp:extent cx="${cx}" cy="${cy}"`).replace(/(<pic:spPr>[\s\S]*?<a:ext )cx="\d+" cy="\d+"/, `$1cx="${cx}" cy="${cy}"`);
+      }
+    }
+    out += xml.slice(last, m.index) + d;
+    last = m.index + m[0].length;
+  }
+  r.xml = out + xml.slice(last);
+  r.spans = paragraphSpans(r.xml);
+  return { stretched, enlarged };
+}
+
 /** The changed report as a file. */
 export async function saveReport(r) {
   r.zip.file("word/document.xml", r.xml, NO_FOLDERS);
