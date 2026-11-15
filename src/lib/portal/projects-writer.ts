@@ -93,12 +93,16 @@ async function writeOne(g: Awaited<ReturnType<typeof driveClient>>, fileId: stri
     set(row, "Status", STAGE[p.stage] ?? p.stage, true);
     set(row, "Job no.", p.number ? String(p.number) : "");
     // numbers only when they have a digit in them (the dashboard has a few bare "SRP" / "number" values)
-    if (/\d/.test(p.dfe_project_number ?? "")) set(row, at.has("DfE project number") ? "DfE project number" : "Project number", p.dfe_project_number!);
+    // real DfE numbers (SRP1234, FS0433, FE016, PSBP2226) go in their column; anything else is the client's own number
+    const n = (p.dfe_project_number ?? "").trim();
+    if (/^(SRP|FS|FE|PSBP)\s?\d{3,4}$/i.test(n) && at.has("DfE project number")) set(row, "DfE project number", n.replace(/\s/g, "").toUpperCase());
+    else if (/\d/.test(n)) set(row, "Project number", n);
     if (/\d/.test(p.po_number ?? "")) set(row, "PO number", p.po_number!);
     set(row, "Clerk of works", clerkOf(p));
     set(row, "Send reports to", emails(p.report_to));
     set(row, "CC on reports", emails(p.report_cc));
-    const ic = contacts.find((c) => c.project_id === p.id) ?? (p.client_id ? contacts.find((c) => !c.project_id && c.client_id === p.client_id) : undefined);
+    // only the project's own invoice contact: a company-wide one can belong to a different office or job
+    const ic = contacts.find((c) => c.project_id === p.id);
     if (ic) { set(row, "Send invoice to", emails(ic.to_emails)); set(row, "CC on invoice", emails(ic.cc_emails)); }
   };
 
