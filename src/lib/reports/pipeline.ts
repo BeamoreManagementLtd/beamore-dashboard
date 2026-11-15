@@ -7,9 +7,15 @@ import { sendReportEmail } from "@/lib/google-user";
 import { readReport, photoStats, shrinkPhotos, trackSpelling, addComments, saveReport, photoHashes, reusedCount, uncaptioned, unticked, rotatePhoto, fixPhotoShapes, uniformPhotos } from "./docx.mjs";
 
 /** 0-100: how much the report needed fixing (must-checks count most). Lateness is shown separately. */
-export function qualityScore(issues: { severity: string }[], spelling: number, lateDays: number) {
+/**
+ * 0-100: how much the report needed fixing. Everything the dashboard had to put right counts (Ronan, 15 Nov 2026),
+ * not just what's left for the team: issues, spelling, the file name, mixed photo sizes, sideways, stretched or
+ * oversized photos.
+ */
+export function qualityScore(issues: { severity: string }[], spelling: number, lateDays: number, f: { renamed?: boolean; mixedPhotos?: boolean; rotated?: number; stretched?: number; oversized?: boolean } = {}) {
   const w = { high: 15, medium: 6, low: 2 } as Record<string, number>;
-  const off = issues.reduce((n, i) => n + (w[i.severity] ?? 0), 0) + Math.min(10, spelling) + Math.min(15, lateDays * 5);
+  const off = issues.reduce((n, i) => n + (w[i.severity] ?? 0), 0) + Math.min(10, spelling) + Math.min(15, lateDays * 5)
+    + (f.renamed ? 5 : 0) + (f.mixedPhotos ? 5 : 0) + Math.min(9, (f.rotated ?? 0) * 3) + Math.min(6, (f.stretched ?? 0) * 2) + (f.oversized ? 3 : 0);
   return Math.max(0, 100 - off);
 }
 import { checkReport, type Issue } from "./check";
@@ -71,17 +77,24 @@ export async function scanReports(admin: SupabaseClient) {
   const [{ data: staff }, { data: oldQueue }] = await Promise.all([admin.from("profiles").select("id,full_name,email"), admin.from("report_queue").select("project_id,checker")]);
   const byFirst = (n?: string | null) => (n ? (staff ?? []).find((s) => (s.full_name ?? s.email).toLowerCase().startsWith(n.toLowerCase().replace(/é/g, "e")) || (s.full_name ?? "").toLowerCase().replace(/é/g, "e").startsWith(n.toLowerCase()))?.id ?? null : null);
 
+  // the dashboard's own checked copies aren't new reports
+  const copies = new Set(((await admin.from("reports").select("checked_file_id").not("checked_file_id", "is", null)).data ?? []).map((x) => x.checked_file_id as string));
   let found = 0;
   for (const f of docs) {
-    if (f.name.startsWith("~$")) continue;
+    if (f.name.startsWith("~$") || copies.has(f.id)) continue;
     const rf = await folder(f.parents?.[0]);
     if (!rf || !REPORT_FOLDER.test(rf.name.trim())) continue;
     const pf = await folder(rf.parents?.[0]);
     if (!pf || !MAIN_FOLDERS.has(pf.parents?.[0] ?? "")) continue;
     const p = byFolder.get(pf.id) ?? (projects ?? []).find((x) => x.id === match.fromReference(pf.name));
     const kind = /m&e|mep/i.test(rf.name) ? "me" : "building";
-    const { data: existing } = await admin.from("reports").select("id,status").eq("drive_file_id", f.id).maybeSingle();
-    if (existing) { await admin.from("reports").update({ file_name: f.name, modified_at: f.modifiedTime }).eq("id", existing.id); continue; }
+    const { data: existing } = await admin.from("reports").select("id,status,checked_at").eq("drive_file_id", f.id).maybeSingle();
+    if (existing) {
+      // the clerk changed their original after it was checked: say so (the checked copy may be out of date)
+      const changedAfter = existing.checked_at && Date.parse(f.modifiedTime) > Date.parse(existing.checked_at) + 5 * 60_000 && ["ready", "failed"].includes(existing.status);
+      await admin.from("reports").update({ file_name: f.name, modified_at: f.modifiedTime, ...(changedAfter ? { error: "The clerk has changed their report since it was checked. Check it again to update the checked copy (anything changed in the copy by hand would be lost)." } : {}) }).eq("id", existing.id);
+      continue;
+    }
     await admin.from("reports").insert({
       drive_file_id: f.id, file_name: f.name, folder_id: rf.id, folder_name: rf.name.trim(), project_folder_id: pf.id, project_folder_name: pf.name,
       project_id: p?.id ?? null, kind, clerk_id: p ? (kind === "me" ? p.clerk_me_id ?? p.clerk_id : p.clerk_id) : null,
@@ -93,12 +106,14 @@ export async function scanReports(admin: SupabaseClient) {
 
   // a PDF of the same name in the same folder: that report is done
   let done = 0;
-  const open = new Map<string, { id: string; base: string }[]>();
-  for (const r of (await admin.from("reports").select("id,folder_id,file_name").in("status", ["new", "checking", "ready", "failed", "approved"])).data ?? []) {
-    open.set(r.folder_id, [...(open.get(r.folder_id) ?? []), { id: r.id, base: base(r.file_name) }]);
+  const open = new Map<string, { id: string; bases: string[] }[]>();
+  for (const r of (await admin.from("reports").select("id,folder_id,checked_folder_id,file_name,checked_name").in("status", ["new", "checking", "ready", "failed"])).data ?? []) {
+    // a PDF made by hand from the clerk's file or from the checked copy, in the report folder or the checked folder
+    const entry = { id: r.id, bases: [base(r.file_name), ...(r.checked_name ? [base(r.checked_name)] : [])] };
+    for (const fid of [r.folder_id, r.checked_folder_id].filter(Boolean)) open.set(fid, [...(open.get(fid) ?? []), entry]);
   }
   for (const pdf of pdfs) {
-    const hit = (open.get(pdf.parents?.[0] ?? "") ?? []).find((r) => r.base === base(pdf.name));
+    const hit = (open.get(pdf.parents?.[0] ?? "") ?? []).find((r) => r.bases.includes(base(pdf.name)));
     if (!hit) continue;
     await admin.from("reports").update({ status: "done", pdf_file_id: pdf.id, done_at: pdf.createdTime, updated_at: started }).eq("id", hit.id).neq("status", "sent");
     done++;
@@ -210,21 +225,35 @@ export async function checkOne(admin: SupabaseClient, id: string) {
     await admin.from("reports").update({ status: "new", modified_at: new Date().toISOString() }).eq("id", id);
     return;
   }
-  await g.replaceContent(rep.drive_file_id, out, DOCX);
-  if (renamedTo) {
-    try { await g.rename(rep.drive_file_id, renamedTo); await admin.from("reports").update({ file_name: renamedTo, renamed_from: rep.file_name }).eq("id", id); }
-    catch { renamedTo = null; }
-  }
-  const after = await g.json<{ headRevisionId: string }>(`files/${rep.drive_file_id}`, { fields: "headRevisionId", supportsAllDrives: "true" });
+  // the fixed version is a COPY in a "Checked (dashboard)" folder next to the clerk's file, named to the folder's
+  // pattern; the clerk's own file isn't touched (Ronan, 15 Nov 2026), and is only binned once the copy has been sent
+  const checkedFolder = rep.checked_folder_id ?? await checkedFolderFor(g, rep.folder_id);
+  const checkedName = renamedTo ?? rep.checked_name ?? rep.file_name;
+  let checkedId = rep.checked_file_id as string | null;
+  if (checkedId) {
+    await g.replaceContent(checkedId, out, DOCX);
+    if (checkedName !== rep.checked_name) await g.rename(checkedId, checkedName).catch(() => undefined);
+  } else checkedId = (await g.putFile(checkedName, checkedFolder, out, DOCX)).id;
+  const after = await g.json<{ headRevisionId: string }>(`files/${checkedId}`, { fields: "headRevisionId", supportsAllDrives: "true" });
+  await admin.from("reports").update({ checked_file_id: checkedId, checked_folder_id: checkedFolder, checked_name: checkedName, renamed_from: renamedTo ? rep.file_name : null }).eq("id", id);
   const visitFromName = /(\d{1,2})[.\-_ ](\d{1,2})[.\-_ ](\d{2,4})/.exec(rep.file_name);
   const nameDate = visitFromName ? `${visitFromName[3].length === 2 ? `20${visitFromName[3]}` : visitFromName[3]}-${visitFromName[2].padStart(2, "0")}-${visitFromName[1].padStart(2, "0")}` : null;
   const applied = ai.spelling.filter((s) => !spelt.skipped.includes(s)).map((s) => ({ find: s.find, replace: s.replace }));
   await admin.from("reports").update({
     status: "ready", ai_summary: ai.summary, issues, spelling_fixed: spelt.applied,
     photos: { count: stats.count, blurry: stats.blurry, smallOnPage: stats.smallOnPage, stretched: stats.stretched, shrunk: shrunk.changed, rotated: rotated.length, reused, usual, uncaptioned: uncaptioned(r) },
-    photo_hashes: hashes, photo_count: stats.count, clerk_points: (ai.clerk_points ?? []).slice(0, 5),
-    fixes: { spelling: applied, rotated: rotated.length, shrunk: shrunk.changed, stretched: shapes.stretched, enlarged: shapes.enlarged, uniform: uniform.changed, side_cm: uniform.side ? +(uniform.side / 360000).toFixed(1) : null, renamed: renamedTo, words },
-    score: qualityScore(issues, spelt.applied, 0), // lateness is shown on its own on the Reports page
+    photo_hashes: hashes, photo_count: stats.count,
+    fixes: { spelling: applied, rotated: rotated.length, shrunk: shrunk.changed, stretched: shapes.stretched, enlarged: shapes.enlarged, uniform: uniform.changed, mixed: !uniform.wasUniform, side_cm: uniform.side ? +(uniform.side / 360000).toFixed(1) : null, renamed: renamedTo, words },
+    // lateness is shown on its own on the Reports page
+    score: qualityScore(issues, spelt.applied, 0, { renamed: !!renamedTo, mixedPhotos: !uniform.wasUniform, rotated: rotated.length, stretched: stats.stretched, oversized: shrunk.changed > 0 && raw.length > 10_000_000 }),
+    clerk_points: [
+      ...(renamedTo ? [`Name your reports the same way as the others in the folder, e.g. "${renamedTo.replace(/\.docx?$/i, "")}"`] : []),
+      ...(!uniform.wasUniform ? ["Keep all photos the same size: about 6 cm wide (6 x 4.5 cm landscape, 4.5 x 6 cm portrait), two to a line"] : []),
+      ...(rotated.length ? ["Check photos are the right way up before inserting them"] : []),
+      ...(stats.stretched ? ["Resize photos from a corner (or hold Shift) so they don't stretch out of shape"] : []),
+      ...(raw.length > 10_000_000 ? [`Make photos smaller before inserting them: this report was ${(raw.length / 1e6).toFixed(0)} MB (Word: Picture Format > Compress Pictures)`] : []),
+      ...(ai.clerk_points ?? []),
+    ].slice(0, 8),
     size_before: raw.length, size_after: out.length, checked_revision: after.headRevisionId, checked_at: new Date().toISOString(),
     visit_date: ai.visit_date && /^\d{4}-\d{2}-\d{2}$/.test(ai.visit_date) ? ai.visit_date : (nameDate && !Number.isNaN(Date.parse(nameDate)) ? nameDate : null),
     report_number: ai.report_number, clerk_name: ai.clerk_name,
@@ -282,7 +311,8 @@ export async function approveReport(admin: SupabaseClient, reportId: string, who
   if (!rep) throw new Error("No such report");
   if (rep.status === "sent") throw new Error("Already sent");
   if (!rep.main_folder) throw new Error("Can't tell where this report is on the office PC; please make the PDF in Word by hand");
-  const pdfName = `${rep.file_name.replace(/\.docx?$/i, "")}.pdf`;
+  if (!rep.checked_file_id) throw new Error("This report hasn't been checked yet");
+  const pdfName = `${String(rep.checked_name ?? rep.file_name).replace(/\.docx?$/i, "")}.pdf`;
   await admin.from("reports").update({
     status: "approved", approved_by: who.id, approved_at: new Date().toISOString(), error: null,
     pending_email: { ...m, by: who.id, by_name: who.full_name }, pdf_name: pdfName, pdf_requested_at: new Date().toISOString(), pdf_made_at: null,
@@ -291,8 +321,9 @@ export async function approveReport(admin: SupabaseClient, reportId: string, who
 
 /** What the office PC's helper should turn into PDFs now. */
 export async function pdfQueue(admin: SupabaseClient) {
-  const { data } = await admin.from("reports").select("id,main_folder,project_folder_name,folder_name,file_name,pdf_name").eq("status", "approved").is("pdf_made_at", null).not("pdf_requested_at", "is", null).order("pdf_requested_at").limit(10);
-  return (data ?? []).map((r) => ({ id: r.id, main_folder: r.main_folder, project_folder: r.project_folder_name, report_folder: r.folder_name, file_name: r.file_name, pdf_name: r.pdf_name }));
+  // the checked copy is in "Checked (dashboard)" inside the report folder; the PDF goes in the report folder itself
+  const { data } = await admin.from("reports").select("id,main_folder,project_folder_name,folder_name,checked_name,pdf_name").eq("status", "approved").is("pdf_made_at", null).not("pdf_requested_at", "is", null).order("pdf_requested_at").limit(10);
+  return (data ?? []).map((r) => ({ id: r.id, main_folder: r.main_folder, project_folder: r.project_folder_name, report_folder: r.folder_name, checked_folder: CHECKED_FOLDER, file_name: r.checked_name, pdf_name: r.pdf_name }));
 }
 
 /** The helper has saved the PDF (or couldn't): send it as soon as it's in Drive. */
@@ -336,9 +367,27 @@ async function sendIfPdfReady(admin: SupabaseClient, reportId: string) {
     const at = new Date().toISOString();
     await admin.from("reports").update({ status: "sent", pdf_file_id: pdfFile.id, sent_at: at, done_at: at, sent_by: m.by, sent_to: m.to, sent_cc: m.cc, gmail_message_id: sent.id, pending_email: null, updated_at: at }).eq("id", reportId);
     if (rep.project_id) await admin.from("project_events").insert({ project_id: rep.project_id, source: "team", kind: "Report sent", who: m.by_name ?? sent.from, body: `${rep.pdf_name} sent from ${sent.from} to ${m.to.join(", ")}${m.cc.length ? `, cc ${m.cc.join(", ")}` : ""}` });
+    // sent: the clerk's original goes to Drive's bin (restorable for 30 days) and the checked copy takes its place
+    if (rep.checked_file_id && rep.checked_folder_id) {
+      try {
+        await g.binOriginalReport(rep.drive_file_id);
+        await g.move(rep.checked_file_id, rep.checked_folder_id, rep.folder_id);
+        await admin.from("reports").update({ original_trashed_at: new Date().toISOString(), file_name: rep.checked_name ?? rep.file_name }).eq("id", reportId);
+      } catch (e) {
+        await admin.from("reports").update({ error: `Sent, but tidying the folder didn't finish: ${(e instanceof Error ? e.message : String(e)).slice(0, 200)}` }).eq("id", reportId);
+      }
+    }
     return true;
   } catch (e) {
     await admin.from("reports").update({ status: "approved", error: `Not sent yet: ${(e instanceof Error ? e.message : String(e)).slice(0, 300)}` }).eq("id", reportId);
     throw e;
   }
+}
+
+/** The "Checked (dashboard)" folder inside a report folder, where the fixed copies go (made the first time). */
+export const CHECKED_FOLDER = "Checked (dashboard)";
+async function checkedFolderFor(g: Awaited<ReturnType<typeof driveClient>>, reportFolder: string) {
+  const found = await g.json<{ files: { id: string }[] }>("files", { q: `'${reportFolder}' in parents and name = '${CHECKED_FOLDER}' and mimeType = 'application/vnd.google-apps.folder' and trashed = false`, fields: "files(id)", pageSize: "1", supportsAllDrives: "true", includeItemsFromAllDrives: "true" });
+  if (found.files[0]) return found.files[0].id;
+  return (await g.post<{ id: string }>("https://www.googleapis.com/drive/v3/files?fields=id&supportsAllDrives=true", { name: CHECKED_FOLDER, mimeType: "application/vnd.google-apps.folder", parents: [reportFolder] })).id;
 }

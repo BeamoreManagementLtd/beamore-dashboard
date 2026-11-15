@@ -332,10 +332,10 @@ export async function fixPhotoShapes(r, stats) {
 }
 
 /**
- * Every photo in the report the same size (Ronan, 15 Nov 2026), like Christian Tate's reports: squares, 6 cm, two to a
- * line in the photo panel. Each photo is cropped square from its middle with Word's own crop (it can be undone in Word:
- * Picture Format > Crop > Reset). Smaller squares if the report's photo panels are narrower, still the same for every
- * photo. Left alone: logos, signatures and icons (under 1.5 cm), plans and drawings (over 10 cm wide).
+ * Every photo in the report the same size (Ronan, 15 Nov 2026), like Christian Tate's reports: 6 cm, two to a line in
+ * the photo panel, each keeping its orientation (landscape 6 x 4.5, portrait 4.5 x 6, square 6 x 6). Only unusual
+ * shapes are trimmed from the middle with Word's own crop (undo in Word: Picture Format > Crop > Reset). Smaller if the
+ * report's photo panels are narrower, still the same for every photo. Left alone: logos, signatures and icons (under 1.5 cm), plans and drawings (over 10 cm wide).
  */
 export function uniformPhotos(r, stats, rels) {
   const relPath = new Map([...rels.matchAll(/<Relationship\b[^>]*Id="([^"]+)"[^>]*Target="([^"]+)"/g)].map((m) => [m[1], `word/${m[2].replace(/^\.?\//, "")}`]));
@@ -353,7 +353,7 @@ export function uniformPhotos(r, stats, rels) {
   };
   const drawings = [...xml.matchAll(/<w:drawing>[\s\S]*?<\/w:drawing>/g)].map((m) => ({ m, ph: byPath.get(relPath.get(/<a:blip\b[^>]*r:embed="([^"]+)"/.exec(m[0])?.[1] ?? "") ?? "") }));
   const photos = drawings.filter((x) => isPhoto(x.m[0], x.ph));
-  if (photos.length < 2) return { side: null, changed: 0 };
+  if (photos.length < 2) return { side: null, changed: 0, wasUniform: true };
   // the size: 6 cm, unless the usual photo panel is too narrow for two of those side by side
   const widths = new Map();
   for (const x of photos) { const w = cellWidthAt(x.m.index); if (w) widths.set(w, (widths.get(w) ?? 0) + 1); }
@@ -372,15 +372,18 @@ export function uniformPhotos(r, stats, rels) {
       const s = Math.max(540_000, own ? Math.min(side, own - GAP) : side);
       const ext = /<wp:extent cx="(\d+)" cy="(\d+)"/.exec(d);
       const crop = /<a:srcRect\b[^>]*(l|t|r|b)="-?\d+"/.test(d);
-      let cx = s, cy = s;
-      if (crop) cy = Math.round(s * (+ext[2] / +ext[1])); // already cropped by the clerk: same width, keep their crop
-      else {
-        const w = x.ph.width, h = x.ph.height;
-        const cut = Math.round(((1 - Math.min(w, h) / Math.max(w, h)) / 2) * 100000);
-        const rect = cut <= 0 ? "<a:srcRect/>" : w > h ? `<a:srcRect l="${cut}" r="${cut}"/>` : `<a:srcRect t="${cut}" b="${cut}"/>`;
+      // keep each photo's orientation (Ronan, 15 Nov 2026): landscape photos all 4:3 and s wide, portrait all 3:4 and
+      // s tall, near-square ones s square (as Christian's); only odd shapes (panoramas) trimmed to fit
+      const shown = crop ? +ext[1] / +ext[2] : x.ph.width / x.ph.height;
+      const shape = shown >= 1.15 ? 4 / 3 : shown <= 0.87 ? 3 / 4 : 1;
+      const cx = Math.round(shape > 1 ? s : shape < 1 ? s * 0.75 : s);
+      const cy = Math.round(shape > 1 ? s * 0.75 : shape < 1 ? s : s);
+      if (!crop && Math.abs(shown / shape - 1) > 0.03) {
+        const cut = Math.round((shown > shape ? (1 - shape / shown) : (1 - shown / shape)) / 2 * 100000);
+        const rect = shown > shape ? `<a:srcRect l="${cut}" r="${cut}"/>` : `<a:srcRect t="${cut}" b="${cut}"/>`;
         d = /<a:srcRect\b[^>]*\/>/.test(d) ? d.replace(/<a:srcRect\b[^>]*\/>/, rect) : d.replace(/(<a:blip\b[^>]*\/>|<a:blip\b[^>]*>[\s\S]*?<\/a:blip>)/, `$1${rect}`);
       }
-      if (+ext[1] !== cx || +ext[2] !== cy || !crop) {
+      if (Math.abs(+ext[1] - cx) > 20_000 || Math.abs(+ext[2] - cy) > 20_000) {
         d = d.replace(/<wp:extent cx="\d+" cy="\d+"/, `<wp:extent cx="${cx}" cy="${cy}"`).replace(/(<pic:spPr\b[^>]*>[\s\S]*?<a:ext )cx="\d+" cy="\d+"/, `$1cx="${cx}" cy="${cy}"`);
         changed++;
       }
@@ -390,7 +393,16 @@ export function uniformPhotos(r, stats, rels) {
   }
   r.xml = out + xml.slice(last);
   r.spans = paragraphSpans(r.xml);
-  return { side, changed };
+  // were they already a consistent size (each orientation within 3 mm)? Mixed sizes count against the clerk; a consistent
+  // size that just isn't Christian's doesn't
+  const groups = new Map();
+  for (const x of photos) {
+    const ext = /<wp:extent cx="(\d+)" cy="(\d+)"/.exec(x.m[0]);
+    const r0 = +ext[1] / +ext[2], k = r0 >= 1.15 ? "l" : r0 <= 0.87 ? "p" : "s";
+    groups.set(k, [...(groups.get(k) ?? []), +ext[1]]);
+  }
+  const wasUniform = [...groups.values()].every((ws) => Math.max(...ws) - Math.min(...ws) <= 108_000);
+  return { side, changed, wasUniform };
 }
 
 /** The changed report as a file. */

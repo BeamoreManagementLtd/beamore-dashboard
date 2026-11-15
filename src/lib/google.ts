@@ -121,6 +121,19 @@ export async function driveClient(admin: SupabaseClient) {
       const res = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?supportsAllDrives=true`, { method: "PATCH", headers: { Authorization: `Bearer ${access}`, "Content-Type": "application/json" }, body: JSON.stringify({ name }), cache: "no-store" });
       if (!res.ok) throw new Error(`Google Drive rename ${res.status}: ${(await res.text()).slice(0, 200)}`);
     },
+    /** Moves a file from one folder to another. */
+    move: async (fileId: string, from: string, to: string) => {
+      const res = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?addParents=${to}&removeParents=${from}&supportsAllDrives=true`, { method: "PATCH", headers: { Authorization: `Bearer ${access}`, "Content-Type": "application/json" }, body: "{}", cache: "no-store" });
+      if (!res.ok) throw new Error(`Google Drive move ${res.status}: ${(await res.text()).slice(0, 200)}`);
+    },
+    /**
+     * Puts a clerk's original report in Drive's bin (restorable for 30 days) once its checked copy has been sent
+     * (Ronan, 15 Nov 2026). The only thing the dashboard ever bins.
+     */
+    binOriginalReport: async (fileId: string) => {
+      const res = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?supportsAllDrives=true`, { method: "PATCH", headers: { Authorization: `Bearer ${access}`, "Content-Type": "application/json" }, body: JSON.stringify({ trashed: true }), cache: "no-store" });
+      if (!res.ok) throw new Error(`Google Drive bin ${res.status}: ${(await res.text()).slice(0, 200)}`);
+    },
     /** A Google Doc saved as PDF (Drive limits this to 10 MB). */
     exportPdf: async (fileId: string) =>
       (await call(`https://www.googleapis.com/drive/v3/files/${fileId}/export?mimeType=application%2Fpdf`)).arrayBuffer(),

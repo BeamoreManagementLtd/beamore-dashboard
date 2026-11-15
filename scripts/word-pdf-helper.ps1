@@ -51,8 +51,9 @@ do {
     $queue = Invoke-RestMethod -Uri "$Dashboard/api/reports/pdf-queue" -Headers $headers -TimeoutSec 60
     foreach ($job in $queue.jobs) {
       try {
+        # the checked copy is in "Checked (dashboard)" inside the report folder; the PDF goes in the report folder
         $folder = Join-Path $Root (Join-Path $job.main_folder (Join-Path $job.project_folder $job.report_folder))
-        $docx = Join-Path $folder $job.file_name
+        $docx = Join-Path (Join-Path $folder $job.checked_folder) $job.file_name
         if (-not (Test-Path -LiteralPath $docx)) { Write-Log "not on this PC yet: $docx"; continue }
         $pdfTemp = Join-Path $env:TEMP ("beamore-" + [guid]::NewGuid().ToString() + ".pdf")
         Convert-WithWord $docx $pdfTemp

@@ -15,12 +15,13 @@ type Issue = { severity: "high" | "medium" | "low"; kind: string; text: string }
 /** A friendly note to the clerk: what had to be fixed in this report and what to do next time. */
 function clerkNote(r: Record<string, unknown>, sender: string) {
   const clerk = ((r.clerks as { name?: string } | null)?.name ?? (r.clerk_name as string | null) ?? "").split(" ")[0];
-  const f = (r.fixes ?? {}) as { spelling?: { find: string; replace: string }[]; rotated?: number; shrunk?: number; stretched?: number; enlarged?: number; uniform?: number; side_cm?: number | null; renamed?: string | null };
+  const f = (r.fixes ?? {}) as { spelling?: { find: string; replace: string }[]; rotated?: number; shrunk?: number; stretched?: number; enlarged?: number; uniform?: number; mixed?: boolean; side_cm?: number | null; renamed?: string | null };
   const issues = ((r.issues ?? []) as Issue[]).filter((i) => i.severity !== "low" && i.kind !== "safety");
+  // everything that had to be put right goes back to the clerk (Ronan, 15 Nov 2026)
   const fixed = [
     f.spelling?.length ? `${f.spelling.length} spelling/grammar correction${f.spelling.length === 1 ? "" : "s"} (e.g. ${f.spelling.slice(0, 3).map((s) => `"${s.find}" → "${s.replace}"`).join(", ")})` : null,
     f.renamed ? `the file name, to match your other reports in the folder (now "${f.renamed}")` : null,
-    f.uniform ? `photo sizes: please use square photos all the same size, about ${f.side_cm ?? 6} cm, two to a line (as in Christian Tate's reports)` : null,
+    f.mixed ? `photos of different sizes, now all the same size (about ${f.side_cm ?? 6} cm wide, like Christian Tate's reports)` : null,
     f.stretched ? `${f.stretched} photo${f.stretched === 1 ? "" : "s"} stretched out of shape (please keep the shift key down when resizing)` : null,
     f.enlarged ? `${f.enlarged} photo${f.enlarged === 1 ? "" : "s"} too small to see on the page` : null,
     f.rotated ? `${f.rotated} photo${f.rotated === 1 ? "" : "s"} on their side` : null,
@@ -83,10 +84,11 @@ export default async function ReportPage({ params, searchParams }: { params: Pro
             {" "}Photos: {photos.count ?? 0}{photos.blurry ? `, ${photos.blurry} low detail` : ""}{photos.smallOnPage ? `, ${photos.smallOnPage} shown small` : ""}{photos.stretched ? `, ${photos.stretched} stretched` : ""}{photos.shrunk ? `; ${photos.shrunk} made smaller` : ""}.
             {" "}File {mb(r.size_before)} → {mb(r.size_after)}. Checked {fdt(r.checked_at)}.</p>}
           {/* open it in Word from Google Drive on your computer: opening it in Google Docs spoils the layout */}
-          {r.main_folder && <div className="field"><label className="small muted" htmlFor="wp">Open in Word: it&apos;s here on your computer (Google Drive)</label>
-            <input id="wp" readOnly value={`G:\\My Drive\\Work\\${r.main_folder}\\${r.project_folder_name}\\${r.folder_name}\\${r.file_name}`} style={{ width: "100%", fontFamily: "monospace", fontSize: 12 }} /></div>}
-          {r.folder_id && <p><a className="btn small" href={`https://drive.google.com/drive/folders/${r.folder_id}`} target="_blank" rel="noreferrer">Show its folder in Drive</a> <span className="small muted">(open it in Word from there, not Google Docs)</span></p>}
-          <p className="small muted">In Word, accept or reject the tracked changes and deal with the comments, save, then approve and send here. Anything left is accepted and the comments left out of the PDF.</p>
+          {r.main_folder && r.checked_name && !r.original_trashed_at && <div className="field"><label className="small muted" htmlFor="wp">The checked copy, to open in Word (on your computer, Google Drive)</label>
+            <input id="wp" readOnly value={`G:\\My Drive\\Work\\${r.main_folder}\\${r.project_folder_name}\\${r.folder_name}\\Checked (dashboard)\\${r.checked_name}`} style={{ width: "100%", fontFamily: "monospace", fontSize: 12 }} /></div>}
+          {r.main_folder && <p className="small muted">The clerk&apos;s original is left as it was: <span style={{ fontFamily: "monospace" }}>{r.folder_name}\{r.renamed_from ?? r.file_name}</span>{r.original_trashed_at ? ` (put in Drive's bin after sending, ${fdt(r.original_trashed_at)}; it can be restored for 30 days)` : ". It goes to Drive's bin once the checked copy has been sent."}</p>}
+          {r.checked_folder_id && <p><a className="btn small" href={`https://drive.google.com/drive/folders/${r.checked_folder_id}`} target="_blank" rel="noreferrer">Show the checked copy in Drive</a> <span className="small muted">(open it in Word from there, not Google Docs)</span></p>}
+          <p className="small muted">In Word, open the checked copy, accept or reject the tracked changes and deal with the comments, save, then approve and send here. Anything left is accepted and the comments left out of the PDF.</p>
         </section>
 
         <section className="panel">
@@ -115,7 +117,7 @@ export default async function ReportPage({ params, searchParams }: { params: Pro
               return (
                 <ul className="plain small">
                   {!!f.spelling?.length && <li><b>Spelling and grammar ({f.spelling.length}):</b> {f.spelling.slice(0, 25).map((s) => `${s.find} → ${s.replace}`).join("; ")}</li>}
-                  {!!f.uniform && <li><b>Photos all made the same size:</b> {f.uniform} photos to {f.side_cm} cm squares (cropped from the middle; undo a crop in Word with Crop &gt; Reset)</li>}
+                  {!!f.uniform && <li><b>Photos all made the same size:</b> {f.uniform} photos, {f.side_cm} cm wide, keeping landscape and portrait (odd shapes trimmed a little from the middle; undo a crop in Word with Crop &gt; Reset)</li>}
                   {!!f.renamed && <li><b>Renamed to match the other reports in the folder:</b> {f.renamed}</li>}
                   {!!f.stretched && <li><b>Stretched photos put back in proportion:</b> {f.stretched}</li>}
                   {!!f.enlarged && <li><b>Small photos made bigger:</b> {f.enlarged}</li>}
