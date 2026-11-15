@@ -30,7 +30,7 @@ const INSURANCE = {
         properties: {
           type: { type: "string", enum: ["PI", "PL", "EL", "other"], description: "PI professional indemnity, PL public liability, EL employers liability" },
           description: s,
-          cover_gbp: { ...nn, description: "limit of indemnity in pounds, e.g. 1000000" },
+          cover_gbp: { ...nn, description: "the LIMIT OF INDEMNITY in pounds for this cover (e.g. 1000000). Never the turnover, fee income, excess, premium or a sub-limit" },
           starts: { ...ns, description: "YYYY-MM-DD" },
           expires: { ...ns, description: "YYYY-MM-DD (the end / renewal date)" },
         },
@@ -90,7 +90,7 @@ const INVOICE = {
 };
 
 const PROMPTS: Record<Kind, { schema: object; ask: string }> = {
-  insurance: { schema: INSURANCE, ask: "This is an insurance certificate or schedule uploaded by a self-employed clerk of works. Read every cover section on it (professional indemnity, public liability, employers liability, other), with the limit of indemnity in pounds and the period of insurance. Don't guess: use null for anything not shown." },
+  insurance: { schema: INSURANCE, ask: "This is an insurance certificate or schedule uploaded by a self-employed clerk of works. Read every cover section on it (professional indemnity, public liability, employers liability, other), with the limit of indemnity in pounds and the period of insurance. Certificates often also show turnover, fee income, excess or premium figures: ignore those, the cover is the limit of indemnity (often 'any one claim' or 'in the aggregate'). Don't guess: use null for anything not shown." },
   qualification: { schema: QUALIFICATION, ask: "This is a qualification, membership certificate or card (for example a CSCS card or a CIOB membership certificate) uploaded by a clerk of works. Read what it is, whose it is, the number and any expiry. Don't guess: use null for anything not shown." },
   invoice: { schema: INVOICE, ask: "This is an invoice sent to Beamore Management Ltd by a clerk of works (or their company) for site visits. Read the invoice details. Amounts in pounds. List every dated visit in 'visits' (a full day is 2 half-days; a single visit or half day is 1). Don't guess: use null for anything not shown, and leave 'visits' empty if dates aren't listed." },
   company_invoice: { schema: INVOICE, ask: "This is an invoice sent to Beamore Management Ltd by a clerk of works' company for site visits. Read the invoice details. Amounts in pounds. Don't guess: use null for anything not shown." },
