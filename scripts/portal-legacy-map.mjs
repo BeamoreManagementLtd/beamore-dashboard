@@ -148,7 +148,7 @@ export async function mapLegacy(db, S, { write }) {
   const ic = invChecks.filter((r) => idOf.has(r.receipt)).map(({ receipt, ...r }) => ({ ...r, upload_id: idOf.get(receipt) }));
   if (ic.length) { const { error } = await db.from("portal_invoice_checks").upsert(ic); if (error) throw new Error("invoice checks " + error.message); }
   if (expectations.length) { const { error } = await db.from("portal_expectations").upsert(expectations); if (error) throw new Error("expectations " + error.message); }
-  if (companies.length) { const { error } = await db.from("clerk_companies").upsert(companies, { onConflict: "legacy_id" }); if (error) throw new Error("companies " + error.message); }
+  if (companies.length) { const { error } = await db.from("clerk_companies").upsert(companies, { onConflict: "legacy_id", ignoreDuplicates: true }); // never undo links changed in the dashboard if (error) throw new Error("companies " + error.message); }
 
   // insurance expiry dates feed the dashboard's renewal reminders (newest in-date policy of each type)
   const latest = new Map();
