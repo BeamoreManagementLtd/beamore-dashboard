@@ -154,6 +154,11 @@ async function applyInvoice(admin: SupabaseClient, u: Row, r: Record<string, unk
     diaryDays = (v ?? []).reduce((s, x) => s + Number(x.days), 0);
     if (r.days !== null && r.days !== undefined && Math.abs(Number(r.days) - diaryDays) > 0.01) forBeamore.push(`Invoice charges ${r.days} days; the diary shows ${diaryDays} for ${period}`);
   }
+  if (r.supplier && u.clerk_id) {
+    const names = await knownNames(admin, u.clerk_id);
+    const sup = norm(String(r.supplier));
+    if (!names.some((n) => n && (sup.includes(n) || n.includes(sup)))) forBeamore.push(`Invoice is from "${r.supplier}", which isn't linked to this person yet (link it under Company links)`);
+  }
   const pence = (v: unknown) => (v === null || v === undefined ? null : Math.round(Number(v) * 100));
   if (r.invoice_number && u.clerk_id) {
     const { data: dup } = await admin.from("portal_invoice_checks").select("upload_id,portal_uploads!inner(clerk_id,status)").ilike("invoice_number", String(r.invoice_number))
@@ -165,7 +170,13 @@ async function applyInvoice(admin: SupabaseClient, u: Row, r: Record<string, unk
     net_pence: pence(r.net_gbp), vat_pence: pence(r.vat_gbp), gross_pence: pence(r.gross_gbp), cis: !!r.cis, diary_days: diaryDays,
     checked_at: new Date().toISOString(), checked_by: "AI",
   });
-  await admin.from("portal_uploads").update({ period }).eq("id", u.id);
+  // queue it for the salmon side of the diary (written by the 15-minute job, one invoice at a time)
+  const visits = (r.visits as unknown[] | undefined) ?? [];
+  await admin.from("portal_uploads").update({
+    period,
+    diary_state: visits.length ? "waiting" : "needs_review",
+    diary_note: visits.length ? "Waiting to go into the diary" : "The invoice doesn't list the dates worked, so it can't go in the diary automatically",
+  }).eq("id", u.id);
   return { problems, forBeamore };
 }
 

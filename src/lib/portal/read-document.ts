@@ -58,7 +58,7 @@ const QUALIFICATION = {
 
 const INVOICE = {
   type: "object", additionalProperties: false,
-  required: ["readable", "is_invoice", "supplier", "invoice_number", "invoice_date", "period", "net_gbp", "vat_gbp", "gross_gbp", "cis", "days", "lines", "problems"],
+  required: ["readable", "is_invoice", "supplier", "invoice_number", "invoice_date", "period", "net_gbp", "vat_gbp", "gross_gbp", "cis", "days", "lines", "visits", "problems"],
   properties: {
     readable: { type: "boolean" },
     is_invoice: { type: "boolean" },
@@ -73,6 +73,18 @@ const INVOICE = {
       type: "array",
       items: { type: "object", additionalProperties: false, required: ["text", "amount_gbp"], properties: { text: s, amount_gbp: nn } },
     },
+    visits: {
+      type: "array",
+      description: "one entry per day per site worked, as listed on the invoice (or its timesheet). Empty if the invoice doesn't say which days",
+      items: {
+        type: "object", additionalProperties: false, required: ["date", "site", "half_days"],
+        properties: {
+          date: { type: "string", description: "YYYY-MM-DD" },
+          site: { type: "string", description: "the site / project exactly as worded on the invoice" },
+          half_days: { type: "integer", description: "1 = half day / one visit, 2 = full day" },
+        },
+      },
+    },
     problems: { type: "array", items: s },
   },
 };
@@ -80,7 +92,7 @@ const INVOICE = {
 const PROMPTS: Record<Kind, { schema: object; ask: string }> = {
   insurance: { schema: INSURANCE, ask: "This is an insurance certificate or schedule uploaded by a self-employed clerk of works. Read every cover section on it (professional indemnity, public liability, employers liability, other), with the limit of indemnity in pounds and the period of insurance. Don't guess: use null for anything not shown." },
   qualification: { schema: QUALIFICATION, ask: "This is a qualification, membership certificate or card (for example a CSCS card or a CIOB membership certificate) uploaded by a clerk of works. Read what it is, whose it is, the number and any expiry. Don't guess: use null for anything not shown." },
-  invoice: { schema: INVOICE, ask: "This is an invoice sent to Beamore Management Ltd by a clerk of works (or their company) for site visits. Read the invoice details. Amounts in pounds. Don't guess: use null for anything not shown." },
+  invoice: { schema: INVOICE, ask: "This is an invoice sent to Beamore Management Ltd by a clerk of works (or their company) for site visits. Read the invoice details. Amounts in pounds. List every dated visit in 'visits' (a full day is 2 half-days; a single visit or half day is 1). Don't guess: use null for anything not shown, and leave 'visits' empty if dates aren't listed." },
   company_invoice: { schema: INVOICE, ask: "This is an invoice sent to Beamore Management Ltd by a clerk of works' company for site visits. Read the invoice details. Amounts in pounds. Don't guess: use null for anything not shown." },
 };
 
@@ -104,4 +116,45 @@ export async function readDocument(kind: Kind, file: Buffer, mime: string): Prom
   const text = res.content.find((b) => b.type === "text");
   if (!text || text.type !== "text") throw new Error("The AI returned no answer");
   return JSON.parse(text.text);
+}
+
+const MATCH = {
+  type: "object", additionalProperties: false, required: ["matches"],
+  properties: {
+    matches: {
+      type: "array",
+      items: {
+        type: "object", additionalProperties: false, required: ["wording", "site", "certain"],
+        properties: {
+          wording: s,
+          site: { ...ns, description: "one name copied exactly from the list, or null" },
+          certain: { type: "boolean", description: "true only if this is clearly the same site" },
+        },
+      },
+    },
+  },
+};
+
+/** Maps how a clerk worded each site on an invoice to the exact name already used in the diary. */
+export async function matchSites(wordings: string[], clerkSites: string[], otherSites: string[]) {
+  if (!aiConfigured()) throw new Error("ANTHROPIC_API_KEY is not set");
+  const client = new Anthropic();
+  const text = `A clerk of works has written these site names on their invoice:
+${wordings.map((w) => `- ${w}`).join("\n")}
+
+The diary must use one of these exact names. Sites this clerk has worked at recently (most likely):
+${clerkSites.map((n) => `- ${n}`).join("\n") || "(none)"}
+
+Other sites in the rates list:
+${otherSites.map((n) => `- ${n}`).join("\n") || "(none)"}
+
+For each invoice wording, pick the one name from the lists that is the same site (location, school/client name or project number can show this). Copy it exactly. If no name clearly fits, or two could fit, give null and certain=false.`;
+  const res = await client.messages.create({
+    model: AI_MODEL, max_tokens: 3000,
+    output_config: { effort: "low", format: { type: "json_schema", schema: MATCH } },
+    messages: [{ role: "user", content: text }],
+  } as Anthropic.MessageCreateParamsNonStreaming);
+  const t = res.content.find((b) => b.type === "text");
+  if (!t || t.type !== "text") throw new Error("The AI returned no answer");
+  return (JSON.parse(t.text) as { matches: { wording: string; site: string | null; certain: boolean }[] }).matches;
 }

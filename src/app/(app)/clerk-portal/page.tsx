@@ -3,12 +3,12 @@ import { createClient } from "@/lib/supabase/server";
 import { requireProfile } from "@/lib/auth";
 import { insuranceSummary, fmtDate, gbp, type Policy } from "@/lib/portal/data";
 import { aiConfigured } from "@/lib/portal/read-document";
-import { resolveUpload, rereadUpload, removeUpload, setExpected, setAccess } from "./actions";
+import { resolveUpload, rereadUpload, removeUpload, setExpected, setAccess, addCompany, setCompanyKind, revokeCompany, setSiteAlias, retryDiary } from "./actions";
 import { viewAs } from "@/app/portal/actions";
 
 export const metadata = { title: "Clerk portal · Beamore" };
 
-const TABS: [string, string][] = [["attention", "Needs attention"], ["uploads", "All uploads"], ["insurance", "Insurance register"], ["monthly", "Monthly invoices"], ["people", "People & access"], ["companies", "Company links"]];
+const TABS: [string, string][] = [["attention", "Needs attention"], ["diary", "Invoices → diary"], ["uploads", "All uploads"], ["insurance", "Insurance register"], ["monthly", "Monthly invoices"], ["people", "People & access"], ["companies", "Company links"]];
 const KIND: Record<string, string> = { invoice: "Invoice", company_invoice: "Company invoice", insurance: "Insurance", qualification: "Certificate" };
 const STATUS: Record<string, [string, string]> = {
   received: ["Received", "neutral"], filed: ["Filed", "neutral"], checked: ["Read by AI", "neutral"], accepted: ["Checked", "good"],
@@ -76,6 +76,55 @@ export default async function ClerkPortalAdmin({ searchParams }: { searchParams:
                 })}
               </tbody>
             </table>
+          </section>
+        );
+      })()}
+
+      {tab === "diary" && await (async () => {
+        const [{ data }, { data: rates }] = await Promise.all([
+          db.from("portal_uploads").select("id,clerk_id,file_name,received_at,period,diary_state,diary_note,drive_file_id,clerks(name),portal_diary_cells(sheet,cell,value,work_date,diary_date)")
+            .eq("kind", "invoice").not("diary_state", "is", null).neq("status", "deleted").order("received_at", { ascending: false }).limit(100),
+          db.from("rates").select("site_as_typed").order("site_as_typed"),
+        ]);
+        type D = { id: string; clerk_id: string; file_name: string | null; received_at: string; period: string | null; diary_state: string; diary_note: string | null; drive_file_id: string | null; clerks: { name: string } | null; portal_diary_cells: { sheet: string; cell: string; value: string; work_date: string; diary_date: string }[] };
+        const rows = (data ?? []) as unknown as D[];
+        const tone: Record<string, string> = { written: "good", waiting: "neutral", needs_review: "warn", not_applicable: "neutral" };
+        const label: Record<string, string> = { written: "In the diary", waiting: "Waiting", needs_review: "Needs you", not_applicable: "Not for the diary" };
+        return (
+          <section className="panel tbl-wrap">
+            <p className="muted small">Clerks&apos; invoices are read by AI and written into the salmon side of Diary 2026 (November onwards), using the exact site names already in the diary. Only empty cells are filled. Anything unsure waits here; tell it the right site once and it remembers that wording for that clerk.</p>
+            <datalist id="sites">{(rates ?? []).map((x) => <option key={x.site_as_typed} value={x.site_as_typed} />)}</datalist>
+            {rows.length ? (
+              <table>
+                <thead><tr><th>Received</th><th>Clerk</th><th>Invoice</th><th>Diary</th><th></th></tr></thead>
+                <tbody>
+                  {rows.map((u) => {
+                    const unsure = u.diary_state === "needs_review" ? [...(u.diary_note ?? "").matchAll(/"([^"]+)"/g)].map((m) => m[1]) : [];
+                    return (
+                      <tr key={u.id}>
+                        <td>{fmtDate(u.received_at)}</td>
+                        <td><Link href={`/personnel/${u.clerk_id}`}>{u.clerks?.name}</Link></td>
+                        <td>{u.drive_file_id ? <a href={drive(u.drive_file_id)!} target="_blank" rel="noreferrer">{u.file_name ?? "invoice"}</a> : u.file_name}{u.period && <div className="small muted">{u.period}</div>}</td>
+                        <td>
+                          <span className={`pill ${tone[u.diary_state] ?? "neutral"}`}>{label[u.diary_state] ?? u.diary_state}</span>
+                          <div className="small">{u.diary_note}</div>
+                          {!!u.portal_diary_cells?.length && <div className="small muted">{u.portal_diary_cells.map((c) => `${c.sheet} ${c.cell}: ${c.value}${c.work_date !== c.diary_date ? ` (work on ${c.work_date})` : ""}`).join(" · ")}</div>}
+                          {unsure.map((w) => (
+                            <form key={w} action={setSiteAlias} style={{ display: "flex", gap: 6, marginTop: 6, flexWrap: "wrap" }}>
+                              <input type="hidden" name="clerk" value={u.clerk_id} /><input type="hidden" name="upload" value={u.id} /><input type="hidden" name="wording" value={w} />
+                              <span className="small">&ldquo;{w}&rdquo; is</span>
+                              <input name="site" list="sites" placeholder="diary site name" required style={{ minWidth: 220 }} />
+                              <button className="btn">Save</button>
+                            </form>
+                          ))}
+                        </td>
+                        <td>{u.diary_state === "needs_review" && !unsure.length && <form action={retryDiary}><input type="hidden" name="id" value={u.id} /><button className="btn">Try again</button></form>}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            ) : <p className="muted">No invoices read yet.</p>}
           </section>
         );
       })()}
@@ -162,15 +211,15 @@ export default async function ClerkPortalAdmin({ searchParams }: { searchParams:
       })()}
 
       {tab === "people" && await (async () => {
-        const { data: clerks } = await db.from("clerks").select("id,name,email,active,portal_access,invoice_upload,invoices_paused,billing").eq("active", true).order("name");
+        const { data: clerks } = await db.from("clerks").select("id,name,email,active,portal_access,invoice_upload,invoices_paused,billing,finance_visible").eq("active", true).order("name");
         const toggle = (c: { id: string }, field: string, on: boolean, label: [string, string]) => director
           ? <form action={setAccess}><input type="hidden" name="clerk" value={c.id} /><input type="hidden" name="field" value={field} /><input type="hidden" name="value" value={on ? "0" : "1"} /><button className={`btn${on ? " primary" : ""}`}>{on ? label[0] : label[1]}</button></form>
           : <span>{on ? label[0] : label[1]}</span>;
         return (
           <section className="panel tbl-wrap">
-            <p className="muted small">Clerks sign in with their @beamore.co.uk Google account. Only Ronan and Judy get the dashboard; everyone else only sees their own portal.</p>
+            <p className="muted small">Clerks sign in with their @beamore.co.uk Google account. Only Ronan and Judy get the dashboard; everyone else only sees their own portal. &ldquo;Sees finances&rdquo; = their invoice amounts and Xero payment history; switch it off for subcontractors who work through someone else&apos;s company.</p>
             <table>
-              <thead><tr><th>Clerk</th><th>Email</th><th>Billing</th><th>Portal</th><th>Invoice upload</th><th>Invoices</th><th></th></tr></thead>
+              <thead><tr><th>Clerk</th><th>Email</th><th>Billing</th><th>Portal</th><th>Invoice upload</th><th>Invoices</th><th title="Their invoice amounts and Xero payment history">Sees finances</th><th></th></tr></thead>
               <tbody>
                 {(clerks ?? []).map((c) => (
                   <tr key={c.id}>
@@ -180,6 +229,7 @@ export default async function ClerkPortalAdmin({ searchParams }: { searchParams:
                     <td>{toggle(c, "portal_access", c.portal_access, ["Access on", "No access"])}</td>
                     <td>{toggle(c, "invoice_upload", c.invoice_upload, ["Allowed", "Not allowed"])}</td>
                     <td>{toggle(c, "invoices_paused", c.invoices_paused, ["Paused", "Active"])}</td>
+                    <td>{toggle(c, "finance_visible", c.finance_visible, ["Yes", "No"])}</td>
                     <td><form action={viewAs}><input type="hidden" name="clerk" value={c.id} /><button className="btn">View as</button></form></td>
                   </tr>
                 ))}
@@ -190,20 +240,32 @@ export default async function ClerkPortalAdmin({ searchParams }: { searchParams:
       })()}
 
       {tab === "companies" && await (async () => {
-        const { data } = await db.from("clerk_companies").select("id,company_name,relationship,status,email,clerk_id,clerks(name)").order("company_name");
-        const rows = (data ?? []) as unknown as { id: string; company_name: string; relationship: string | null; status: string | null; email: string | null; clerk_id: string | null; clerks: { name: string } | null }[];
+        const [{ data }, { data: people }] = await Promise.all([
+          db.from("clerk_companies").select("id,company_name,relationship,status,email,clerk_id,kind,xero_contact_id,clerks(name)").neq("status", "Revoked").order("company_name"),
+          db.from("clerks").select("id,name").eq("active", true).order("name"),
+        ]);
+        const rows = (data ?? []) as unknown as { id: string; company_name: string; relationship: string | null; status: string | null; email: string | null; clerk_id: string | null; kind: string; xero_contact_id: string | null; clerks: { name: string } | null }[];
         return (
           <section className="panel tbl-wrap">
-            <p className="muted small">The Xero contacts each clerk invoices through. Enabled links let the clerk see their payment history, and the insurance check accepts certificates in these company names.</p>
+            <p className="muted small">Which company each person invoices through. Invoices and insurance in these names are matched to the person. <b>Own company</b>: the person sees its invoices and payments in the portal. <b>Works through</b>: an agency or contractor they work for; its finances are never shown to them.</p>
+            {director && (
+              <form action={addCompany} className="row" style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                <select name="clerk" required defaultValue=""><option value="" disabled>Person…</option>{(people ?? []).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</select>
+                <input name="company" placeholder="Company name, e.g. Link Contracting Limited" required style={{ minWidth: 260 }} />
+                <select name="kind" defaultValue="own"><option value="own">Their own company</option><option value="works_through">Works through (agency / contractor)</option></select>
+                <button className="btn primary">Add</button>
+              </form>
+            )}
             <table>
-              <thead><tr><th>Company</th><th>Clerk</th><th>Type</th><th>Status</th></tr></thead>
+              <thead><tr><th>Company</th><th>Person</th><th>Type</th><th>Xero</th><th></th></tr></thead>
               <tbody>
                 {rows.map((r) => (
                   <tr key={r.id}>
                     <td>{r.company_name}</td>
                     <td>{r.clerk_id ? <Link href={`/personnel/${r.clerk_id}`}>{r.clerks?.name}</Link> : <span className="muted">{r.email ?? "—"}</span>}</td>
-                    <td className="small">{r.relationship ?? "—"}</td>
-                    <td><span className={`pill ${r.status === "Enabled" ? "good" : r.status === "Revoked" ? "neutral" : "warn"}`}>{r.status ?? "—"}</span></td>
+                    <td>{director ? <form action={setCompanyKind}><input type="hidden" name="id" value={r.id} /><input type="hidden" name="kind" value={r.kind === "own" ? "works_through" : "own"} /><button className={`btn${r.kind === "own" ? " primary" : ""}`}>{r.kind === "own" ? "Own company" : "Works through"}</button></form> : r.kind === "own" ? "Own company" : "Works through"}{r.status === "Prepared" && <div className="small warnc">not confirmed</div>}</td>
+                    <td className="small">{r.xero_contact_id ? "linked" : <span className="muted">not found</span>}</td>
+                    <td>{director && <form action={revokeCompany}><input type="hidden" name="id" value={r.id} /><button className="btn">Remove</button></form>}</td>
                   </tr>
                 ))}
               </tbody>
