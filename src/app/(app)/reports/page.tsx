@@ -4,6 +4,7 @@ import { createClient } from "@/lib/supabase/server";
 import { fd, fdt, today } from "@/lib/format";
 import { loadHolidays, addWorkingDays, workingDaysBetween, rag } from "@/lib/reports/days";
 import { refreshReports } from "./actions";
+import { scoreTrend } from "@/lib/reports/trend";
 import { STANDARDS, STANDARD_KEYS, standardsShare, type StandardKey, type StandardsMet } from "@/lib/reports/standards";
 
 export const dynamic = "force-dynamic";
@@ -68,6 +69,17 @@ export default async function Reports({ searchParams }: { searchParams: Promise<
 
   // timings this month: clerks (visit → upload) and checkers (upload → sent)
   const dm = doneMonth ?? [];
+  // each clerk's score trend over the last six months (getting better or worse), linking to the graph on their page
+  const { data: history } = await db.from("reports").select("clerk_id,clerk_name,visit_date,checked_at,score,clerks(name)")
+    .not("score", "is", null).gte("checked_at", addDays(t, -183)).order("checked_at");
+  const trendOf = new Map<string, { id: string | null; scores: [string, number][] }>();
+  for (const r of history ?? []) {
+    const k = (r.clerks as unknown as { name?: string } | null)?.name ?? r.clerk_name ?? "Unknown";
+    const x = trendOf.get(k) ?? { id: r.clerk_id as string | null, scores: [] as [string, number][] };
+    x.scores.push([r.visit_date ?? r.checked_at ?? "", Number(r.score)]);
+    trendOf.set(k, x);
+  }
+  const trendFor = (k: string) => { const x = trendOf.get(k); return x ? { id: x.id, ...scoreTrend(x.scores.sort((a, b) => a[0].localeCompare(b[0])).map(([, s]) => s)) } : null; };
   const byClerk = new Map<string, { n: number; days: number; timed: number; late: number; issues: number; spelling: number; score: number; scored: number; best: number; bestN: number; missed: Partial<Record<StandardKey, number>> }>();
   for (const r of dm) {
     const k = (r.clerks as unknown as { name?: string } | null)?.name ?? r.clerk_name ?? "Unknown";
@@ -155,12 +167,14 @@ export default async function Reports({ searchParams }: { searchParams: Promise<
           <h3>Clerks: scorecard</h3>
           <p className="small muted">Days from visit to upload, reports late, issues and spelling fixes per report, the average quality score (100 = nothing needed fixing), and how many of the team&apos;s {STANDARD_KEYS.length} best practices their reports hit, with the one they miss most.</p>
           {!byClerk.size ? <p className="empty">No reports this month yet.</p> : (
-            <table><thead><tr><th>Clerk</th><th className="num">Reports</th><th className="num">Average days</th><th className="num">Late</th><th className="num">Issues per report</th><th className="num">Spelling fixes</th><th className="num" title="Average quality score out of 100: how little needed fixing">Score</th><th className="num" title={`Of the team's best practices: ${STANDARD_KEYS.map((s) => STANDARDS[s].label).join(", ")}`}>Best practice</th><th>Most missed</th></tr></thead>
+            <table><thead><tr><th>Clerk</th><th className="num">Reports</th><th className="num">Average days</th><th className="num">Late</th><th className="num">Issues per report</th><th className="num">Spelling fixes</th><th className="num" title="Average quality score out of 100: how little needed fixing">Score</th><th className="num" title={`Of the team's best practices: ${STANDARD_KEYS.map((s) => STANDARDS[s].label).join(", ")}`}>Best practice</th><th>Most missed</th><th title="Last five reports against the five before (six months); click for their graph">Trend</th></tr></thead>
               <tbody>{[...byClerk].sort((a, b) => (b[1].timed ? b[1].days / b[1].timed : 0) - (a[1].timed ? a[1].days / a[1].timed : 0)).map(([k, x]) => (
                 <tr key={k}><td>{k}</td><td className="num">{x.n}</td><td className={`num ${x.timed && x.days / x.timed > clerkDays ? "neg" : ""}`}>{x.timed ? (x.days / x.timed).toFixed(1) : "—"}</td>
                   <td className={`num ${x.late ? "neg" : ""}`}>{x.late}</td><td className="num">{(x.issues / x.n).toFixed(1)}</td><td className="num">{x.spelling}</td><td className={`num ${x.scored && x.score / x.scored < 65 ? "neg" : ""}`}>{x.scored ? Math.round(x.score / x.scored) : "—"}</td>
                   <td className={`num ${x.bestN && x.best / x.bestN < 0.6 ? "neg" : ""}`}>{x.bestN ? `${Math.round((x.best / x.bestN) * STANDARD_KEYS.length)}/${STANDARD_KEYS.length}` : "—"}</td>
-                  <td className="small">{(() => { const top = (Object.entries(x.missed) as [StandardKey, number][]).sort((a, b) => b[1] - a[1])[0]; return top ? STANDARDS[top[0]].label : "—"; })()}</td></tr>
+                  <td className="small">{(() => { const top = (Object.entries(x.missed) as [StandardKey, number][]).sort((a, b) => b[1] - a[1])[0]; return top ? STANDARDS[top[0]].label : "—"; })()}</td>
+                  <td className="small">{(() => { const tr = trendFor(k); if (!tr) return "—"; const label = { up: "↑ better", down: "↓ worse", steady: "→ steady", new: "too few yet" }[tr.dir];
+                    const el = <span className={tr.dir === "down" ? "neg" : tr.dir === "up" ? "pos" : "muted"}>{label}</span>; return tr.id ? <Link href={`/personnel/${tr.id}`}>{el}</Link> : el; })()}</td></tr>
               ))}</tbody></table>
           )}
         </section>

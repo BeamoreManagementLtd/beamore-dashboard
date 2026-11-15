@@ -4,7 +4,7 @@ import sharp from "sharp";
 import { driveClient } from "@/lib/google";
 import { projectMatcher } from "@/lib/project-match";
 import { sendReportEmail } from "@/lib/google-user";
-import { readReport, photoStats, shrinkPhotos, trackSpelling, addComments, saveReport, photoHashes, reusedCount, uncaptioned, unticked, rotatePhoto, fixPhotoShapes, uniformPhotos, healthSafety } from "./docx.mjs";
+import { readReport, photoStats, shrinkPhotos, trackSpelling, addComments, saveReport, photoHashes, reusedCount, uncaptioned, unticked, rotatePhoto, fixPhotoShapes, uniformPhotos, healthSafety, issuesTracker } from "./docx.mjs";
 
 /** 0-100: how much the report needed fixing (must-checks count most). Lateness is shown separately. */
 /**
@@ -251,6 +251,17 @@ export async function checkOne(admin: SupabaseClient, id: string) {
   const hsGone = hs.filter((h) => h.status === "missing" || h.status === "empty"), hsThin = hs.filter((h) => h.status === "thin");
   if (!early && hsGone.length) extra.push({ severity: hsGone.length >= 5 ? "high" : "medium", kind: "other", text: `Health and safety: ${hs.length - hsGone.length - hsThin.length} of the ${hs.length} standard items filled in properly. ${hsGone.map((h) => `${h.label} ${h.status === "missing" ? "deleted" : "left empty"}`).join("; ")}${hsThin.length ? `; only "N/A"/"none" for ${hsThin.map((h) => h.label).join(", ")}` : ""}`, p: null });
   else if (!early && hsThin.length >= 3) extra.push({ severity: "low", kind: "other", text: `Health and safety: only "N/A"/"none" for ${hsThin.map((h) => h.label).join(", ")}`, p: null });
+  // the issues tracker: no photos in it, every item red/orange/green, closed items dated, green and explained
+  const trk = issuesTracker(r);
+  const nums = (a: string[]) => `${a.slice(0, 8).join(", ")}${a.length > 8 ? ` and ${a.length - 8} more` : ""}`;
+  const trkProblems = [
+    trk.photos ? `${trk.photos} photo${trk.photos === 1 ? "" : "s"} in the tracker (it should just record the issue and which report it's in)` : "",
+    trk.uncoloured.length ? `item${trk.uncoloured.length === 1 ? "" : "s"} ${nums(trk.uncoloured)} not coloured red, orange or green` : "",
+    trk.greenNoDate.length ? `item${trk.greenNoDate.length === 1 ? "" : "s"} ${nums(trk.greenNoDate)} green but with no date closed` : "",
+    trk.closedNotGreen.length ? `item${trk.closedNotGreen.length === 1 ? "" : "s"} ${nums(trk.closedNotGreen)} closed but not turned green` : "",
+    trk.closedNoReason.length ? `item${trk.closedNoReason.length === 1 ? "" : "s"} ${nums(trk.closedNoReason)} closed without a comment saying why` : "",
+  ].filter(Boolean);
+  if (trkProblems.length) extra.push({ severity: "medium", kind: "other", text: `Issues tracker: ${trkProblems.join("; ")}`, p: null });
   const issues: Issue[] = [...extra, ...ai.issues].sort((a, b) => rank[a.severity] - rank[b.severity]);
   if (spelt.skipped.length) issues.push({ severity: "low", kind: "other", text: `Spelling not changed automatically (please fix by hand): ${spelt.skipped.slice(0, 8).map((s) => `${s.find} → ${s.replace}`).join(", ")}`, p: null });
   await addComments(r, issues.filter((i) => i.severity !== "low").slice(0, 15).map((i) => ({ p: i.p, text: `${i.severity === "high" ? "Must check: " : ""}${i.text}` })));
@@ -280,17 +291,19 @@ export async function checkOne(admin: SupabaseClient, id: string) {
     status: "ready", ai_summary: ai.summary, issues, spelling_fixed: spelt.applied,
     photos: { count: stats.count, blurry: stats.blurry, smallOnPage: stats.smallOnPage, stretched: stats.stretched, shrunk: shrunk.changed, rotated: rotated.length, reused, usual, uncaptioned: uncaptioned(r) },
     photo_hashes: hashes, photo_count: stats.count,
-    fixes: { spelling: applied, rotated: rotated.length, shrunk: shrunk.changed, stretched: shapes.stretched, enlarged: shapes.enlarged, uniform: uniform.changed, mixed: !uniform.wasUniform, side_cm: uniform.side ? +(uniform.side / 360000).toFixed(1) : null, renamed: renamedTo, words, programme: prog ?? null, standards: ai.standards ?? null, health_safety: hs },
+    fixes: { spelling: applied, rotated: rotated.length, shrunk: shrunk.changed, stretched: shapes.stretched, enlarged: shapes.enlarged, uniform: uniform.changed, mixed: !uniform.wasUniform, side_cm: uniform.side ? +(uniform.side / 360000).toFixed(1) : null, renamed: renamedTo, words, programme: prog ?? null, standards: ai.standards ?? null, health_safety: hs, tracker: trk },
     // lateness is shown on its own on the Reports page
     score: qualityScore(issues, spelt.applied, 0, { renamed: !!renamedTo, mixedPhotos: !uniform.wasUniform, rotated: rotated.length, stretched: stats.stretched, oversized: shrunk.changed > 0 && raw.length > 10_000_000, standardsMissed: Object.values(ai.standards ?? {}).filter((v) => v === false).length }),
     clerk_points: [
-      ...(renamedTo ? [`Name your reports the same way as the others in the folder, e.g. "${renamedTo.replace(/\.docx?$/i, "")}"`] : []),
-      ...(!uniform.wasUniform ? ["Keep all photos the same size: about 6 cm wide (6 x 4.5 cm landscape, 4.5 x 6 cm portrait), two to a line"] : []),
-      ...(rotated.length ? ["Check photos are the right way up before inserting them"] : []),
-      ...(stats.stretched ? ["Resize photos from a corner (or hold Shift) so they don't stretch out of shape"] : []),
-      ...(raw.length > 10_000_000 ? [`Make photos smaller before inserting them: this report was ${(raw.length / 1e6).toFixed(0)} MB (Word: Picture Format > Compress Pictures)`] : []),
-      ...(!early && (hsGone.length || hsThin.length >= 3) ? [`Fill in all ${hs.length} health and safety items at the start of the report, properly, every time (don't delete any or leave them empty or just "N/A"): ${hs.filter((h) => h.status !== "ok").map((h) => h.label).join(", ")}. ${onDfeForm ? "Christian Tate's St Leonards diaries" : "Keith Osorio's Holiday Inn Camden reports"} fill in every one`] : []),
-      ...(prog && (prog.verdict === "weak" || prog.verdict === "missing") ? [`${prog.dfe ? "Progress vs programme" : "Progress summary"}: ${progGaps.join("; ") || "follow the Beamore method"}`] : []),
+      // worded as friendly suggestions, not orders (Ronan, 15 Nov 2026: "steer them in the right direction")
+      ...(renamedTo ? [`If you could name the file the same way as the others in the folder, e.g. "${renamedTo.replace(/\.docx?$/i, "")}", it keeps everything easy to find`] : []),
+      ...(!uniform.wasUniform ? ["Keeping all the photos the same size (about 6 cm wide: 6 x 4.5 cm landscape, 4.5 x 6 cm portrait, two to a line) makes the report look really tidy"] : []),
+      ...(rotated.length ? ["A quick check that photos are the right way up before inserting them would help"] : []),
+      ...(stats.stretched ? ["A handy tip: resizing photos from a corner (or holding Shift) stops them stretching out of shape"] : []),
+      ...(raw.length > 10_000_000 ? [`The file came in at ${(raw.length / 1e6).toFixed(0)} MB, so it's worth shrinking the photos before inserting them (in Word: Picture Format > Compress Pictures)`] : []),
+      ...(!early && (hsGone.length || hsThin.length >= 3) ? [`It would be great to see all ${hs.length} health and safety items at the start of the report filled in, even briefly, rather than taken out or left as "N/A". This time it was ${hs.filter((h) => h.status !== "ok").map((h) => h.label).join(", ")}. ${onDfeForm ? "Christian Tate's St Leonards diaries" : "Keith Osorio's Holiday Inn Camden reports"} are a good example`] : []),
+      ...(trkProblems.length ? [`On the issues tracker: it works best as a simple record of each issue and which report to read about it in (so no photos), with every item red, orange or green. When you close one, add the date, turn it green and say in the comments why, e.g. "certificate received" or "remedial work seen complete"`] : []),
+      ...(prog && (prog.verdict === "weak" || prog.verdict === "missing") ? [`On the ${prog.dfe ? "progress vs programme section" : "progress summary"}, it would help to ${progGaps.join("; ") || "follow the approach below"}`] : []),
       ...(ai.clerk_points ?? []),
     ].slice(0, 8),
     size_before: raw.length, size_after: out.length, checked_revision: after.headRevisionId, checked_at: new Date().toISOString(),

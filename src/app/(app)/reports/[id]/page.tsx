@@ -18,17 +18,18 @@ type Issue = { severity: "high" | "medium" | "low"; kind: string; text: string }
 function clerkNote(r: Record<string, unknown>, sender: string) {
   const clerk = ((r.clerks as { name?: string } | null)?.name ?? (r.clerk_name as string | null) ?? "").split(" ")[0];
   const f = (r.fixes ?? {}) as { spelling?: { find: string; replace: string }[]; rotated?: number; shrunk?: number; stretched?: number; enlarged?: number; uniform?: number; mixed?: boolean; side_cm?: number | null; renamed?: string | null };
-  const issues = ((r.issues ?? []) as Issue[]).filter((i) => i.severity !== "low" && i.kind !== "safety");
-  // everything that had to be put right goes back to the clerk (Ronan, 15 Nov 2026)
+  // things raised for the checker that a suggestion below already covers aren't repeated
+  const issues = ((r.issues ?? []) as Issue[]).filter((i) => i.severity !== "low" && i.kind !== "safety" && i.kind !== "programme" && !/^(Health and safety|Issues tracker):/.test(i.text));
+  // what was put right goes back to the clerk (Ronan, 15 Nov 2026), worded gently: "steer them in the right
+  // direction rather than saying do this or else"
   const fixed = [
     f.spelling?.length ? `${f.spelling.length} spelling/grammar correction${f.spelling.length === 1 ? "" : "s"} (e.g. ${f.spelling.slice(0, 3).map((s) => `"${s.find}" → "${s.replace}"`).join(", ")})` : null,
-    f.renamed ? `the file name, to match your other reports in the folder (now "${f.renamed}")` : null,
-    f.mixed ? `photos of different sizes, now all the same size (about ${f.side_cm ?? 6} cm wide, like Christian Tate's reports)` : null,
-    f.stretched ? `${f.stretched} photo${f.stretched === 1 ? "" : "s"} stretched out of shape (please keep the shift key down when resizing)` : null,
-    f.enlarged ? `${f.enlarged} photo${f.enlarged === 1 ? "" : "s"} too small to see on the page` : null,
-    f.rotated ? `${f.rotated} photo${f.rotated === 1 ? "" : "s"} on their side` : null,
-    f.shrunk ? `photos larger than needed (the file was ${(Number(r.size_before) / 1e6).toFixed(0)} MB; please resize before inserting)` : null,
-    ...issues.map((i) => i.text),
+    f.renamed ? `the file name, to match the other reports in the folder (now "${f.renamed}")` : null,
+    f.mixed ? `the photos, now all the same size (about ${f.side_cm ?? 6} cm wide, like Christian Tate's reports)` : null,
+    f.stretched ? `${f.stretched} photo${f.stretched === 1 ? "" : "s"} that had stretched out of shape` : null,
+    f.enlarged ? `${f.enlarged} photo${f.enlarged === 1 ? "" : "s"} that were a bit small to see on the page` : null,
+    f.rotated ? `${f.rotated} photo${f.rotated === 1 ? "" : "s"} that were on their side` : null,
+    f.shrunk ? `the photo sizes, to bring the file down from ${(Number(r.size_before) / 1e6).toFixed(0)} MB` : null,
   ].filter(Boolean) as string[];
   const allIssues = (r.issues ?? []) as Issue[];
   // Ronan's progress vs programme method, pushed whenever a report falls short of it (his email to all clerks, Aug 2024)
@@ -39,23 +40,27 @@ function clerkNote(r: Record<string, unknown>, sender: string) {
   // the DfE form can't be changed, so its tips say which box to use rather than what to add (Ronan, 15 Nov 2026)
   const onDfeForm = (f as { programme?: { dfe?: boolean } | null }).programme?.dfe === true;
   const missed = STANDARD_KEYS.filter((s) => st[s] === false && !(s === "summary" && summaryHelp));
-  const tips = ((r.clerk_points ?? []) as string[]).filter((t) => t && !(programmeIssue && /^Progress (vs programme|summary)/i.test(t)));
+  const tips = ((r.clerk_points ?? []) as string[]).filter((t) => t && !(programmeIssue && /^(Progress (vs programme|summary)|On the (progress vs programme section|progress summary))/i.test(t)));
   const photoHelp = !!(f.mixed || f.stretched || f.enlarged || allIssues.some((i) => i.kind === "photos" && i.severity !== "low"));
   const detailHelp = allIssues.some((i) => i.kind === "vague" && i.severity !== "low");
-  if (!fixed.length && !tips.length && !missed.length) return `Hi ${clerk},\n\nThanks for your report (${r.file_name}). It needed no changes before it went out. Great work.\n\nKind regards,\n${sender}`;
+  // start with what they do well
+  const strengths = STANDARD_KEYS.filter((s) => st[s] === true).map((s) => STANDARDS[s].label.toLowerCase());
+  const praise = strengths.length >= 2 ? ` It's good to see ${strengths.slice(0, -1).slice(0, 2).join(", ")} and ${strengths[strengths.length - 1]} in there.` : "";
+  if (!fixed.length && !tips.length && !missed.length && !issues.length) return `Hi ${clerk},\n\nThanks for your report (${r.file_name}). It needed no changes before it went out. Great work.${praise}\n\nKind regards,\n${sender}`;
   return [
     `Hi ${clerk},`, "",
-    fixed.length ? `Thanks for your report (${r.file_name}). A few things needed fixing before it went to the client:` : `Thanks for your report (${r.file_name}). It needed no changes before it went to the client.`,
-    ...fixed.map((x) => `- ${x}`),
-    ...(tips.length ? ["", "For your next reports, it would help if you could:", ...tips.map((x) => `- ${x}`)] : []),
+    `Thanks for your report (${r.file_name}).${praise}`,
+    ...(fixed.length ? ["", "We tidied up a few small things before it went to the client:", ...fixed.map((x) => `- ${x}`)] : []),
+    ...(issues.length ? ["", "A couple of things we noticed:", ...issues.map((i) => `- ${i.text}`)] : []),
+    ...(tips.length ? ["", "A few suggestions for your next reports:", ...tips.map((x) => `- ${x}`)] : []),
     // pictures from Christian's report where they'd help (the line becomes the picture when it's sent)
     ...(photoHelp ? ["", EXAMPLES.photos.intro, EXAMPLES.photos.marker] : []),
     ...(detailHelp ? ["", EXAMPLES.detail.intro, EXAMPLES.detail.marker] : []),
-    ...(programmeHelp ? ["", "The progress vs programme section is one clients look at closely, and we've had feedback on it, so please follow this every time.", ...PROGRAMME_METHOD, "", EXAMPLES.programme.intro, EXAMPLES.programme.marker] : []),
+    ...(programmeHelp ? ["", "Clients read the progress vs programme section closely, so it's well worth getting right. This is the approach that works well:", ...PROGRAMME_METHOD, "", EXAMPLES.programme.intro, EXAMPLES.programme.marker] : []),
     ...(summaryHelp ? ["", ...SUMMARY_METHOD] : []),
     // the best bits of everyone's reports this one doesn't do yet (standards.ts)
-    ...(missed.length ? ["", "We want every report to have the best bits of the whole team's. To get yours there:", ...missed.map((s) => `- ${tipFor(s, onDfeForm)} (have a look at ${STANDARDS[s].from})`)] : []),
-    "", "Any questions, just give me a shout.", "", "Kind regards,", sender,
+    ...(missed.length ? ["", "We're bringing together the best bits of everyone's reports so we all work the same way. A few ideas that would make yours even better:", ...missed.map((s) => `- ${tipFor(s, onDfeForm)} (${STANDARDS[s].from} are a good example)`)] : []),
+    "", "Thanks again. Any questions, just give me a shout.", "", "Kind regards,", sender,
   ].join("\n");
 }
 const SEV: Record<string, [string, string]> = { high: ["Must check", "bad"], medium: ["Should fix", "warn"], low: ["Minor", "muted"] };

@@ -158,7 +158,7 @@ ${STANDARD}
  Severity: high = must be fixed or looked at before it goes; medium = should be fixed; low = minor.
 Give the paragraph number when an issue is about one place. Don't repeat spelling fixes as issues.
 3. rotate: attached photos (labelled Photo 1, 2...) that are on their side or upside down.
-4. clerk_points: what this clerk could do better next time, judged against the standard above: specific, friendly, no more than 5, not about spelling, and not repeating the best practices or the progress section (those are added separately).
+4. clerk_points: what this clerk could do better next time, judged against the standard above: specific, no more than 5. They go in an email from the office to an experienced professional, so word them as friendly, encouraging suggestions that steer ("it would help to...", "worth adding..."), never orders, criticism or "you must"; not about spelling, and not repeating the best practices or the progress section (those are added separately).
 4b. standards: for each of the team's best practices, whether this report clearly meets it (for a DfE report, within the form's own boxes; true where the form has no place for it). Monthly reports can summarise the weekly diaries, so judge "people" and "follow_up" against what a monthly report would hold.
 5. programme: say whether it's a DfE report, then judge its progress reporting against the right standard above. For DfE be strict, item by item: no programme named, fewer than 8 activities, activities with no weeks, percentages instead of weeks, or a synopsis under 5-6 lines with no overall view, is "weak".`;
   const content: Anthropic.ContentBlockParam[] = [

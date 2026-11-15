@@ -18,6 +18,8 @@ export function uncaptioned(r: Report): number;
 export const HS_ITEMS: { dfe: [string, RegExp][]; beamore: [string, RegExp][] };
 export type HsItem = { label: string; status: "missing" | "empty" | "thin" | "ok" };
 export function healthSafety(r: Report, dfe: boolean): HsItem[];
+export type Tracker = { tables: number; items: number; photos: number; uncoloured: string[]; greenNoDate: string[]; closedNotGreen: string[]; closedNoReason: string[] };
+export function issuesTracker(r: Report): Tracker;
 export function unticked(r: Report): number;
 export function fillBlank(r: Report, label: string, value: string): boolean;
 export function rotatePhoto(r: Report, sharp: typeof Sharp, path: string, degrees: 90 | 180 | 270): Promise<void>;

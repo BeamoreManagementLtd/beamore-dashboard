@@ -138,6 +138,51 @@ export function healthSafety(r, dfe) {
   });
 }
 
+/**
+ * The issues tracker at the end of the report (Ronan, 15 Nov 2026): a record of each issue and which report to read
+ * about it in, so no photos; every item coloured red, orange or green; and an item closed out has its date, is
+ * green, and says in the comments why it was closed (e.g. the right information received).
+ */
+const isDate = (s) => /\b\d{1,2}(st|nd|rd|th)?[\s./-]+(\d{1,2}|[a-z]{3,9})[\s./-]+\d{2,4}\b/i.test(s);
+const rag = (hex) => {
+  if (!hex || /^(auto|ffffff)$/i.test(hex)) return null;
+  const [r, g, b] = [0, 2, 4].map((k) => parseInt(hex.slice(k, k + 2), 16));
+  if (g > 120 && r < 170 && b < 120) return "green";
+  if (r > 200 && g >= 140 && b < 100) return "orange";
+  if (r > 170 && g < 90 && b < 90) return "red";
+  return null;
+};
+export function issuesTracker(r) {
+  const out = { tables: 0, items: 0, photos: 0, uncoloured: [], greenNoDate: [], closedNotGreen: [], closedNoReason: [] };
+  for (const t of r.xml.match(/<w:tbl>[\s\S]*?<\/w:tbl>/g) ?? []) {
+    const rows = t.match(/<w:tr\b[\s\S]*?<\/w:tr>/g) ?? [];
+    const head = (rows[0]?.match(/<w:tc\b[\s\S]*?<\/w:tc>/g) ?? []).map((c) => textOf(c).replace(/\s+/g, " ").trim().toLowerCase());
+    const closedCol = head.findIndex((h) => /closed/.test(h));
+    if (closedCol < 0 || head.length < 3) continue;
+    const commentCol = head.findIndex((h, k) => k !== closedCol && /comment|status/.test(h));
+    let itemCol = head.findIndex((h) => /observation|subject|item\b/.test(h) && !/^(item|number|no\.?)$/.test(h));
+    if (itemCol < 0) itemCol = head.findIndex((h, k) => k > 0 && /item/.test(h));
+    out.tables++;
+    out.photos += (t.match(/<w:drawing>/g) ?? []).length;
+    for (const row of rows.slice(1)) {
+      const cells = row.match(/<w:tc\b[\s\S]*?<\/w:tc>/g) ?? [];
+      const text = cells.map((c) => textOf(c).replace(/\s+/g, " ").trim());
+      const item = text[itemCol >= 0 ? itemCol : 2] ?? "";
+      if (!item) continue;
+      out.items++;
+      const no = text[0] || String(out.items);
+      const colour = cells.map((c) => rag(/w:fill="([0-9A-Fa-f]{6}|auto)"/.exec(c)?.[1])).find(Boolean) ?? null;
+      const closedText = text[closedCol] ?? "", comment = commentCol >= 0 ? text[commentCol] ?? "" : "";
+      const closed = isDate(closedText) || /^closed\b/i.test(closedText);
+      if (!colour) out.uncoloured.push(no);
+      if (colour === "green" && !isDate(closedText) && !/^open/i.test(closedText) && !isDate(comment)) out.greenNoDate.push(no);
+      if (closed && colour && colour !== "green") out.closedNotGreen.push(no);
+      if (closed && comment.replace(/[^a-z]/gi, "").length < 12) out.closedNoReason.push(no);
+    }
+  }
+  return out;
+}
+
 /** Photo checks: needs sharp (passed in so this file stays free of native modules). */
 export async function photoStats(r, sharp) {
   const out = [];

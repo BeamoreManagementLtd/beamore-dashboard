@@ -7,6 +7,7 @@ import { fd, fdy, today } from "@/lib/format";
 import { saveCompliance, startOnboarding, tickOnboarding, setActive, makeJoinLink, draftJoin } from "../actions";
 import { joinLink } from "@/lib/join-link";
 import { buildOnboarding } from "@/lib/onboarding";
+import { ScoreTrend } from "../score-trend";
 
 export const dynamic = "force-dynamic";
 
@@ -62,6 +63,8 @@ export default async function Clerk({ params, searchParams }: { params: Promise<
         <div><h1>{clerk.name}</h1><p><Link href="/personnel">← Personnel</Link>{c.updated_at ? ` · record updated ${fdy(c.updated_at)}` : ""}</p></div>
         <form action={setActive.bind(null, id, !clerk.active)}><button className="btn">{clerk.active ? "Mark as no longer working with us" : "Mark as active again"}</button></form>
       </div>
+
+      <ScoreTrend clerkId={id} />
 
       <section className="panel">
         <h2>From the portal <Link className="small" href={`/clerk-portal?tab=uploads&who=${id}`}>all uploads →</Link></h2>
