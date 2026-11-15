@@ -258,13 +258,41 @@ const uniq = (a) => [...new Map(a.filter((x) => x && /\d/.test(x)).map((x) => [x
 const uniqText = (a) => [...new Set(a.filter(Boolean))];
 const order = new Map(); spine.forEach((x) => { if (!order.has(x.group)) order.set(x.group, order.size); });
 spine.sort((a, b) => order.get(a.group) - order.get(b.group));
-const rows = [["Company", "Project", "Project number", "DfE project number", "PO number", "Send invoice to", "CC on invoice", "Invoice notes", "Clerk of works", "Send reports to", "CC on reports", "Status", "Job no."]];
+// Invoicing instructions: only real instructions (Ronan, 15 Nov 2026: where things came from, codes already in their own
+// columns and project news are left out). From the old Invoice emails comments, Ronan, and what the emails showed.
+const INSTRUCTIONS = {
+  "Amethyst Lane": "Through Perfect Circle (Asite): quote the Perfect Circle invoice number",
+  "Dwyer Road": "Through Perfect Circle (Asite): quote the Perfect Circle invoice number",
+  Foxwood: "Through Perfect Circle: quote the Perfect Circle invoice number",
+  "Bramcote College": "Through Perfect Circle: quote the Perfect Circle invoice number",
+  "Horatios Garden": "Invoice the charity direct, not Gleeds (from October 2026)",
+  "The Forum": "Kate Edwards wants a statement of account and the report references with each invoice",
+  "The Forum MONTHLY": "Kate Edwards wants a statement of account and the report references with each invoice",
+  "Newman Street": "Also upload to the Dwellant portal; send by the 26th of the month",
+  "Millenium House": "Send by the last working day of the month (Cladding Safety Scheme)",
+  "Union Road": "Send by the last working day of the month (Cladding Safety Scheme)",
+  Amwell: "To Katie Tarsey only (not Hertfordshire County Council)",
+  "Cannon Wharf": "Address to Read Mills Management Company Ltd c/o Watsons Property Group, Norwich",
+  "Longfield Fire & Rescue Training Centre": "Hertfordshire County Council (contract HCC2618374) must raise a PO before we invoice",
+  Sandbach: "Quote Gleeds code MNMS0470; PO to follow",
+  "King Edmund": "Portakabin supplier set-up not finished, no PO yet: hold invoices as drafts",
+  "Anglo PTK": "Portakabin supplier set-up not finished, no PO yet: hold invoices as drafts",
+};
+const isInstruction = (t) => /separate invoice|per pdf|statement|attn|portal|quote the|perfect circle|only\b/i.test(t ?? "");
+const rows = [["Company", "Project", "Project number", "DfE project number", "PO number", "Send invoice to", "CC on invoice", "Invoicing instructions", "Clerk of works", "Send reports to", "CC on reports", "Status", "Job no."]];
+const block = [null]; // per row: { first, last } of its company's block (null for the header and the spare rows at the bottom)
 spine.forEach((s, i) => {
   const inv = s.inv ?? s.invGeneral;
   const c = codes(inv?.notes);
-  const invNotes = uniqText([inv?.notes, s.inv ? null : s.invGeneral ? `From "${s.invGeneral.label}"` : null, ...s.notes]).join(". ");
-  rows.push([s.group, s.site, uniq([...s.proj, ...c.proj].filter((x) => !DFE.test(x))).join(" / "), uniq([...s.proj, ...c.proj].filter((x) => DFE.test(x)).map((x) => x.replace(/\s/g, "").toUpperCase())).join(" / "),uniq([...s.po, ...c.po]).join(" / "), inv?.to ?? "", inv?.cc ?? "", invNotes, s.clerk, s.reportTo, s.reportCc, s.project ? STAGE[s.project.stage] ?? s.project.stage : "", s.project?.number ? String(s.project.number) : ""]);
-  if (spine[i + 1]?.group !== s.group) for (let k = 0; k < SPARE; k++) rows.push([s.group, ...Array(12).fill("")]);
+  // a hand-written instruction replaces the longer email notes saying the same thing
+  const howTo = uniqText([INSTRUCTIONS[s.site], isInstruction(inv?.notes) && !(INSTRUCTIONS[s.site] && inv.label === "Ronan") ? inv.notes : null,
+    ...s.notes.filter((n) => isInstruction(n) && !(INSTRUCTIONS[s.site] && /^From emails/.test(n))).map((n) => n.replace(/^From emails[^:]*: /, ""))]).join(". ");
+  const firstOfCompany = spine[i - 1]?.group !== s.group;
+  rows.push([firstOfCompany ? s.group : "", s.site, uniq([...s.proj, ...c.proj].filter((x) => !DFE.test(x))).join(" / "), uniq([...s.proj, ...c.proj].filter((x) => DFE.test(x)).map((x) => x.replace(/\s/g, "").toUpperCase())).join(" / "), uniq([...s.po, ...c.po]).join(" / "), inv?.to ?? "", inv?.cc ?? "", howTo, s.clerk, s.reportTo, s.reportCc, s.project ? STAGE[s.project.stage] ?? s.project.stage : "", s.project?.number ? String(s.project.number) : ""]);
+  block.push({ first: firstOfCompany, last: false });
+  if (spine[i + 1]?.group !== s.group) {
+    for (let k = 0; k < SPARE; k++) { rows.push(Array(13).fill("")); block.push({ first: false, last: k === SPARE - 1 }); }
+  }
 });
 console.log(`${spine.length} projects; ${matched} matched to the dashboard; ${spine.filter((s) => s.inv).length} with their own invoice contacts, ${spine.filter((s) => !s.inv && s.invGeneral).length} from a company-wide entry, ${spine.filter((s) => !s.inv && !s.invGeneral).length} with none; ${fromEmail} helped by the email search`);
 for (const l of report) console.log(" -", l);
@@ -277,8 +305,18 @@ if (dst.endsWith(".xlsx")) {
   const cd = await zip.file(await sheetPath(zip, "Contact details")).async("string");
   const headFont = await fontOf(zip, Number(cellStyle(cd, "A1").s)), bodyFont = await fontOf(zip, Number(cellStyle(cd, "A2").s));
   // the shading Judy and Anél use: a grey header, then white and light grey lines in turn
-  const [head, white, grey] = await solidStyles(zip, [{ font: headFont, rgb: "FFBDBDBD" }, { font: bodyFont, rgb: "FFFFFFFF" }, { font: bodyFont, rgb: "FFF3F3F3" }]);
-  await addSheet(zip, "Projects", rows, { styleOf: (i) => (i === 0 ? head : i % 2 ? white : grey), widths: [24, 30, 22, 16, 22, 40, 50, 45, 30, 60, 40, 11, 8], freeze: { cols: 2, rows: 1 }, replace: process.env.REPLACE === "1" });
+  // and a thick border round each company's block: every combination of shading and border sides it needs
+  const LAST = rows[0].length - 1;
+  const combos = [];
+  for (const rgb of ["FFFFFFFF", "FFF3F3F3"]) for (let m = 0; m < 16; m++) combos.push({ font: bodyFont, rgb, border: { top: !!(m & 1), bottom: !!(m & 2), left: !!(m & 4), right: !!(m & 8) } });
+  const [head, ...bodies] = await solidStyles(zip, [{ font: headFont, rgb: "FFBDBDBD", border: { bottom: true } }, ...combos]);
+  const styleOf = (i, c) => {
+    if (i === 0) return head;
+    const b = block[i] ?? { first: false, last: false }, inBlock = !!block[i];
+    const m = (b.first ? 1 : 0) | (b.last ? 2 : 0) | (inBlock && c === 0 ? 4 : 0) | (inBlock && c === LAST ? 8 : 0);
+    return bodies[(i % 2 ? 0 : 16) + m];
+  };
+  await addSheet(zip, "Projects", rows, { styleOf, widths: [24, 30, 22, 16, 22, 40, 50, 40, 30, 60, 40, 11, 8], freeze: { cols: 2, rows: 1 }, replace: process.env.REPLACE === "1" });
   fs.writeFileSync(dst, await zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE", compressionOptions: { level: 6 } }));
   console.log("written", dst);
 }

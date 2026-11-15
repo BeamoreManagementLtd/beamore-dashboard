@@ -18,19 +18,35 @@ export async function solidStyles(zip, defs) {
   const xfsM = /<cellXfs\b[^>]*>([\s\S]*?)<\/cellXfs>/.exec(styles);
   const xfs = [...xfsM[1].matchAll(/<xf\b[^>]*\/>|<xf\b[^>]*>[\s\S]*?<\/xf>/g)].map((m) => m[0]);
   const newFills = [], newXfs = [];
-  const out = defs.map(({ font, rgb }) => {
+  const bordersM = /<borders\b[^>]*>([\s\S]*?)<\/borders>/.exec(styles);
+  const borders = [...bordersM[1].matchAll(/<border\b[^>]*\/>|<border\b[^>]*>[\s\S]*?<\/border>/g)].map((m) => m[0]);
+  const newBorders = [];
+  const borderFor = (b) => {
+    if (!b || !(b.top || b.bottom || b.left || b.right)) return 0;
+    const side = (n) => (b[n] ? `<${n} style="medium"><color indexed="64"/></${n}>` : `<${n}/>`);
+    const want = `<border>${side("left")}${side("right")}${side("top")}${side("bottom")}<diagonal/></border>`;
+    let i = borders.indexOf(want);
+    if (i < 0) { borders.push(want); newBorders.push(want); i = borders.length - 1; }
+    return i;
+  };
+  const out = defs.map(({ font, rgb, border }) => {
+    const borderId = borderFor(border);
     let fillId = 0;
     if (rgb) {
       fillId = fills.findIndex((f) => /patternType="solid"/.test(f) && new RegExp(`fgColor rgb="${rgb}"`, "i").test(f));
       if (fillId < 0) { fills.push(`<fill><patternFill patternType="solid"><fgColor rgb="${rgb}"/><bgColor indexed="64"/></patternFill></fill>`); newFills.push(fills.at(-1)); fillId = fills.length - 1; }
     }
-    const want = `<xf numFmtId="0" fontId="${font}" fillId="${fillId}" borderId="0" xfId="0" applyFont="1"${fillId ? ' applyFill="1"' : ""}/>`;
+    const want = `<xf numFmtId="0" fontId="${font}" fillId="${fillId}" borderId="${borderId}" xfId="0" applyFont="1"${fillId ? ' applyFill="1"' : ""}${borderId ? ' applyBorder="1"' : ""}/>`;
     let i = xfs.indexOf(want);
     if (i < 0) { xfs.push(want); newXfs.push(want); i = xfs.length - 1; }
     return i;
   });
-  if (newFills.length || newXfs.length) {
-    styles = styles.replace(fillsM[0], fillsM[0].replace(/count="\d+"/, `count="${fills.length}"`).replace("</fills>", `${newFills.join("")}</fills>`));
+  if (newBorders.length) {
+    const bm = /<borders\b[^>]*>([\s\S]*?)<\/borders>/.exec(styles);
+    styles = styles.replace(bm[0], bm[0].replace(/count="\d+"/, `count="${borders.length}"`).replace("</borders>", `${newBorders.join("")}</borders>`));
+  }
+  if (newFills.length || newXfs.length || newBorders.length) {
+    styles = styles.replace(/<fills\b[^>]*>([\s\S]*?)<\/fills>/.exec(styles)[0], fillsM[0].replace(/count="\d+"/, `count="${fills.length}"`).replace("</fills>", `${newFills.join("")}</fills>`));
     const xm = /<cellXfs\b[^>]*>([\s\S]*?)<\/cellXfs>/.exec(styles);
     styles = styles.replace(xm[0], xm[0].replace(/count="\d+"/, `count="${xfs.length}"`).replace("</cellXfs>", `${newXfs.join("")}</cellXfs>`));
     zip.file("xl/styles.xml", styles, NO_FOLDERS);

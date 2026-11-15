@@ -147,13 +147,16 @@ export function parseDiary(wb, { year = 2026, fileLabel = "Diary 2026.xlsx" } = 
     const col = {};
     pt.getRow(1).eachCell((c, n) => { col[str(c)] = n; });
     const get = (row, h) => (col[h] ? str(row.getCell(col[h])) : "");
+    // the company is written once at the top of its block; three empty rows in a row end the block
+    let company = "", empties = 0;
     if (col.Company && col.Project) for (let r = 2; r <= pt.rowCount; r++) {
       const row = pt.getRow(r), project = get(row, "Project");
+      if (get(row, "Company")) { company = get(row, "Company"); empties = 0; } else if (!project) { if (++empties > 3) company = ""; } else empties = 0;
       if (!project) continue;
       projectsTab.push({
-        company: get(row, "Company"), project, job: Number(get(row, "Job no.")) || null,
+        company, project, job: Number(get(row, "Job no.")) || null,
         projectNumber: get(row, "Project number"), dfe: get(row, "DfE project number"), po: get(row, "PO number"),
-        invoiceTo: emails(get(row, "Send invoice to")), invoiceCc: emails(get(row, "CC on invoice")), invoiceNotes: get(row, "Invoice notes") || null,
+        invoiceTo: emails(get(row, "Send invoice to")), invoiceCc: emails(get(row, "CC on invoice")), invoiceNotes: get(row, "Invoicing instructions") || get(row, "Invoice notes") || null,
         reportTo: emails(get(row, "Send reports to")), reportCc: emails(get(row, "CC on reports")), clerk: get(row, "Clerk of works") || null,
       });
     }

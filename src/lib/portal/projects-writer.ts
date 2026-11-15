@@ -21,7 +21,7 @@ const QUIET_MS = 10 * 60 * 1000;
 const XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 const RUNNING = ["live", "won_arranging", "won_preparing", "on_hold"];
 const STAGE: Record<string, string> = { live: "Live", complete: "Finished", won_arranging: "Starting", won_preparing: "Starting", on_hold: "On hold", lost: "Lost", enquiry: "Quote", sent: "Quote" };
-const COLS = ["Company", "Project", "Project number", "DfE project number", "PO number", "Send invoice to", "CC on invoice", "Invoice notes", "Clerk of works", "Send reports to", "CC on reports", "Status", "Job no."] as const;
+const COLS = ["Company", "Project", "Project number", "DfE project number", "PO number", "Send invoice to", "CC on invoice", "Invoicing instructions", "Clerk of works", "Send reports to", "CC on reports", "Status", "Job no."] as const;
 type Col = (typeof COLS)[number];
 
 const key = (s: unknown) => String(s ?? "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/&/g, "and").replace(/\b(the|school|academy|primary|college|ltd|limited)\b/g, "").replace(/[^a-z0-9]/g, "");
@@ -68,11 +68,16 @@ async function writeOne(g: Awaited<ReturnType<typeof driveClient>>, fileId: stri
   const at = new Map<Col, number>();
   ws.getRow(1).eachCell((c, n) => { const h = text(c) as Col; if (COLS.includes(h)) at.set(h, n - 1); });
   if (!at.has("Company") || !at.has("Project") || !at.has("Job no.")) return { changed: 0, note: `The ${SHEET} tab's headings have changed; not updated` };
-  const rows: { r: number; v: Record<string, string> }[] = [];
+  // the company is written once, at the top of its block (Ronan, 15 Nov 2026): a row belongs to the company above it
+  // until three empty rows in a row (its spare rows) end the block; rows after that are free for new clients
+  const rows: { r: number; v: Record<string, string>; company: string }[] = [];
+  let company = "", empties = 0;
   for (let r = 2; r <= ws.rowCount; r++) {
     const v: Record<string, string> = {};
     for (const [h, i] of at) v[h] = text(ws.getCell(r, i + 1));
-    rows.push({ r, v });
+    if (v.Company) { company = v.Company; empties = 0; }
+    else if (!v.Project) { if (++empties > 3) company = ""; } else empties = 0;
+    rows.push({ r, v, company });
   }
 
   const changes: { ref: string; value: string }[] = [];
@@ -107,13 +112,14 @@ async function writeOne(g: Awaited<ReturnType<typeof driveClient>>, fileId: stri
     // which company group: where this client's other jobs are; else a company heading that looks like the client's name
     const client = String((p.clients as { name?: string } | null)?.name ?? "");
     const theirs = rows.filter((x) => x.v["Job no."] && projects.find((q) => String(q.number) === x.v["Job no."])?.client_id === p.client_id && p.client_id);
-    const counts = new Map<string, number>(); for (const x of theirs) counts.set(x.v.Company, (counts.get(x.v.Company) ?? 0) + 1);
+    const counts = new Map<string, number>(); for (const x of theirs) counts.set(x.company, (counts.get(x.company) ?? 0) + 1);
     const ck = key(client).slice(0, 6);
     const group = [...counts.keys()].find((c) => /office to check/i.test(c)) ?? [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0]
       ?? (ck.length >= 3 ? rows.find((x) => x.v.Company && key(x.v.Company).startsWith(ck))?.v.Company : undefined);
-    const spare = (group && rows.find((x) => x.v.Company === group && !x.v.Project)) ?? rows.find((x) => !x.v.Company && !x.v.Project);
+    const spare = (group && rows.find((x) => x.company === group && !x.v.Project)) ?? rows.find((x) => !x.company && !x.v.Project);
     if (!spare) continue;
-    set(spare, "Company", group ?? client.replace(/\s+(ltd|limited|llp|plc)\.?$/i, ""));
+    // a spare row under its company already belongs to it; a free row at the bottom starts a new company block
+    if (!spare.company) set(spare, "Company", group ?? client.replace(/\s+(ltd|limited|llp|plc)\.?$/i, ""));
     set(spare, "Project", name);
     fill(spare, p);
   }
