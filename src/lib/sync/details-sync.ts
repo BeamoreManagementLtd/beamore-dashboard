@@ -5,7 +5,6 @@ import { siteKey } from "@/lib/site-key.mjs";
 import { readDiaryFront } from "@/lib/sync/diary-front.mjs";
 import { clerkKey } from "@/lib/site-key.mjs";
 import { draftExpiryChasers } from "@/lib/clerk-expiry";
-import { setupProjectTracking } from "@/lib/xero-tracking";
 
 /**
  * Project details from the front page of the newest CoW diary in each active project's folder
@@ -155,9 +154,6 @@ export async function syncProjectDetails(admin: SupabaseClient) {
     // clerks' renewals due within 30 days: one renewal-request draft each
     let expiryDrafts = 0;
     try { expiryDrafts = await draftExpiryChasers(admin); } catch { /* try again tomorrow */ }
-
-    // Xero Project tracking options rotate (it has its own sync_runs row)
-    try { await setupProjectTracking(admin); } catch { /* logged in its own run */ }
 
     const msg = `${expiryDrafts} renewal-request drafts, ${linked} projects linked to their Drive folder, ${read} CoW diaries read, ${meFound} M&E clerks from M&E reports, ${unchanged} unchanged, ${pos} PO numbers found in email, ${ticked} checklist items filled in`;
     await finish(true, msg);
