@@ -241,13 +241,14 @@ export async function processUpload(admin: SupabaseClient, id: string) {
   const issues = [...u.issues.filter((i) => i.startsWith("Safety check") || i.startsWith("Same file")), ...problems, ...forBeamore];
   const status = problems.length ? "needs_correction" : forBeamore.length ? "needs_beamore" : u.kind === "invoice" ? "checked" : "accepted";
   await admin.from("portal_uploads").update({ ai_state: "done", ai_result: { ...result, ai_notes: ai }, issues, status }).eq("id", u.id);
-  if (problems.length && u.clerk_id) await draftCorrection(admin, { ...u, issues }, problems).catch(() => undefined);
+  // (old-portal uploads: the old portal already emailed the clerk, so no new draft)
+  if (problems.length && u.clerk_id && (u as Row & { source?: string }).source !== "legacy") await draftCorrection(admin, { ...u, issues }, problems).catch(() => undefined);
 }
 
 /** Hourly: anything not yet filed or read (e.g. the AI key was added later, or a step failed). */
 export async function processPending(admin: SupabaseClient) {
   const { data } = await admin.from("portal_uploads").select("id")
-    .eq("source", "portal").neq("status", "deleted").neq("status", "uploading")
+    .neq("status", "deleted").neq("status", "uploading") // old-portal uploads too, when queued for reading again
     .or("drive_file_id.is.null,ai_state.is.null,ai_state.eq.pending")
     .order("received_at").limit(15);
   let done = 0, failed = 0;

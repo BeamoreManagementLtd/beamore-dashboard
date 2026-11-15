@@ -6,28 +6,30 @@ import type { Profile } from "@/lib/auth";
 import { staffPeople, type StaffPerson } from "@/lib/staff";
 
 /**
- * Two-way link with Ronan's Todoist (Todoist API v1, /sync). Everything lives in one Todoist project, "Beamore":
- *  - section "My tasks": anything Ronan adds in the Beamore project (e.g. from his phone) becomes a dashboard task, and
- *    dashboard tasks for Ronan appear there. Ticking off on either side ticks off the other.
- *  - section "From the dashboard": Ronan's due list (chases, set-ups, clerk renewals...), kept up to date. Items close by
- *    themselves once they're dealt with in the dashboard. Ticking one in Todoist just hides it in Todoist.
- *  - one section per person ("Judy's list", "Anel's list"...): what Ronan adds there goes on that person's list in the
- *    dashboard, and their dashboard tasks show there, both ways. A section is matched by the first name it starts with;
- *    a section for someone without dashboard access still works (the task is shown under that name).
- * Needs TODOIST_API_TOKEN (Todoist > Settings > Integrations > Developer), added in Vercel by Ronan.
+ * Two-way link with Ronan's Todoist "Work list" board (Todoist API v1, /sync). Ronan, 15 Nov 2026.
+ *  - Ronan's columns (General admin, Critical, Costings, Email replies...; his email automation fills them) become
+ *    Ronan's dashboard to-dos, labelled with the column. The "Personal" column stays out of the dashboard.
+ *  - "Judy's list" and "Anel's list" columns: what Ronan adds there goes on that person's dashboard list, and their
+ *    dashboard tasks show there. Ticking off on either side ticks off the other; moving a card between columns moves it.
+ *  - "From the dashboard" column: Ronan's due list (chases, set-ups, renewals...), closing itself once dealt with.
+ *  - Tasks Ronan adds on the dashboard go on the board with no column (top of the board).
+ * Needs TODOIST_API_TOKEN (Todoist > Settings > Integrations > Developer) in Vercel.
  */
 const API = "https://api.todoist.com/api/v1/sync";
-const PROJECT = "Beamore";
-const TASKS = "My tasks";
+const PROJECT = process.env.TODOIST_PROJECT ?? "Work list";
+const OLD_PROJECT = "Beamore"; // the first version used its own project: its cards are moved across once, then it's archived
 const DUE = "From the dashboard";
+const EXCLUDED = new Set(["personal"]); // columns never shown on the dashboard
+const LIST_PEOPLE = (process.env.TODOIST_LIST_PEOPLE ?? "Judy,Anel").split(",").map((s) => s.trim().toLowerCase());
 const SITE = "https://dashboard.beamore.co.uk";
+export const WORK_LIST_KIND = "Work list"; // tasks.kind prefix for Ronan's board cards (kept private to Ronan)
 
 type Item = { id: string; content: string; description?: string; project_id: string; section_id: string | null; checked?: boolean; completed_at?: string | null; is_deleted?: boolean; due?: { date: string } | null };
 type Cmd = { type: string; args: Record<string, unknown>; uuid?: string; temp_id?: string };
 type SyncResponse = {
   sync_token: string; items?: Item[];
   projects?: { id: string; name: string; is_deleted?: boolean; is_archived?: boolean }[];
-  sections?: { id: string; name: string; project_id: string; is_deleted?: boolean }[];
+  sections?: { id: string; name: string; project_id: string; is_deleted?: boolean; is_archived?: boolean }[];
   sync_status?: Record<string, unknown>; temp_id_mapping?: Record<string, string>;
 };
 
@@ -56,6 +58,7 @@ async function send(cmds: Cmd[]) {
 }
 
 const finished = (i: Item) => !!i.checked || !!i.completed_at || !!i.is_deleted;
+const firstOf = (name: string) => name.trim().split(/[\s']/)[0].toLowerCase();
 
 export async function syncTodoist(admin: SupabaseClient) {
   if (!todoistConfigured()) return { ok: false, message: "TODOIST_API_TOKEN isn't set" };
@@ -64,95 +67,117 @@ export async function syncTodoist(admin: SupabaseClient) {
   if (!me) return { ok: false, message: "No director profile" };
   const types = JSON.stringify(["projects", "sections", "items"]);
 
-  // ---- read changes (first run: everything) and make sure the project and its sections exist
+  // ---- the Work list board, read in full when it's new to us (or after moving from the old project)
   let r = await call({ sync_token: st?.sync_token ?? "*", resource_types: types });
   let projectId: string | null = st?.project_id ?? null;
-  let tasksSec: string | null = st?.tasks_section_id ?? null, dueSec: string | null = st?.due_section_id ?? null;
-  const gone = (r.projects ?? []).find((p) => p.id === projectId && (p.is_deleted || p.is_archived));
-  if (gone || !projectId) {
-    projectId = tasksSec = dueSec = null; // first run, or Ronan removed the project: find or make it again
+  const known = (r.projects ?? []).find((p) => p.id === projectId);
+  if (!projectId || (known && (known.is_deleted || known.is_archived || known.name !== PROJECT))) {
     r = await call({ sync_token: "*", resource_types: types });
-    projectId = (r.projects ?? []).find((p) => p.name === PROJECT && !p.is_deleted && !p.is_archived)?.id ?? null;
-    if (!projectId) projectId = (await send([{ type: "project_add", temp_id: "p", args: { name: PROJECT, color: "red" } }])).p;
+    const nowProject = (r.projects ?? []).find((p) => p.id === projectId);
+    if (!projectId || !nowProject || nowProject.name !== PROJECT || nowProject.is_deleted || nowProject.is_archived) {
+      projectId = (r.projects ?? []).find((p) => p.name === PROJECT && !p.is_deleted && !p.is_archived)?.id ?? null;
+      if (!projectId) return { ok: false, message: `No Todoist project called "${PROJECT}"` };
+    }
   }
-  const secs = (r.sections ?? []).filter((x) => x.project_id === projectId && !x.is_deleted);
-  tasksSec = tasksSec ?? secs.find((x) => x.name === TASKS)?.id ?? null;
-  dueSec = dueSec ?? secs.find((x) => x.name === DUE)?.id ?? null;
-  const make: Cmd[] = [];
-  if (!tasksSec) make.push({ type: "section_add", temp_id: "t", args: { name: TASKS, project_id: projectId } });
-  if (!dueSec) make.push({ type: "section_add", temp_id: "d", args: { name: DUE, project_id: projectId } });
+
   const staff = await staffPeople(admin);
-  const others = staff.filter((p) => p.role !== "director");
-  const firstOf = (name: string) => name.trim().split(/[\s']/)[0].toLowerCase();
+  const listPeople = staff.filter((p) => p.role !== "director" && LIST_PEOPLE.includes(p.first.toLowerCase()));
+  const secs = (r.sections ?? []).filter((x) => x.project_id === projectId && !x.is_deleted && !x.is_archived);
+  let dueSec: string | null = secs.find((x) => x.name === DUE)?.id ?? null;
   const personSec = new Map<string, StaffPerson>(); // section id -> person
   const sectionFor = new Map<string, string>();      // person email -> section id
   for (const x of secs) {
-    if (x.id === tasksSec || x.id === dueSec) continue;
-    const p = others.find((o) => firstOf(x.name) === o.first.toLowerCase());
+    const p = listPeople.find((o) => firstOf(x.name) === o.first.toLowerCase());
     if (p) { personSec.set(x.id, p); if (!sectionFor.has(p.email)) sectionFor.set(p.email, x.id); }
   }
-  others.filter((p) => !sectionFor.has(p.email)).forEach((p, n) => make.push({ type: "section_add", temp_id: `s${n}`, args: { name: `${p.first}'s list`, project_id: projectId } }));
+  const make: Cmd[] = [];
+  if (!dueSec) make.push({ type: "section_add", temp_id: "d", args: { name: DUE, project_id: projectId } });
+  const missing = listPeople.filter((p) => !sectionFor.has(p.email));
+  missing.forEach((p, n) => make.push({ type: "section_add", temp_id: `s${n}`, args: { name: `${p.first}'s list`, project_id: projectId } }));
   if (make.length) {
-    const m = await send(make); tasksSec = tasksSec ?? m.t; dueSec = dueSec ?? m.d;
-    others.filter((p) => !sectionFor.has(p.email)).forEach((p, n) => { if (m[`s${n}`]) { sectionFor.set(p.email, m[`s${n}`]); personSec.set(m[`s${n}`], p); } });
+    const m = await send(make);
+    dueSec = dueSec ?? m.d ?? null;
+    missing.forEach((p, n) => { if (m[`s${n}`]) { sectionFor.set(p.email, m[`s${n}`]); personSec.set(m[`s${n}`], p); } });
   }
   const secName = new Map(secs.map((x) => [x.id, x.name]));
-  /** Who an item belongs to, from the section it's in. */
-  const ownerFor = (sectionId: string | null) => {
-    if (!sectionId || sectionId === tasksSec) return { owner_id: me.id, owner_name: null as string | null };
-    const p = personSec.get(sectionId);
-    if (p) return { owner_id: p.profileId, owner_name: p.first };
-    const n = secName.get(sectionId);
-    return { owner_id: null, owner_name: n ? n.trim().split(/[\s']/)[0] : null }; // e.g. a list for someone not on the dashboard yet
-  };
+  const excluded = (sectionId: string | null) => !!sectionId && EXCLUDED.has((secName.get(sectionId) ?? "").trim().toLowerCase());
+
+  // ---- one-off: cards from the first version's "Beamore" project move onto the board, then that project is archived
+  const old = (r.projects ?? []).find((p) => p.name === OLD_PROJECT && !p.is_deleted && !p.is_archived && p.id !== projectId);
+  let moved = 0;
+  if (old) {
+    const oldSecName = new Map((r.sections ?? []).filter((x) => x.project_id === old.id).map((x) => [x.id, x.name]));
+    const mv: Cmd[] = [];
+    for (const i of (r.items ?? []).filter((x) => x.project_id === old.id && !finished(x))) {
+      const n = i.section_id ? oldSecName.get(i.section_id) ?? "" : "";
+      const p = listPeople.find((o) => firstOf(n) === o.first.toLowerCase());
+      const target = n === DUE ? dueSec : p ? sectionFor.get(p.email) ?? null : null;
+      mv.push({ type: "item_move", args: target ? { id: i.id, section_id: target } : { id: i.id, project_id: projectId } });
+    }
+    mv.push({ type: "project_archive", args: { id: old.id } });
+    await send(mv);
+    moved = mv.length - 1;
+    r = await call({ sync_token: "*", resource_types: types }); // re-read with the cards in their new places
+  }
   const items = (r.items ?? []).filter((i) => i.project_id === projectId);
 
-  // ---- Todoist -> dashboard (anything in the Beamore project except the due-list mirror)
-  const { data: linked } = await admin.from("tasks").select("id,todoist_id,title,due,done_at,owner_id,owner_name").not("todoist_id", "is", null);
+  /** Who a card belongs to and its label, from the column it's in. */
+  const ownerFor = (sectionId: string | null) => {
+    const p = sectionId ? personSec.get(sectionId) : undefined;
+    if (p) return { owner_id: p.profileId, owner_name: p.first, kind: "Added by Ronan (Todoist)" };
+    const col = sectionId ? secName.get(sectionId) : null;
+    return { owner_id: me.id, owner_name: null as string | null, kind: col ? `${WORK_LIST_KIND} · ${col}` : WORK_LIST_KIND };
+  };
+
+  // ---- Todoist -> dashboard
+  const { data: linked } = await admin.from("tasks").select("id,todoist_id,title,due,done_at,owner_id,owner_name,kind").not("todoist_id", "is", null);
   const byTid = new Map((linked ?? []).map((t) => [t.todoist_id as string, t]));
   let added = 0, ticked = 0;
   for (const i of items.filter((x) => x.section_id !== dueSec)) {
-    // (sections for each person are created above, so ownerFor knows them)
     const t = byTid.get(i.id);
+    if (excluded(i.section_id)) { // moved into Personal: off the dashboard
+      if (t && !t.done_at) await admin.from("tasks").update({ done_at: new Date().toISOString() }).eq("id", t.id);
+      continue;
+    }
     if (!t) {
       if (finished(i)) continue;
-      await admin.from("tasks").insert({ ...ownerFor(i.section_id), title: i.content.slice(0, 300), kind: "Added by Ronan (Todoist)", due: i.due?.date?.slice(0, 10) ?? null, todoist_id: i.id });
+      await admin.from("tasks").insert({ ...ownerFor(i.section_id), title: i.content.slice(0, 300), due: i.due?.date?.slice(0, 10) ?? null, todoist_id: i.id });
       added++;
     } else if (finished(i)) {
       if (!t.done_at) { await admin.from("tasks").update({ done_at: new Date().toISOString() }).eq("id", t.id); ticked++; }
     } else {
       const due = i.due?.date?.slice(0, 10) ?? null;
       const o = ownerFor(i.section_id);
-      if (t.title !== i.content || t.due !== due || t.owner_id !== o.owner_id || (o.owner_id === null && t.owner_name !== o.owner_name))
-        await admin.from("tasks").update({ title: i.content.slice(0, 300), due, ...o }).eq("id", t.id); // edited, or moved to someone else's list
+      // a task made on the dashboard keeps its own label while it stays in the board's top area
+      const kind = !i.section_id && t.kind && !t.kind.startsWith(WORK_LIST_KIND) ? t.kind : o.kind;
+      if (t.title !== i.content || t.due !== due || t.owner_id !== o.owner_id || t.owner_name !== o.owner_name || t.kind !== kind)
+        await admin.from("tasks").update({ title: i.content.slice(0, 300), due, owner_id: o.owner_id, owner_name: o.owner_name, kind }).eq("id", t.id);
     }
   }
-  // due-list mirror: remember what Ronan ticked there so it isn't added back
   for (const i of items.filter((x) => x.section_id === dueSec && finished(x)))
     await admin.from("todoist_due_items").update({ ticked_in_todoist_at: new Date().toISOString() }).eq("todoist_id", i.id).is("ticked_in_todoist_at", null);
 
-  // ---- dashboard -> Todoist: Ronan's own tasks
+  // ---- dashboard -> Todoist: tasks for Ronan, Judy and Anel
   const cmds: Cmd[] = [];
   const { data: all } = await admin.from("tasks").select("id,title,due,link,done_at,todoist_id,owner_id,owner_name");
-  /** The Todoist section for a dashboard task: Ronan's, or that person's list (unassigned tasks aren't sent). */
-  const secOf = (t: { owner_id: string | null; owner_name: string | null }) => {
-    if (t.owner_id === me.id) return tasksSec;
-    const p = others.find((o) => (t.owner_id && o.profileId === t.owner_id) || (!t.owner_id && t.owner_name && o.first.toLowerCase() === t.owner_name.toLowerCase()));
-    return p ? sectionFor.get(p.email) ?? null : null;
+  /** Where a dashboard task goes on the board: Ronan's (no column), or that person's list; anyone else's aren't sent. */
+  const target = (t: { owner_id: string | null; owner_name: string | null }): { section_id?: string } | null => {
+    if (t.owner_id === me.id) return {};
+    const p = listPeople.find((o) => (t.owner_id && o.profileId === t.owner_id) || (!t.owner_id && t.owner_name && o.first.toLowerCase() === t.owner_name.toLowerCase()));
+    const s = p ? sectionFor.get(p.email) : undefined;
+    return s ? { section_id: s } : null;
   };
-  const mine = (all ?? []).filter((t) => secOf(t));
-  const newTasks = mine.filter((t) => !t.todoist_id && !t.done_at);
+  const newTasks = (all ?? []).filter((t) => !t.todoist_id && !t.done_at && target(t));
   newTasks.forEach((t, n) => cmds.push({ type: "item_add", temp_id: `t${n}`, args: {
-    content: t.title, project_id: projectId, section_id: secOf(t), description: t.link ? `${SITE}${t.link}` : "", ...(t.due ? { due: { date: t.due } } : {}),
+    content: t.title, project_id: projectId, ...target(t), description: t.link ? `${SITE}${t.link}` : "", ...(t.due ? { due: { date: t.due } } : {}),
   } }));
-  // ticked off in the dashboard: tick off in Todoist (it ignores items already completed)
-  const closedHere = (all ?? []).filter((t) => t.todoist_id && t.done_at && !items.some((i) => i.id === t.todoist_id && finished(i)));
-  const { data: closedBefore } = await admin.from("portal_audit").select("detail").eq("action", "todoist-closed").gte("at", new Date(Date.now() - 30 * 864e5).toISOString());
-  const already = new Set((closedBefore ?? []).map((a) => (a.detail as { id: string }).id));
-  const toClose = closedHere.filter((t) => !already.has(t.todoist_id!));
-  for (const t of toClose) cmds.push({ type: "item_complete", args: { id: t.todoist_id } });
+  // ticked off on the dashboard: tick off on the board too (once; the sync only reports cards that changed)
+  const { data: sentBefore } = await admin.from("portal_audit").select("detail").eq("action", "todoist-closed").gte("at", new Date(Date.now() - 60 * 864e5).toISOString());
+  const already = new Set((sentBefore ?? []).map((a) => (a.detail as { id: string }).id));
+  const closedHere = (all ?? []).filter((t) => t.todoist_id && t.done_at && !already.has(t.todoist_id) && !items.some((i) => i.id === t.todoist_id && (finished(i) || excluded(i.section_id))));
+  for (const t of closedHere) cmds.push({ type: "item_complete", args: { id: t.todoist_id } });
 
-  // ---- dashboard -> Todoist: the due list (manual tasks are handled above)
+  // ---- dashboard -> Todoist: Ronan's due list (tasks are above)
   const due = (await buildDueList(admin, me as Profile)).filter((d) => !d.taskId && (d.ownerId === me.id || d.owner === null || d.owner === "Ronan"));
   const { data: mirrored } = await admin.from("todoist_due_items").select("due_key,todoist_id,title,ticked_in_todoist_at");
   const have = new Map((mirrored ?? []).map((m) => [m.due_key, m]));
@@ -174,10 +199,10 @@ export async function syncTodoist(admin: SupabaseClient) {
   for (const [n, d] of newDue.entries()) if (ids[`d${n}`]) await admin.from("todoist_due_items").upsert({ due_key: d.key, todoist_id: ids[`d${n}`], title: d.title });
   for (const d of due) { const m = have.get(d.key); if (m && m.title !== d.title) await admin.from("todoist_due_items").update({ title: d.title }).eq("due_key", d.key); }
   if (dealtWith.length) await admin.from("todoist_due_items").delete().in("due_key", dealtWith.map((m) => m.due_key));
-  if (toClose.length) await admin.from("portal_audit").insert(toClose.map((t) => ({ actor: "dashboard", action: "todoist-closed", detail: { id: t.todoist_id } })));
+  if (closedHere.length) await admin.from("portal_audit").insert(closedHere.map((t) => ({ actor: "dashboard", action: "todoist-closed", detail: { id: t.todoist_id } })));
 
   // a fresh sync token after our own changes, so they aren't read back next time as new
   const fin = await call({ sync_token: r.sync_token, resource_types: JSON.stringify(["items"]) });
-  await admin.from("todoist_state").upsert({ id: 1, sync_token: fin.sync_token, project_id: projectId, tasks_section_id: tasksSec, due_section_id: dueSec, last_run: new Date().toISOString() });
-  return { ok: true, message: `${added} new from Todoist, ${ticked} ticked off there; sent ${newTasks.length} tasks and ${newDue.length} due items; ${dealtWith.length + toClose.length} closed` };
+  await admin.from("todoist_state").upsert({ id: 1, sync_token: fin.sync_token, project_id: projectId, tasks_section_id: null, due_section_id: dueSec, last_run: new Date().toISOString() });
+  return { ok: true, message: `${moved ? `${moved} cards moved from the old Beamore project; ` : ""}${added} new from Todoist, ${ticked} ticked off there; sent ${newTasks.length} tasks and ${newDue.length} due items; ${dealtWith.length + closedHere.length} closed` };
 }

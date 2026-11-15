@@ -304,7 +304,7 @@ export async function buildDueList(db: SupabaseClient, me: Profile): Promise<Due
     }
 
   // ---- tasks people added
-  for (const k of tasks.data ?? [])
+  for (const k of (tasks.data ?? []).filter((k) => director || !(k.kind ?? "").startsWith("Work list"))) // Ronan's Todoist work list is his own
     items.push({ key: `task-${k.id}`, kind: "Task", title: k.title, detail: k.kind ?? undefined, due: k.due, link: k.link ?? undefined, taskId: k.id, ...ownerOf(k.owner_id, k.owner_name ?? null) });
 
   return items.sort((a, b) => (a.due ?? "9999").localeCompare(b.due ?? "9999") || a.title.localeCompare(b.title));
