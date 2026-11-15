@@ -23,13 +23,18 @@ import { checkReport, type Issue, type Programme } from "./check";
 /** What a progress vs programme section is missing, against Ronan's method, in words for the checker and the clerk. */
 export function programmeGaps(p: Programme | null | undefined) {
   if (!p || p.verdict === "good" || p.verdict === "not_in_form") return [];
-  if (p.verdict === "missing") return ["list 7-10 running activities (some on the critical path) with weeks ahead/behind for each, a short piece on the causes, and an overall estimate in weeks"];
+  // other clients' reports: the progress summary, Damian's and Keith's way
+  if (!p.dfe) return [p.verdict === "missing"
+    ? "open with a progress summary: area by area and level by level, what's complete, what's outstanding, and whether the completion date looks realistic"
+    : "make the progress summary fuller: progress area by area, what's outstanding, and your view on the completion date"];
+  if (p.verdict === "missing") return ["say which programme you're working from, list 8-10 activities (preferably on the critical path) with weeks ahead/behind for each, then at least 5-6 lines on where you think the project is overall"];
   return [
-    p.items < 7 ? `only ${p.items} activit${p.items === 1 ? "y" : "ies"} listed (aim for 7-10 that are running now)` : "",
-    !p.per_item_weeks ? "say how many weeks ahead or behind each activity is" : "",
+    !p.programme_named ? "say which programme you're measuring against (title and revision/date)" : "",
+    p.items < 8 ? `only ${p.items} activit${p.items === 1 ? "y" : "ies"} listed (aim for 8-10, preferably on the critical path)` : "",
+    !p.per_item_weeks ? 'say how many weeks ahead or behind each activity is, e.g. "Installation of staircases – 3 weeks behind"' : "",
     !p.critical_path ? "include activities on the critical path" : "",
-    !p.narrative ? "add 7-10 lines on the issues and what caused them" : "",
-    !p.overall_weeks ? 'finish with an overall estimate, e.g. "I estimate the contractor is 3.5 weeks behind programme"' : "",
+    !p.narrative ? "add at least 5-6 lines weighing up all the items, the causes, and where you think the project is" : "",
+    !p.overall_weeks ? 'give your overall view in weeks, e.g. "I estimate the contractor is 3.5 weeks behind programme"' : "",
     p.looks_from_site_team ? "give your own independent view, not the site team's figures" : "",
     p.percentages_shown ? "leave percentages out (use them to work out the weeks only)" : "",
   ].filter(Boolean);
@@ -233,7 +238,7 @@ export async function checkOne(admin: SupabaseClient, id: string) {
   const prog = ai.programme;
   const progGaps = programmeGaps(prog);
   if (prog && prog.verdict !== "good" && prog.verdict !== "not_in_form" && !ai.issues.some((i) => i.kind === "programme"))
-    extra.push({ severity: prog.verdict === "missing" ? "high" : "medium", kind: "programme", text: `Progress vs programme ${prog.verdict === "missing" ? "not done" : "falls short"}: ${progGaps.join("; ") || prog.note}`, p: prog.p });
+    extra.push({ severity: prog.verdict === "missing" && prog.dfe ? "high" : "medium", kind: "programme", text: `${prog.dfe ? "Progress vs programme" : "Progress summary"} ${prog.verdict === "missing" ? "not done" : "falls short"}: ${progGaps.join("; ") || prog.note}`, p: prog.p });
   const issues: Issue[] = [...extra, ...ai.issues].sort((a, b) => rank[a.severity] - rank[b.severity]);
   if (spelt.skipped.length) issues.push({ severity: "low", kind: "other", text: `Spelling not changed automatically (please fix by hand): ${spelt.skipped.slice(0, 8).map((s) => `${s.find} → ${s.replace}`).join(", ")}`, p: null });
   await addComments(r, issues.filter((i) => i.severity !== "low").slice(0, 15).map((i) => ({ p: i.p, text: `${i.severity === "high" ? "Must check: " : ""}${i.text}` })));
@@ -272,7 +277,7 @@ export async function checkOne(admin: SupabaseClient, id: string) {
       ...(rotated.length ? ["Check photos are the right way up before inserting them"] : []),
       ...(stats.stretched ? ["Resize photos from a corner (or hold Shift) so they don't stretch out of shape"] : []),
       ...(raw.length > 10_000_000 ? [`Make photos smaller before inserting them: this report was ${(raw.length / 1e6).toFixed(0)} MB (Word: Picture Format > Compress Pictures)`] : []),
-      ...(prog && (prog.verdict === "weak" || prog.verdict === "missing") ? [`Progress vs programme: ${progGaps.join("; ") || "follow the Beamore method"}`] : []),
+      ...(prog && (prog.verdict === "weak" || prog.verdict === "missing") ? [`${prog.dfe ? "Progress vs programme" : "Progress summary"}: ${progGaps.join("; ") || "follow the Beamore method"}`] : []),
       ...(ai.clerk_points ?? []),
     ].slice(0, 8),
     size_before: raw.length, size_after: out.length, checked_revision: after.headRevisionId, checked_at: new Date().toISOString(),

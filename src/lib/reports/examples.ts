@@ -32,12 +32,19 @@ export const EXAMPLES = {
 /** Ronan's method for the progress vs programme section, as it goes in the email to a clerk. */
 export const PROGRAMME_METHOD = [
   "How to do the progress vs programme section:",
-  "- Pick 7-10 activities off the programme that are running now, including a few on the critical path",
-  "- Check what progress the programme says they should be at",
-  "- Do your own independent check of where they actually are: don't just take the site team's figures, they often exaggerate",
-  "- Work out how many weeks ahead or behind each one is (e.g. windows 25 weeks long, programme 80%, actually 60%: 20% behind = 5 weeks behind) and write it as weeks, e.g. \"Ground beams – 2 weeks behind\". Leave the percentages out of the report",
-  "- Then write 7-10 lines on progress: what the issues are and what caused them",
-  "- Finish with your estimate of how far behind (or ahead) the contractor is overall, roughly in line with the critical-path items, e.g. \"I estimate that the contractor is 3.5 weeks behind programme.\"",
+  "- Say which programme you're working from (title and revision/date)",
+  "- Pick 8-10 items off the programme, preferably on the critical path",
+  "- Do your own independent check of where each one actually is: don't just take the site team's figures, they often exaggerate",
+  "- Say how many weeks ahead or behind each one is, e.g. \"Installation of staircases – 3 weeks behind\", \"Ground beams – 2 weeks behind\". Work it out from the programme (e.g. windows 25 weeks long, programme 80%, actually 60%: 20% behind = 5 weeks behind) but leave the percentages out of the report",
+  "- Then write at least 5-6 lines taking all the items into account: how far behind or ahead each is, why, and where you think the project is overall, e.g. \"I estimate that the contractor is 3.5 weeks behind programme.\"",
+];
+
+/** For other clients' reports: the progress summary, as Damian Breen and Keith Osorio do it. */
+export const SUMMARY_METHOD = [
+  "How to do the progress summary at the start of the report (like Damian's reports for The Forum and Keith's for Holiday Inn Camden):",
+  "- Go area by area, level by level and trade by trade: what has progressed since the last visit",
+  "- Say what's complete and what's still outstanding",
+  "- Give the completion target and whether you think it's realistic, and why",
 ];
 export type ExampleKey = keyof typeof EXAMPLES;
 
