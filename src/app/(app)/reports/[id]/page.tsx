@@ -5,7 +5,7 @@ import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { fd, fdt } from "@/lib/format";
 import { draftFor } from "@/lib/reports/pipeline";
 import { userConnection } from "@/lib/google-user";
-import { EXAMPLES } from "@/lib/reports/examples";
+import { EXAMPLES, PROGRAMME_METHOD } from "@/lib/reports/examples";
 import { assignChecker, sendReport, markDone, ignoreReport, checkAgain, sendClerkEmail } from "../actions";
 
 export const dynamic = "force-dynamic";
@@ -29,8 +29,10 @@ function clerkNote(r: Record<string, unknown>, sender: string) {
     f.shrunk ? `photos larger than needed (the file was ${(Number(r.size_before) / 1e6).toFixed(0)} MB; please resize before inserting)` : null,
     ...issues.map((i) => i.text),
   ].filter(Boolean) as string[];
-  const tips = ((r.clerk_points ?? []) as string[]).filter(Boolean);
   const allIssues = (r.issues ?? []) as Issue[];
+  // Ronan's progress vs programme method, pushed whenever a report falls short of it (his email to all clerks, Aug 2024)
+  const programmeHelp = allIssues.some((i) => i.kind === "programme" && i.severity !== "low");
+  const tips = ((r.clerk_points ?? []) as string[]).filter((t) => t && !(programmeHelp && /^Progress vs programme/i.test(t)));
   const photoHelp = !!(f.mixed || f.stretched || f.enlarged || allIssues.some((i) => i.kind === "photos" && i.severity !== "low"));
   const detailHelp = allIssues.some((i) => i.kind === "vague" && i.severity !== "low");
   if (!fixed.length && !tips.length) return `Hi ${clerk},\n\nThanks for your report (${r.file_name}). It needed no changes before it went out. Great work.\n\nKind regards,\n${sender}`;
@@ -42,6 +44,7 @@ function clerkNote(r: Record<string, unknown>, sender: string) {
     // pictures from Christian's report where they'd help (the line becomes the picture when it's sent)
     ...(photoHelp ? ["", EXAMPLES.photos.intro, EXAMPLES.photos.marker] : []),
     ...(detailHelp ? ["", EXAMPLES.detail.intro, EXAMPLES.detail.marker] : []),
+    ...(programmeHelp ? ["", "The progress vs programme section is one clients look at closely, and we've had feedback on it, so please follow this every time.", ...PROGRAMME_METHOD, "", EXAMPLES.programme.intro, EXAMPLES.programme.marker] : []),
     "", "Any questions, just give me a shout.", "", "Kind regards,", sender,
   ].join("\n");
 }

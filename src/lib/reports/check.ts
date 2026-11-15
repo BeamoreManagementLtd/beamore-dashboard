@@ -13,11 +13,18 @@ export type Check = {
   summary: string; visit_date: string | null; report_number: string | null; clerk_name: string | null;
   spelling: { p: number; find: string; replace: string }[]; issues: Issue[];
   rotate: { photo: number; degrees: 90 | 180 | 270 }[]; clerk_points: string[];
+  programme: Programme;
+};
+/** How the "Progress vs programme" section measures up to Ronan's method (his "Site Diaries" email, 8 Aug 2024). */
+export type Programme = {
+  verdict: "good" | "weak" | "missing" | "not_in_form";
+  items: number; per_item_weeks: boolean; critical_path: boolean; narrative: boolean; overall_weeks: boolean;
+  percentages_shown: boolean; looks_from_site_team: boolean; p: number | null; note: string;
 };
 
 const str = { type: "string" }, nstr = { type: ["string", "null"] };
 const SCHEMA = {
-  type: "object", additionalProperties: false, required: ["summary", "visit_date", "report_number", "clerk_name", "spelling", "issues", "rotate", "clerk_points"],
+  type: "object", additionalProperties: false, required: ["summary", "visit_date", "report_number", "clerk_name", "spelling", "issues", "rotate", "clerk_points", "programme"],
   properties: {
     summary: { type: "string", description: "One or two plain sentences for the checker: is it fit to send, and the main thing to look at" },
     visit_date: { ...nstr, description: "Visit date this report covers, YYYY-MM-DD (the last one if several)" },
@@ -32,7 +39,7 @@ const SCHEMA = {
       type: "array",
       items: { type: "object", additionalProperties: false, required: ["severity", "kind", "text", "p"], properties: {
         severity: { type: "string", enum: ["high", "medium", "low"] },
-        kind: { type: "string", enum: ["dates", "names", "numbering", "blank", "copied", "follow-up", "vague", "safety", "photos", "other"] },
+        kind: { type: "string", enum: ["dates", "names", "numbering", "blank", "copied", "follow-up", "vague", "safety", "photos", "programme", "other"] },
         text: { ...str, description: "Short and specific, written for the checker" },
         p: { type: ["integer", "null"], description: "Paragraph number it's about, if any" } } },
     },
@@ -41,6 +48,22 @@ const SCHEMA = {
       items: { type: "object", additionalProperties: false, required: ["photo", "degrees"], properties: { photo: { type: "integer", description: "Photo number as labelled" }, degrees: { type: "integer", enum: [90, 180, 270], description: "Clockwise turn to make it upright" } } },
     },
     clerk_points: { type: "array", items: str, description: "Up to 5 short, friendly, specific points for the clerk to do better next time (not spelling)" },
+    programme: {
+      type: "object", additionalProperties: false, description: "The 'Progress vs programme' section judged against Beamore's method",
+      required: ["verdict", "items", "per_item_weeks", "critical_path", "narrative", "overall_weeks", "percentages_shown", "looks_from_site_team", "p", "note"],
+      properties: {
+        verdict: { type: "string", enum: ["good", "weak", "missing", "not_in_form"], description: "good = follows the method; weak = there but short of it; missing = the section is empty, N/A or one line; not_in_form = this report has no such section" },
+        items: { type: "integer", description: "How many programme activities are listed with their own ahead/behind/on-programme position" },
+        per_item_weeks: { type: "boolean", description: "Each listed activity says how many weeks ahead or behind (or on programme)" },
+        critical_path: { type: "boolean", description: "Critical-path activities are among those listed or named" },
+        narrative: { type: "boolean", description: "There is a written piece (roughly 7-10 lines) on the issues and what caused them" },
+        overall_weeks: { type: "boolean", description: "It ends with an estimate of how many weeks behind or ahead the contractor is overall" },
+        percentages_shown: { type: "boolean", description: "Percentage completions are written in the section (clients asked for these to be left out)" },
+        looks_from_site_team: { type: "boolean", description: "It reads as the contractor's own figures repeated, not the clerk's independent assessment" },
+        p: { type: ["integer", "null"], description: "Paragraph number where the section starts" },
+        note: { ...str, description: "One sentence for the checker on what's missing or good about it" },
+      },
+    },
   },
 };
 
@@ -53,7 +76,14 @@ const STANDARD = `What good looks like at Beamore (from the best clerks' reports
 - Even "nothing to report" is specific: "Corridors and stairs clear. No trailing leads, ramps in use for level changes." Not just "N/A" or "OK".
 - Issues found say what needs doing and by whom, and urgent safety issues are flagged for the client straight away.
 - A weekly site diary is typically 1,800-5,000 words with 35-50 photos covering the areas described.
-- Visit date(s) stated, report numbered in sequence, CoW name filled in, standard boxes completed.`;
+- Visit date(s) stated, report numbered in sequence, CoW name filled in, standard boxes completed.
+- "Progress vs programme (and the causes of any delays)" is done the Beamore way (Ronan's instruction to all clerks, Aug 2024, agreed with Mott MacDonald and the DfE):
+  * 7-10 activities from the programme that are running now, including some on the critical path;
+  * for each, the clerk's own independent view of where it is (not the site team's figures, which are often exaggerated), stated as weeks ahead, weeks behind, on programme or not started, e.g. "Ground beams – 2 weeks behind", "Entrance road base course – 3 weeks ahead", "Brickwork – on programme in section 2, 4 weeks behind in section 3";
+  * the weeks are worked out from planned v actual progress (e.g. windows 25 weeks long, programme says 80%, actually 60%: 20% of 25 weeks = 5 weeks behind), but percentages are NOT written in the report (the client asked for them to be left out), and there's no separate tracker table;
+  * then a 7-10 line piece on progress: the issues, what caused them, what's on the critical path;
+  * ending with an estimate of the total weeks behind or ahead, roughly in line with the critical-path items, e.g. "I estimate that the contractor is 3.5 weeks behind programme."
+  * Fair exceptions: if the clerk explains there is no agreed programme to measure against (and still describes progress, the risks and what's needed), or the works have reached practical completion, don't mark it down for missing weeks.`;
 
 export type CheckInput = {
   fileName: string; folder: string; project: string; projectNumbers: string[]; client: string | null;
@@ -101,11 +131,13 @@ ${STANDARD}
  - vague: observations with nothing specific (no location, no detail, no action)
  - safety: health and safety concerns that may need escalating to the client straight away (high)
  - photos: from the photo figures given: far fewer than usual (medium), reused from the previous report (medium), too low detail to print well; missing captions is only low. Stretched, sideways, oversized and small-on-the-page photos are put right automatically: don't raise those
+ - programme: the progress vs programme section falls short of the method above (missing or one line = high; weak = medium; percentages written in = low)
  - other: unticked tick boxes, layout problems
  Severity: high = must be fixed or looked at before it goes; medium = should be fixed; low = minor.
 Give the paragraph number when an issue is about one place. Don't repeat spelling fixes as issues.
 3. rotate: attached photos (labelled Photo 1, 2...) that are on their side or upside down.
-4. clerk_points: what this clerk could do better next time, judged against the standard above: specific, friendly, no more than 5, not about spelling.`;
+4. clerk_points: what this clerk could do better next time, judged against the standard above: specific, friendly, no more than 5, not about spelling.
+5. programme: judge the progress vs programme section against the method above, item by item. Be strict: a list of activities with no weeks, or a paragraph with no overall estimate, is "weak".`;
   const content: Anthropic.ContentBlockParam[] = [
     { type: "text", text: `${facts}\n\n${input.previous ? `PREVIOUS REPORT (for comparison, start of it):\n${input.previous.text.slice(0, 8000)}\n\n` : ""}THIS REPORT:\n${body}` },
     ...input.thumbnails.slice(0, 12).flatMap((b, k) => [

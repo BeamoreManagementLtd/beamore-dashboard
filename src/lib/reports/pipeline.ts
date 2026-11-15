@@ -18,7 +18,22 @@ export function qualityScore(issues: { severity: string }[], spelling: number, l
     + (f.renamed ? 5 : 0) + (f.mixedPhotos ? 5 : 0) + Math.min(9, (f.rotated ?? 0) * 3) + Math.min(6, (f.stretched ?? 0) * 2) + (f.oversized ? 3 : 0);
   return Math.max(0, 100 - off);
 }
-import { checkReport, type Issue } from "./check";
+import { checkReport, type Issue, type Programme } from "./check";
+
+/** What a progress vs programme section is missing, against Ronan's method, in words for the checker and the clerk. */
+export function programmeGaps(p: Programme | null | undefined) {
+  if (!p || p.verdict === "good" || p.verdict === "not_in_form") return [];
+  if (p.verdict === "missing") return ["list 7-10 running activities (some on the critical path) with weeks ahead/behind for each, a short piece on the causes, and an overall estimate in weeks"];
+  return [
+    p.items < 7 ? `only ${p.items} activit${p.items === 1 ? "y" : "ies"} listed (aim for 7-10 that are running now)` : "",
+    !p.per_item_weeks ? "say how many weeks ahead or behind each activity is" : "",
+    !p.critical_path ? "include activities on the critical path" : "",
+    !p.narrative ? "add 7-10 lines on the issues and what caused them" : "",
+    !p.overall_weeks ? 'finish with an overall estimate, e.g. "I estimate the contractor is 3.5 weeks behind programme"' : "",
+    p.looks_from_site_team ? "give your own independent view, not the site team's figures" : "",
+    p.percentages_shown ? "leave percentages out (use them to work out the weeks only)" : "",
+  ].filter(Boolean);
+}
 import { conventionName } from "./naming.mjs";
 
 /**
@@ -214,6 +229,11 @@ export async function checkOne(admin: SupabaseClient, id: string) {
   const extra: Issue[] = [];
   if (!monthly && stats.count < min.photos) extra.push({ severity: "medium", kind: "photos", text: `Only ${stats.count} photo${stats.count === 1 ? "" : "s"}: good reports have ${rep.kind === "me" ? "20 or more" : "35-50"}${usual ? ` (this clerk usually has about ${usual} here)` : ""}`, p: null });
   if (!monthly && words < min.words) extra.push({ severity: "medium", kind: "vague", text: `Not much written (about ${words} words): good reports describe each area in detail, typically ${rep.kind === "me" ? "1,000+" : "1,800-5,000"} words`, p: null });
+  // progress vs programme, the Beamore way (Ronan's "Site Diaries" email, Aug 2024): raised even if the AI didn't list it
+  const prog = ai.programme;
+  const progGaps = programmeGaps(prog);
+  if (prog && prog.verdict !== "good" && prog.verdict !== "not_in_form" && !ai.issues.some((i) => i.kind === "programme"))
+    extra.push({ severity: prog.verdict === "missing" ? "high" : "medium", kind: "programme", text: `Progress vs programme ${prog.verdict === "missing" ? "not done" : "falls short"}: ${progGaps.join("; ") || prog.note}`, p: prog.p });
   const issues: Issue[] = [...extra, ...ai.issues].sort((a, b) => rank[a.severity] - rank[b.severity]);
   if (spelt.skipped.length) issues.push({ severity: "low", kind: "other", text: `Spelling not changed automatically (please fix by hand): ${spelt.skipped.slice(0, 8).map((s) => `${s.find} → ${s.replace}`).join(", ")}`, p: null });
   await addComments(r, issues.filter((i) => i.severity !== "low").slice(0, 15).map((i) => ({ p: i.p, text: `${i.severity === "high" ? "Must check: " : ""}${i.text}` })));
@@ -243,7 +263,7 @@ export async function checkOne(admin: SupabaseClient, id: string) {
     status: "ready", ai_summary: ai.summary, issues, spelling_fixed: spelt.applied,
     photos: { count: stats.count, blurry: stats.blurry, smallOnPage: stats.smallOnPage, stretched: stats.stretched, shrunk: shrunk.changed, rotated: rotated.length, reused, usual, uncaptioned: uncaptioned(r) },
     photo_hashes: hashes, photo_count: stats.count,
-    fixes: { spelling: applied, rotated: rotated.length, shrunk: shrunk.changed, stretched: shapes.stretched, enlarged: shapes.enlarged, uniform: uniform.changed, mixed: !uniform.wasUniform, side_cm: uniform.side ? +(uniform.side / 360000).toFixed(1) : null, renamed: renamedTo, words },
+    fixes: { spelling: applied, rotated: rotated.length, shrunk: shrunk.changed, stretched: shapes.stretched, enlarged: shapes.enlarged, uniform: uniform.changed, mixed: !uniform.wasUniform, side_cm: uniform.side ? +(uniform.side / 360000).toFixed(1) : null, renamed: renamedTo, words, programme: prog ?? null },
     // lateness is shown on its own on the Reports page
     score: qualityScore(issues, spelt.applied, 0, { renamed: !!renamedTo, mixedPhotos: !uniform.wasUniform, rotated: rotated.length, stretched: stats.stretched, oversized: shrunk.changed > 0 && raw.length > 10_000_000 }),
     clerk_points: [
@@ -252,6 +272,7 @@ export async function checkOne(admin: SupabaseClient, id: string) {
       ...(rotated.length ? ["Check photos are the right way up before inserting them"] : []),
       ...(stats.stretched ? ["Resize photos from a corner (or hold Shift) so they don't stretch out of shape"] : []),
       ...(raw.length > 10_000_000 ? [`Make photos smaller before inserting them: this report was ${(raw.length / 1e6).toFixed(0)} MB (Word: Picture Format > Compress Pictures)`] : []),
+      ...(prog && (prog.verdict === "weak" || prog.verdict === "missing") ? [`Progress vs programme: ${progGaps.join("; ") || "follow the Beamore method"}`] : []),
       ...(ai.clerk_points ?? []),
     ].slice(0, 8),
     size_before: raw.length, size_after: out.length, checked_revision: after.headRevisionId, checked_at: new Date().toISOString(),
