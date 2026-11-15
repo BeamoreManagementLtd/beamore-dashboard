@@ -4,6 +4,13 @@ import { myUploads, fmtDate, gbp, clerkStatus } from "@/lib/portal/data";
 import { xeroClient } from "@/lib/xero";
 import { UploadBox } from "../upload-box";
 
+/** Xero sends dates as "/Date(1730246400000+0000)/" (or ISO): turn either into YYYY-MM-DD. */
+function xeroDate(v?: string | null) {
+  if (!v) return null;
+  const ms = /Date\((-?\d+)/.exec(v)?.[1];
+  return ms ? new Date(Number(ms)).toISOString().slice(0, 10) : v.slice(0, 10);
+}
+
 type Bill = { InvoiceNumber?: string; DateString?: string; Total?: number; AmountDue?: number; AmountPaid?: number; Status: string; FullyPaidOnDate?: string; Payments?: { Date: string }[] };
 
 /** Every bill from the clerk's own company (or themselves) in Xero, newest first: read only, own company links only. */
@@ -88,7 +95,7 @@ export default async function PortalInvoices() {
                   <td>{b.InvoiceNumber || "—"}</td>
                   <td>{fmtDate(b.DateString)}</td>
                   <td className="num">{gbp(Math.round((b.Total ?? 0) * 100))}</td>
-                  <td>{b.Status === "PAID" ? <span className="pill good">Paid {fmtDate(b.FullyPaidOnDate ?? b.Payments?.at(-1)?.Date?.slice(0, 10))}</span> : <span className="pill neutral">Due {gbp(Math.round((b.AmountDue ?? 0) * 100))}</span>}</td>
+                  <td>{b.Status === "PAID" ? <span className="pill good">Paid {fmtDate(xeroDate(b.FullyPaidOnDate) ?? xeroDate(b.Payments?.at(-1)?.Date))}</span> : <span className="pill neutral">Due {gbp(Math.round((b.AmountDue ?? 0) * 100))}</span>}</td>
                 </tr>
               ))}
             </tbody>
