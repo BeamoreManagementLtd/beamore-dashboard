@@ -77,7 +77,7 @@ export default async function Finance({ searchParams }: { searchParams: Promise<
         <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
           <div>
             <b>Diary</b>{" "}
-            {g ? <span className="muted">read from Google Drive ({g.email}). Checked hourly{g.diary_modified_time ? `; file last saved ${fdt(g.diary_modified_time)}` : ""}.</span> : <span className="muted">Google Drive not connected yet.</span>}
+            {g ? <span className="muted">read from Google Drive ({g.email}). Checked hourly{g.diary_modified_time ? `; last saved ${g.diary_modified_time.split("|").map((x) => { const [y, ...t] = x.split(":"); return `Diary ${y} ${fdt(t.join(":"))}`; }).join(", ")}` : ""}.</span> : <span className="muted">Google Drive not connected yet.</span>}
             {dlast && (
               <span className="two">
                 Last read {fdt(dlast.finished_at)}: {dlast.ok ? dlast.message : <span className="neg">failed: {dlast.message}</span>}
