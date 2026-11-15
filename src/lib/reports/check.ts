@@ -92,7 +92,10 @@ const STANDARD = `What good looks like at Beamore (from the best clerks' reports
 - A weekly site diary is typically 1,800-5,000 words with 35-50 photos covering the areas described.
 - Visit date(s) stated, report numbered in sequence, CoW name filled in, standard boxes completed.
 - Ronan wants every clerk doing all of the best bits of the team's reports:
-${STANDARD_KEYS.map((k) => `  * ${STANDARDS[k].label}: ${STANDARDS[k].test} (best seen in ${STANDARDS[k].from})`).join("\n")}
+${STANDARD_KEYS.map((k) => { const s = STANDARDS[k] as { label: string; test: string; from: string; dfe?: string }; return `  * ${s.label}: ${s.test} (best seen in ${s.from})${s.dfe ? `. On the DfE form: ${s.dfe}` : ""}`; }).join("\n")}
+- THE FORMAT:
+  * DfE reports (DfE Site Visit Diary, DfE Site Visit Report, CQM Monthly Report; TAS2025 / TAS21) are on the DfE's own standard form, which Beamore must use and cannot change. Many checklist boxes will be empty or not apply at the stage of works; that is fine and is not an issue. Never suggest adding sections, tables or a different layout to a DfE report. Judge each best practice within the form's own boxes as described above; where the form has no place for one, count it as met.
+  * Other clients' reports are Beamore's own format and can be changed: they should include everything the best reports have. A missing section (no progress summary, no issues tracker, no weather/people, no items under review) is an issue to raise.
 - DfE reports (TAS2025 / TAS21 forms): "Progress vs programme (and the causes of any delays)" is done the Beamore way (Ronan's instruction to all clerks, agreed with Mott MacDonald and the DfE):
   * say which programme it's measured against (title, revision, date);
   * 8-10 activities from that programme, preferably on the critical path;
@@ -142,7 +145,8 @@ ${STANDARD}
  - dates: visit date doesn't match the file name, the heading, the diary, or a weekday doesn't match its date; a date in the future
  - names: wrong project, school or client name; a different clerk than expected
  - numbering: report number not following on from the previous one
- - blank: important boxes left empty (visit date, CoW name, date issued, weather/attendance if the form asks) or placeholder text left in
+ - blank: important boxes left empty (visit date, CoW name, date issued, weather/attendance if the form asks) or placeholder text left in. On a DfE form, empty checklist boxes that don't apply at this stage are NOT an issue
+ - layout (use kind "other", medium): for non-DfE reports only, a section the best reports have that this one is missing
  - copied: whole sections that look copied unchanged from the previous report
  - follow-up: problems raised in the previous report not mentioned again
  - vague: observations with nothing specific (no location, no detail, no action)
@@ -154,7 +158,7 @@ ${STANDARD}
 Give the paragraph number when an issue is about one place. Don't repeat spelling fixes as issues.
 3. rotate: attached photos (labelled Photo 1, 2...) that are on their side or upside down.
 4. clerk_points: what this clerk could do better next time, judged against the standard above: specific, friendly, no more than 5, not about spelling, and not repeating the best practices or the progress section (those are added separately).
-4b. standards: for each of the team's best practices, whether this report clearly meets it. Monthly reports can summarise the weekly diaries, so judge "people" and "follow_up" against what a monthly report would hold.
+4b. standards: for each of the team's best practices, whether this report clearly meets it (for a DfE report, within the form's own boxes; true where the form has no place for it). Monthly reports can summarise the weekly diaries, so judge "people" and "follow_up" against what a monthly report would hold.
 5. programme: say whether it's a DfE report, then judge its progress reporting against the right standard above. For DfE be strict, item by item: no programme named, fewer than 8 activities, activities with no weeks, percentages instead of weeks, or a synopsis under 5-6 lines with no overall view, is "weak".`;
   const content: Anthropic.ContentBlockParam[] = [
     { type: "text", text: `${facts}\n\n${input.previous ? `PREVIOUS REPORT (for comparison, start of it):\n${input.previous.text.slice(0, 8000)}\n\n` : ""}THIS REPORT:\n${body}` },

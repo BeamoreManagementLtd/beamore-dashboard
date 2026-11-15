@@ -12,6 +12,7 @@ export const STANDARDS = {
     test: "Opens with a summary of the visit: progress area by area / level by level / trade by trade, what's complete, what's outstanding, and the completion date with the clerk's view on it",
     tip: "Open with a short progress summary: what's moved on since last time, area by area and level by level, what's still outstanding, and whether the completion date looks realistic",
     from: "Damian Breen's reports for The Forum and Keith Osorio's for Holiday Inn Camden",
+    dfe: "Use the comments/note box at the top of the DfE diary (or the Summary section of the CQM monthly report) for a short progress summary: what's moved on, area by area, and what's outstanding",
   },
   detail: {
     label: "Specific detail",
@@ -42,20 +43,34 @@ export const STANDARDS = {
     test: "Has a running defects/issues tracker carried from report to report: number, report and date raised, the item, date closed and comments",
     tip: "Keep a running defects tracker at the end of every report: number, the report and date it was raised, the item, the date closed and comments",
     from: "Keith Osorio's reports for Holiday Inn Camden and Nick Jenkin's for Siemens",
+    dfe: "Keep the defects tracker at the end of the DfE form up to date: every item raised, with the report and date, and the date closed",
   },
   keep_under_review: {
     label: "Items to keep under review",
     test: "Ends with a short list of the open items the clerk will keep under review or a look-ahead for the next visit",
     tip: "Finish with a short list of the items you're keeping under review for next time",
     from: "Damian Breen's reports for The Forum",
+    dfe: 'Use the "Look ahead for next month" box for the open items you\'re keeping under review and what you expect to see next time',
   },
   people: {
     label: "Weather and people",
     test: "Weather for each visit day, the contractor's management team, and the trades on site with numbers",
     tip: "Record the weather for each visit day, the contractor's team on site and each trade with numbers of operatives",
     from: "Damian Breen's reports for The Forum and Lewis Lucas's for Bloxwich",
+    dfe: 'Fill in the People and Equipment boxes properly: weather for each visit day, the contractor\'s team, and each trade with numbers (not "see weekly reports")',
   },
 } as const;
+
+/**
+ * DfE reports are on the DfE's own form, which Beamore can't change (Ronan, 15 Nov 2026): some boxes will be empty or
+ * not apply, and nothing can be added outside the form. So for DfE reports each standard is done within the form
+ * (the `dfe` wording where there is one). Other clients' reports are Beamore's own format, which can and should be
+ * changed to include everything.
+ */
+export const tipFor = (k: StandardKey, dfe: boolean) => {
+  const s = STANDARDS[k] as { tip: string; dfe?: string };
+  return dfe && s.dfe ? s.dfe : s.tip;
+};
 export type StandardKey = keyof typeof STANDARDS;
 export const STANDARD_KEYS = Object.keys(STANDARDS) as StandardKey[];
 

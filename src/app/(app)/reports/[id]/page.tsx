@@ -6,7 +6,7 @@ import { fd, fdt } from "@/lib/format";
 import { draftFor } from "@/lib/reports/pipeline";
 import { userConnection } from "@/lib/google-user";
 import { EXAMPLES, PROGRAMME_METHOD, SUMMARY_METHOD } from "@/lib/reports/examples";
-import { STANDARDS, STANDARD_KEYS, type StandardsMet } from "@/lib/reports/standards";
+import { STANDARDS, STANDARD_KEYS, tipFor, type StandardsMet } from "@/lib/reports/standards";
 import { assignChecker, sendReport, markDone, ignoreReport, checkAgain, sendClerkEmail } from "../actions";
 
 export const dynamic = "force-dynamic";
@@ -36,6 +36,8 @@ function clerkNote(r: Record<string, unknown>, sender: string) {
   const dfe = ((f as { programme?: { dfe?: boolean } | null }).programme?.dfe) !== false;
   const programmeHelp = programmeIssue && dfe, summaryHelp = programmeIssue && !dfe;
   const st = (f as { standards?: StandardsMet | null }).standards ?? {};
+  // the DfE form can't be changed, so its tips say which box to use rather than what to add (Ronan, 15 Nov 2026)
+  const onDfeForm = (f as { programme?: { dfe?: boolean } | null }).programme?.dfe === true;
   const missed = STANDARD_KEYS.filter((s) => st[s] === false && !(s === "summary" && summaryHelp));
   const tips = ((r.clerk_points ?? []) as string[]).filter((t) => t && !(programmeIssue && /^Progress (vs programme|summary)/i.test(t)));
   const photoHelp = !!(f.mixed || f.stretched || f.enlarged || allIssues.some((i) => i.kind === "photos" && i.severity !== "low"));
@@ -52,7 +54,7 @@ function clerkNote(r: Record<string, unknown>, sender: string) {
     ...(programmeHelp ? ["", "The progress vs programme section is one clients look at closely, and we've had feedback on it, so please follow this every time.", ...PROGRAMME_METHOD, "", EXAMPLES.programme.intro, EXAMPLES.programme.marker] : []),
     ...(summaryHelp ? ["", ...SUMMARY_METHOD] : []),
     // the best bits of everyone's reports this one doesn't do yet (standards.ts)
-    ...(missed.length ? ["", "We want every report to have the best bits of the whole team's. To get yours there:", ...missed.map((s) => `- ${STANDARDS[s].tip} (have a look at ${STANDARDS[s].from})`)] : []),
+    ...(missed.length ? ["", "We want every report to have the best bits of the whole team's. To get yours there:", ...missed.map((s) => `- ${tipFor(s, onDfeForm)} (have a look at ${STANDARDS[s].from})`)] : []),
     "", "Any questions, just give me a shout.", "", "Kind regards,", sender,
   ].join("\n");
 }
