@@ -141,7 +141,7 @@ export default async function ClerkPortalAdmin({ searchParams }: { searchParams:
         const cell = (p?: Policy) => !p ? <span className="muted">—</span> : <span className={p.expires && p.expires >= t ? "" : "neg"}>{gbp(p.cover_pence)} · {fmtDate(p.expires)}</span>;
         return (
           <section className="panel tbl-wrap">
-            <p className="muted small">{rows.filter((r) => r.s.piOk).length} of {rows.length} clerks have PI in date (£500,000 or more is accepted; we ask for £1m). {rows.filter((r) => r.s.piLow).length} of them are below £1m: they're asked to increase it at renewal.</p>
+            <p className="muted small">{rows.filter((r) => r.s.piOk).length} of {rows.length} clerks have PI in date (£500,000 or more is accepted; we ask for £1m). {rows.filter((r) => r.s.piLow).length} of them are below £1m: they&apos;re asked to increase it at renewal.</p>
             <table>
               <thead><tr><th>Clerk</th><th>PI (required)</th><th>Public liability</th><th>Employers liability</th><th>Status</th></tr></thead>
               <tbody>
