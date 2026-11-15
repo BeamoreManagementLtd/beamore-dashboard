@@ -26,6 +26,7 @@ export async function middleware(request: NextRequest) {
   if (!user && !open) {
     const url = request.nextUrl.clone();
     url.pathname = "/login";
+    url.search = path === "/" ? "" : `?next=${encodeURIComponent(path + request.nextUrl.search)}`; // back there after signing in
     return NextResponse.redirect(url);
   }
   return response;
