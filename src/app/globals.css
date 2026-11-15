@@ -211,3 +211,20 @@ a.pcard:hover{transform:translateY(-2px);box-shadow:0 6px 18px rgba(0,0,0,.07)}
   .ptable .clip{max-width:none}
 }
 .viewas{display:flex;align-items:center;justify-content:center;gap:12px;padding:8px 16px;background:var(--ronan-soft);color:var(--ronan);font-size:13px;margin:0}
+
+/* ---------------------------------------------------------------- ask the dashboard */
+.ask{display:flex;flex-direction:column;gap:10px}
+.ask-examples{display:flex;flex-wrap:wrap;gap:6px}
+.ask-examples .btn{font-weight:500;font-size:12.5px}
+.ask-thread{display:flex;flex-direction:column;gap:10px;max-height:60vh;overflow:auto}
+.ask.compact .ask-thread{max-height:40vh}
+.ask-turn{padding:10px 12px;border-radius:10px;white-space:pre-wrap;line-height:1.5}
+.ask-turn.user{align-self:flex-end;background:var(--accent-soft);max-width:85%}
+.ask-turn.assistant{background:var(--surface-2);border:1px solid var(--line)}
+.ask-answer a{font-weight:600}
+.ask-form{display:flex;gap:8px;align-items:flex-end}
+.ask-form textarea{flex:1;resize:vertical;padding:9px 11px;border:1px solid var(--line);border-radius:8px;background:var(--surface);min-height:40px}
+
+.approvals{border:1px solid var(--warn);background:var(--warn-soft);border-radius:12px;padding:12px 14px;display:flex;flex-direction:column;gap:10px}
+.approval{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;background:var(--surface);border-radius:8px;padding:10px 12px}
+.approval-btns{display:flex;gap:6px}

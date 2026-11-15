@@ -3,6 +3,7 @@ import { requireProfile } from "@/lib/auth";
 import { createClient } from "@/lib/supabase/server";
 import { gbp, fd, fdt, today } from "@/lib/format";
 import { buildDueList, isMine } from "@/lib/due";
+import { AskBox } from "./ask/ask-box";
 
 export const dynamic = "force-dynamic";
 
@@ -43,6 +44,7 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ d
         <span className="small muted">{lastSync?.length ? `Last sync ${fdt(lastSync[0].finished_at)}` : "No sync has run yet"}</span>
       </div>
       {denied && <p className="callout warn">That page is for the director only.</p>}
+      <AskBox compact />
 
       {me.role === "director" && f && (
         <div className="tiles">

@@ -1,11 +1,13 @@
 import Link from "next/link";
 import { requireProfile } from "@/lib/auth";
+import { ApprovalBar } from "./ask/approval-bar";
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const me = await requireProfile();
   const director = me.role === "director";
   const nav: [string, string][] = [
     ["/", "Home"],
+    ["/ask", "Ask"],
     ["/due", "Due list"],
     ["/workflows", "Workflows"],
     ["/projects", "Projects"],
@@ -35,7 +37,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
           </form>
         </div>
       </aside>
-      <main className="work">{children}</main>
+      <main className="work">{director && <ApprovalBar />}{children}</main>
     </div>
   );
 }

@@ -203,6 +203,12 @@ export async function buildDueList(db: SupabaseClient, me: Profile): Promise<Due
     if (waiting.length && director) items.push({ key: "portal-ai", kind: "Personnel", title: `${waiting.length} portal upload${waiting.length > 1 ? "s" : ""} waiting for AI reading`, detail: "Add ANTHROPIC_API_KEY in Vercel to switch on reading of certificates and invoices", due: t, link: "/clerk-portal", ...ownerOf(me.id, null) });
   }
 
+  // ---- the assistant: staff requests waiting for Ronan's OK
+  if (director) {
+    const { count } = await db.from("ai_requests").select("id", { count: "exact", head: true }).eq("status", "pending");
+    if (count) items.push({ key: "ai-requests", kind: "Task", title: `${count} Ask request${count > 1 ? "s" : ""} waiting for your OK`, detail: "Approve or deny from the bar at the top of the dashboard", due: t, link: "/ask", ...ownerOf(me.id, null) });
+  }
+
   // ---- the DfE check couldn't decide: ask the director rather than guess
   if (director) {
     const { data: unsure } = await db.from("projects").select("id,display_name,dfe_evidence").is("is_dfe", null).like("dfe_evidence", "Unsure%");
