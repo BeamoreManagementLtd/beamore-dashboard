@@ -91,7 +91,7 @@ export async function xeroClient(admin: SupabaseClient) {
       if (!res.ok) {
         const text = await res.text();
         // Xero's reason is buried in Elements[].ValidationErrors: put it first so it survives the length limit
-        const reasons = [...text.matchAll(/"Message":s*"([^"]+)"/g)].map((m) => m[1]).filter((m) => m !== "A validation exception occurred");
+        const reasons = [...text.matchAll(/"Message":\s*"([^"]+)"/g)].map((m) => m[1]).filter((m) => m !== "A validation exception occurred");
         throw new Error(`Xero ${path} failed (${res.status}): ${reasons.length ? reasons.join("; ") + " | " : ""}${text.slice(0, 300)}`);
       }
       return res.json() as Promise<T>;
