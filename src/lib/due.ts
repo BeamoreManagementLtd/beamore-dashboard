@@ -190,6 +190,19 @@ export async function buildDueList(db: SupabaseClient, me: Profile): Promise<Due
     }
   }
 
+  // ---- clerk portal: uploads that need Beamore (or the clerk) and the AI couldn't settle
+  {
+    const { data: pu } = await db.from("portal_uploads").select("id,kind,status,ai_state,clerks(name)").neq("status", "deleted")
+      .or("status.eq.needs_correction,status.eq.needs_beamore,ai_state.eq.failed,ai_state.eq.pending");
+    const look = (pu ?? []).filter((u) => u.status === "needs_beamore" || u.ai_state === "failed");
+    const fix = (pu ?? []).filter((u) => u.status === "needs_correction");
+    const waiting = (pu ?? []).filter((u) => u.ai_state === "pending");
+    const names = (l: typeof look) => [...new Set(l.map((u) => (u.clerks as unknown as { name: string } | null)?.name).filter(Boolean))].join(", ");
+    if (look.length) items.push({ key: "portal-look", kind: "Personnel", title: `${look.length} portal upload${look.length > 1 ? "s" : ""} to look at`, detail: names(look), due: t, link: "/clerk-portal", ...ownerOf(director ? me.id : null, "Ronan") });
+    if (fix.length) items.push({ key: "portal-fix", kind: "Personnel", title: `${fix.length} upload${fix.length > 1 ? "s" : ""} waiting for the clerk to send a better copy`, detail: `${names(fix)}. Correction drafts are in Gmail Drafts`, due: t, link: "/clerk-portal", ...ownerOf(director ? me.id : null, "Ronan") });
+    if (waiting.length && director) items.push({ key: "portal-ai", kind: "Personnel", title: `${waiting.length} portal upload${waiting.length > 1 ? "s" : ""} waiting for AI reading`, detail: "Add ANTHROPIC_API_KEY in Vercel to switch on reading of certificates and invoices", due: t, link: "/clerk-portal", ...ownerOf(me.id, null) });
+  }
+
   // ---- the DfE check couldn't decide: ask the director rather than guess
   if (director) {
     const { data: unsure } = await db.from("projects").select("id,display_name,dfe_evidence").is("is_dfe", null).like("dfe_evidence", "Unsure%");

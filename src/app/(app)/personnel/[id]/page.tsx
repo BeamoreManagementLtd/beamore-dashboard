@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { requireProfile } from "@/lib/auth";
+import { insuranceSummary, type Policy } from "@/lib/portal/data";
 import { createClient } from "@/lib/supabase/server";
 import { fd, fdy, today } from "@/lib/format";
 import { saveCompliance, startOnboarding, tickOnboarding, setActive, makeJoinLink, draftJoin } from "../actions";
@@ -48,6 +49,11 @@ export default async function Clerk({ params, searchParams }: { params: Promise<
   const { count: diaryRows } = await db.from("diary_visits").select("id", { count: "exact", head: true }).eq("clerk_id", id);
   const ticked = new Map((items ?? []).filter((i) => i.done_on).map((i) => [i.item, i.done_on as string]));
   const onb = c.onboarding_started ? buildOnboarding({ ...c, email: clerk.email, phone: clerk.phone }, ticked, (diaryRows ?? 0) > 0, t) : null;
+  const [{ data: portalUps }, { data: portalPols }] = await Promise.all([
+    db.from("portal_uploads").select("id,kind,doc_type,file_name,received_at,status,issues,drive_file_id,source").eq("clerk_id", id).neq("status", "deleted").neq("status", "uploading").order("received_at", { ascending: false }).limit(12),
+    db.from("insurance_policies").select("id,type,description,insurer,insured_name,cover_pence,starts,expires,upload_id,source").eq("clerk_id", id),
+  ]);
+  const portalIns = insuranceSummary((portalPols ?? []) as Policy[]);
   const { data: forProject } = c.onboarding_project_id ? await db.from("projects").select("id,display_name").eq("id", c.onboarding_project_id).maybeSingle() : { data: null };
 
   return (
@@ -56,6 +62,22 @@ export default async function Clerk({ params, searchParams }: { params: Promise<
         <div><h1>{clerk.name}</h1><p><Link href="/personnel">← Personnel</Link>{c.updated_at ? ` · record updated ${fdy(c.updated_at)}` : ""}</p></div>
         <form action={setActive.bind(null, id, !clerk.active)}><button className="btn">{clerk.active ? "Mark as no longer working with us" : "Mark as active again"}</button></form>
       </div>
+
+      <section className="panel">
+        <h2>From the portal <Link className="small" href={`/clerk-portal?tab=uploads&who=${id}`}>all uploads →</Link></h2>
+        <p className={portalIns.piOk ? "pos" : "neg"}>{portalIns.piText}</p>
+        {portalUps?.length ? (
+          <ul className="small" style={{ margin: 0, paddingLeft: 18 }}>
+            {portalUps.map((u) => (
+              <li key={u.id}>
+                {fdy(u.received_at)} · {u.kind === "insurance" ? "Insurance" : u.kind === "invoice" ? "Invoice" : u.doc_type ?? "Certificate"} ·{" "}
+                {u.drive_file_id ? <a href={`https://drive.google.com/file/d/${u.drive_file_id}/view`} target="_blank" rel="noreferrer">{u.file_name ?? "open"}</a> : (u.file_name ?? "being filed")}
+                {u.issues?.length ? <span className="neg"> · {u.issues.join(". ")}</span> : null}
+              </li>
+            ))}
+          </ul>
+        ) : <p className="muted small">Nothing uploaded on the portal yet.</p>}
+      </section>
 
       <form action={save} className="panel form">
         <h2>Contact</h2>

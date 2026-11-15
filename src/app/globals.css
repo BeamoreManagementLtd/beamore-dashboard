@@ -163,3 +163,50 @@ input,select,textarea{background:var(--surface);border:1px solid var(--line);bor
 .join-ppe{display:flex;flex-wrap:wrap;gap:8px 16px}
 .join-ppe label{display:inline-flex;gap:6px;align-items:center;font-size:14px}
 tr.now-row td{background:var(--warn-soft)} b.over{color:var(--bad)}
+
+/* ---------------------------------------------------------------- clerk portal (portal.beamore.co.uk) */
+.portal{min-height:100vh;display:flex;flex-direction:column;background:var(--bg)}
+.portal-top{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px max(16px,calc((100vw - 980px)/2));background:var(--surface);border-top:4px solid var(--brand);border-bottom:1px solid var(--line)}
+.portal-me{display:flex;align-items:center;gap:10px;font-size:13px;color:var(--muted)}
+.portal-me form{margin:0}
+.portal-tabs{display:flex;gap:4px;overflow-x:auto;padding:10px max(16px,calc((100vw - 980px)/2)) 0;background:var(--surface);border-bottom:1px solid var(--line);scrollbar-width:none}
+.portal-tabs a{padding:10px 14px;border-bottom:3px solid transparent;text-decoration:none;color:var(--muted);font-weight:600;white-space:nowrap;font-size:13.5px}
+.portal-tabs a:hover{color:var(--ink)}
+.portal-tabs a[aria-current=page]{color:var(--ink);border-bottom-color:var(--brand)}
+.portal-main{width:100%;max-width:980px;margin:0 auto;padding:24px 16px 48px;display:flex;flex-direction:column;gap:18px;flex:1}
+.portal-foot{text-align:center;padding:18px 16px 28px}
+.portal-hello h1{font-size:26px}
+.portal-hello p{margin-top:6px;max-width:640px}
+.portal .card{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:18px 20px;display:flex;flex-direction:column;gap:12px}
+.portal .callout ul{margin:6px 0 0;padding-left:18px}
+.portal-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:14px}
+.pcard{background:var(--surface);border:1px solid var(--line);border-left:4px solid var(--neutral);border-radius:14px;padding:16px 18px;display:flex;flex-direction:column;gap:6px;text-decoration:none;color:inherit;transition:transform .12s,box-shadow .12s}
+.pcard.ok{border-left-color:var(--good)} .pcard.warn{border-left-color:var(--warn)}
+a.pcard:hover{transform:translateY(-2px);box-shadow:0 6px 18px rgba(0,0,0,.07)}
+.pcard b{font-family:var(--heading);font-size:18px}
+.pcard-go{margin-top:auto;padding-top:6px;color:var(--link);font-weight:600;font-size:13px}
+.status-banner{display:flex;flex-direction:column;gap:3px;border-radius:14px;padding:14px 18px}
+.status-banner.good{background:var(--good-soft);color:var(--good)} .status-banner.warn{background:var(--warn-soft);color:var(--warn)}
+.status-banner b{font-family:var(--heading);font-size:16px}
+.drop{border:2px dashed var(--line);border-radius:14px;background:var(--surface);padding:26px 18px;display:flex;flex-direction:column;align-items:center;gap:10px;text-align:center;transition:border-color .15s,background .15s}
+.drop.over{border-color:var(--brand);background:var(--brand-soft)}
+.drop-icon{width:44px;height:44px;border-radius:50%;display:grid;place-items:center;background:var(--brand-soft);color:var(--brand);font-size:20px;font-weight:700}
+.drop b{font-family:var(--heading);font-size:16px}
+.drop .btn.primary{background:var(--brand);border-color:var(--brand);color:#fff;padding:10px 18px}
+.drop select{padding:6px 8px;border:1px solid var(--line);border-radius:8px;background:var(--surface)}
+.drop-list{list-style:none;margin:4px 0 0;padding:0;width:100%;max-width:520px;display:flex;flex-direction:column;gap:6px;text-align:left}
+.drop-list li{display:flex;justify-content:space-between;gap:10px;padding:8px 12px;border-radius:8px;background:var(--surface-2);font-size:13px}
+.drop-list li span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.drop-list li.done{background:var(--good-soft);color:var(--good)} .drop-list li.error{background:var(--bad-soft);color:var(--bad)}
+.ptable{width:100%;border-collapse:collapse;font-size:13.5px}
+.ptable th{text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);font-weight:600;padding:6px 8px;border-bottom:1px solid var(--line)}
+.ptable td{padding:10px 8px;border-bottom:1px solid var(--line);vertical-align:top}
+.ptable tr:last-child td{border-bottom:0}
+.ptable .clip{max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+@media (max-width:640px){
+  .portal-me span{display:none}
+  .ptable thead{display:none}
+  .ptable tr{display:grid;grid-template-columns:1fr auto;gap:2px 10px;padding:10px 0;border-bottom:1px solid var(--line)}
+  .ptable td{border:0;padding:0}
+  .ptable .clip{max-width:none}
+}

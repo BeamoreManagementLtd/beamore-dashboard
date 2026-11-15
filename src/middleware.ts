@@ -16,6 +16,12 @@ export async function middleware(request: NextRequest) {
   });
   const { data: { user } } = await supabase.auth.getUser();
   const path = request.nextUrl.pathname;
+  const portalHost = (request.headers.get("host") ?? "").startsWith("portal.");
+  if (portalHost && path === "/") {
+    const url = request.nextUrl.clone();
+    url.pathname = user ? "/portal" : "/login";
+    return NextResponse.redirect(url);
+  }
   const open = path.startsWith("/login") || path.startsWith("/auth") || path.startsWith("/api/sync") || path.startsWith("/join");
   if (!user && !open) {
     const url = request.nextUrl.clone();

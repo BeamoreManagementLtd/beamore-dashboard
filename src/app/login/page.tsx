@@ -13,7 +13,7 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
         <p className="muted">Use your Beamore Google account.</p>
         {error && (
           <p className="callout bad">
-            {error === "not-staff" ? "That account isn't set up for the dashboard. Use your @beamore.co.uk account." : "Sign-in didn't complete. Try again."}
+            {error === "not-staff" ? "Use your @beamore.co.uk Google account." : error === "no-portal" ? "Your account doesn't have portal access yet. Please contact Beamore." : "Sign-in didn't complete. Try again."}
           </p>
         )}
         <SignInButton />

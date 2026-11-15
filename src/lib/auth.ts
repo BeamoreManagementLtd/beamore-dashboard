@@ -10,7 +10,7 @@ export async function requireProfile(): Promise<Profile> {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) redirect("/login");
   const { data: profile } = await supabase.from("profiles").select("id,email,full_name,role").eq("id", user.id).single();
-  if (!profile) redirect("/login?error=not-staff");
+  if (!profile) redirect("/portal"); // clerks have no dashboard profile: their place is the portal
   return profile as Profile;
 }
 

@@ -23,7 +23,7 @@ export async function ensureJoinToken(admin: SupabaseClient, clerkId: string) {
 
 const FOLDER = "application/vnd.google-apps.folder";
 type G = Awaited<ReturnType<typeof driveClient>>;
-async function sub(g: G, parent: string, name: string, create: boolean) {
+export async function sub(g: G, parent: string, name: string, create: boolean) {
   const q = `'${parent}' in parents and name = '${name.replace(/\\/g, "\\\\").replace(/'/g, "\\'")}' and mimeType = '${FOLDER}' and trashed = false`;
   const f = (await g.json<{ files: { id: string }[] }>("files", { q, fields: "files(id)" })).files[0];
   if (f || !create) return f?.id;
