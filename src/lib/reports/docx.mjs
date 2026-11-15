@@ -196,6 +196,101 @@ export async function addComments(r, comments) {
   return add.length;
 }
 
+/** A small fingerprint of each photo shown (8x8 brightness pattern), to spot photos reused from earlier reports. */
+export async function photoHashes(r, sharp, stats) {
+  const out = [];
+  for (const p of stats.list.filter((x) => x.used)) {
+    try {
+      const px = await sharp(await r.zip.file(p.path).async("nodebuffer"), { failOn: "none" }).rotate().resize(8, 8, { fit: "fill" }).greyscale().raw().toBuffer();
+      const avg = px.reduce((a, b) => a + b, 0) / px.length;
+      let bits = ""; for (const v of px) bits += v > avg ? "1" : "0";
+      out.push(BigInt(`0b${bits}`).toString(16).padStart(16, "0"));
+    } catch { /* unreadable */ }
+  }
+  return out;
+}
+/** How many of these fingerprints (nearly) match one from the earlier report. */
+export function reusedCount(now, before) {
+  if (!now?.length || !before?.length) return 0;
+  const dist = (a, b) => { let x = BigInt(`0x${a}`) ^ BigInt(`0x${b}`), n = 0; while (x) { n += Number(x & 1n); x >>= 1n; } return n; };
+  return now.filter((h) => before.some((b) => dist(h, b) <= 3)).length;
+}
+
+/** Photos with no words beside them (in their table cell, or their paragraph and the one after). */
+export function uncaptioned(r) {
+  const xml = r.xml;
+  let n = 0;
+  for (const m of xml.matchAll(/<w:drawing>/g)) {
+    const cellStart = xml.lastIndexOf("<w:tc>", m.index), cellEnd = xml.indexOf("</w:tc>", m.index);
+    const inCell = cellStart > -1 && cellEnd > m.index && cellStart > xml.lastIndexOf("</w:tc>", m.index);
+    const pStart = Math.max(xml.lastIndexOf("<w:p ", m.index), xml.lastIndexOf("<w:p>", m.index));
+    const pEnd = xml.indexOf("</w:p>", xml.indexOf("</w:p>", m.index) + 6);
+    const around = inCell ? xml.slice(cellStart, cellEnd) : xml.slice(pStart, pEnd);
+    if (textOf(around).trim().length < 8) n++;
+  }
+  return n;
+}
+
+/** Tick boxes nobody ticked: Word check boxes left unchecked, and ☐ characters. */
+export function unticked(r) {
+  return (r.xml.match(/<w14:checked w14:val="(0|false)"\/>/g) ?? []).length + r.paragraphs.reduce((n, p) => n + (p.text.match(/☐/g) ?? []).length, 0);
+}
+
+/** Puts a value in an empty box next to its label, as a tracked insertion. Only boxes that really are empty. */
+export function fillBlank(r, label, value) {
+  const want = label.toLowerCase().replace(/[^a-z0-9]/g, "");
+  let xml = r.xml, done = false;
+  xml = xml.replace(/<w:tr\b[\s\S]*?<\/w:tr>/g, (row) => {
+    if (done) return row;
+    const cells = [...row.matchAll(/<w:tc\b[\s\S]*?<\/w:tc>/g)];
+    for (let k = 0; k + 1 < cells.length; k++) {
+      if (textOf(cells[k][0]).toLowerCase().replace(/[^a-z0-9]/g, "") !== want || textOf(cells[k + 1][0]).trim()) continue;
+      const cell = cells[k + 1][0];
+      const p = /<w:p\b[^>]*>(?:<w:pPr>[\s\S]*?<\/w:pPr>)?/.exec(cell);
+      if (!p) continue;
+      const rPr = /<w:rPr>[\s\S]*?<\/w:rPr>/.exec(cells[k][0])?.[0]?.replace(/<w:b\/>|<w:bCs\/>/g, "") ?? "";
+      const ins = `<w:ins w:id="${nextId++}" w:author="${AUTHOR}" w:date="${stamp()}"><w:r>${rPr}<w:t xml:space="preserve">${esc(value)}</w:t></w:r></w:ins>`;
+      const at = cells[k + 1].index + p.index + p[0].length;
+      done = true;
+      return row.slice(0, at) + ins + row.slice(at);
+    }
+    return row;
+  });
+  // or a line that is just "Label:" with nothing after it
+  if (!done) {
+    const spans = paragraphSpans(xml);
+    for (let i = spans.length - 1; i >= 0 && !done; i--) {
+      const px = xml.slice(spans[i].start, spans[i].end);
+      const t = textOf(px).trim();
+      if (!t.endsWith(":") || t.slice(0, -1).toLowerCase().replace(/[^a-z0-9]/g, "") !== want) continue;
+      const rPr = /<w:rPr>[\s\S]*?<\/w:rPr>/.exec(px)?.[0]?.replace(/<w:b\/>|<w:bCs\/>/g, "") ?? "";
+      const ins = `<w:ins w:id="${nextId++}" w:author="${AUTHOR}" w:date="${stamp()}"><w:r>${rPr}<w:t xml:space="preserve"> ${esc(value)}</w:t></w:r></w:ins>`;
+      xml = xml.slice(0, spans[i].end - "</w:p>".length) + ins + xml.slice(spans[i].end - "</w:p>".length);
+      done = true;
+    }
+  }
+  if (done) { r.xml = xml; r.spans = paragraphSpans(xml); }
+  return done;
+}
+
+/** Turns a photo the right way up (90, 180 or 270 degrees clockwise) and swaps its shown width and height if needed. */
+export async function rotatePhoto(r, sharp, path, degrees) {
+  const buf = await r.zip.file(path).async("nodebuffer");
+  let img = sharp(buf, { failOn: "none" }).rotate().rotate(degrees);
+  img = /\.png$/i.test(path) ? img.png() : img.jpeg({ quality: 85, mozjpeg: true });
+  r.zip.file(path, await img.toBuffer(), NO_FOLDERS);
+  if (degrees === 180) return;
+  const rels = await r.zip.file("word/_rels/document.xml.rels").async("string");
+  const target = path.replace(/^word\//, "");
+  const ids = [...rels.matchAll(/<Relationship\b[^>]*Id="([^"]+)"[^>]*Target="([^"]+)"/g)].filter((m) => m[2].replace(/^\.?\//, "") === target).map((m) => m[1]);
+  r.xml = r.xml.replace(/<w:drawing>[\s\S]*?<\/w:drawing>/g, (d) => {
+    const rid = /<a:blip\b[^>]*r:embed="([^"]+)"/.exec(d)?.[1];
+    if (!rid || !ids.includes(rid)) return d;
+    return d.replace(/<wp:extent cx="(\d+)" cy="(\d+)"/, '<wp:extent cx="$2" cy="$1"').replace(/<a:ext cx="(\d+)" cy="(\d+)"/, '<a:ext cx="$2" cy="$1"');
+  });
+  r.spans = paragraphSpans(r.xml);
+}
+
 /** The changed report as a file. */
 export async function saveReport(r) {
   r.zip.file("word/document.xml", r.xml, NO_FOLDERS);

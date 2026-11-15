@@ -4,7 +4,14 @@ import sharp from "sharp";
 import { driveClient } from "@/lib/google";
 import { projectMatcher } from "@/lib/project-match";
 import { sendReportEmail } from "@/lib/google-user";
-import { readReport, photoStats, shrinkPhotos, trackSpelling, addComments, saveReport, cleanCopy } from "./docx.mjs";
+import { readReport, photoStats, shrinkPhotos, trackSpelling, addComments, saveReport, cleanCopy, photoHashes, reusedCount, uncaptioned, unticked, fillBlank, rotatePhoto } from "./docx.mjs";
+
+/** 0-100: how much the report needed fixing (must-checks count most). Lateness is shown separately. */
+export function qualityScore(issues: { severity: string }[], spelling: number, lateDays: number) {
+  const w = { high: 15, medium: 6, low: 2 } as Record<string, number>;
+  const off = issues.reduce((n, i) => n + (w[i.severity] ?? 0), 0) + Math.min(10, spelling) + Math.min(15, lateDays * 5);
+  return Math.max(0, 100 - off);
+}
 import { checkReport, type Issue } from "./check";
 
 /**
@@ -135,10 +142,18 @@ export async function checkOne(admin: SupabaseClient, id: string) {
   const since = new Date(Date.now() - 21 * 864e5).toISOString().slice(0, 10);
   const { data: visits } = rep.project_id ? await admin.from("diary_visits").select("visit_date,side,clerks(name)").eq("project_id", rep.project_id).gte("visit_date", since).order("visit_date") : { data: [] };
   const visitList = [...new Set((visits ?? []).map((v) => `${v.visit_date} ${(v.clerks as unknown as { name?: string } | null)?.name ?? ""}${v.side === "planned" ? " (planned)" : ""}`.trim()))];
-  const { data: prev } = rep.project_id ? await admin.from("reports").select("report_number,visit_date,text_snapshot").eq("project_id", rep.project_id).eq("kind", rep.kind).neq("id", id).not("text_snapshot", "is", null).order("uploaded_at", { ascending: false }).limit(1).maybeSingle() : { data: null };
-  const thumbs: Buffer[] = [];
-  for (const ph of stats.list.filter((x) => x.used).slice(0, 6)) {
-    try { thumbs.push(await sharp(await r.zip.file(ph.path)!.async("nodebuffer"), { failOn: "none" }).rotate().resize({ width: 360, height: 360, fit: "inside" }).jpeg({ quality: 60 }).toBuffer()); } catch { /* skip */ }
+  const { data: earlier } = rep.project_id ? await admin.from("reports").select("report_number,visit_date,text_snapshot,photo_hashes,photo_count").eq("project_id", rep.project_id).eq("kind", rep.kind).neq("id", id).not("checked_at", "is", null).order("uploaded_at", { ascending: false }).limit(5) : { data: [] };
+  const prev = earlier?.[0] ?? null;
+  const counts = (earlier ?? []).map((e) => e.photo_count).filter((n): n is number => typeof n === "number");
+  const usual = counts.length >= 2 ? Math.round(counts.reduce((a, b) => a + b, 0) / counts.length) : null;
+  const hashes = await photoHashes(r, sharp, stats);
+  const reused = reusedCount(hashes, prev?.photo_hashes ?? null);
+  // up to 12 photos for the AI to look at (spread through the report), remembering which file each one is
+  const used = stats.list.filter((x) => x.used);
+  const picked = used.length <= 12 ? used : Array.from({ length: 12 }, (_, k) => used[Math.floor((k * used.length) / 12)]);
+  const thumbs: Buffer[] = [], thumbPaths: string[] = [];
+  for (const ph of picked) {
+    try { thumbs.push(await sharp(await r.zip.file(ph.path)!.async("nodebuffer"), { failOn: "none" }).rotate().resize({ width: 320, height: 320, fit: "inside" }).jpeg({ quality: 55 }).toBuffer()); thumbPaths.push(ph.path); } catch { /* skip */ }
   }
 
   const ai = await checkReport({
@@ -147,12 +162,19 @@ export async function checkOne(admin: SupabaseClient, id: string) {
     expectedClerks: (clerks ?? []).map((c) => c.name), diaryVisits: visitList,
     previous: prev ? { number: prev.report_number, date: prev.visit_date, text: prev.text_snapshot ?? "" } : null,
     paragraphs: r.paragraphs, blanks: r.blanks, placeholders: r.placeholders,
-    photos: { count: stats.count, blurry: stats.blurry, smallOnPage: stats.smallOnPage, stretched: stats.stretched, mb: raw.length / 1e6 },
-    thumbnails: thumbs, today: new Date().toISOString().slice(0, 10),
+    photos: { count: stats.count, blurry: stats.blurry, smallOnPage: stats.smallOnPage, stretched: stats.stretched, mb: raw.length / 1e6, usual, reused, uncaptioned: uncaptioned(r) },
+    unticked: unticked(r), thumbnails: thumbs, today: new Date().toISOString().slice(0, 10),
   });
 
-  // put the fixes into the Word file: spelling as tracked changes, issues as comments, smaller photos
-  const shrunk = await shrinkPhotos(r, sharp, stats);
+  // put the fixes into the Word file: spelling and grammar as tracked changes, obvious blanks filled (tracked), photos
+  // turned upright and made smaller, issues as comments
+  const rotated: string[] = [];
+  for (const t of ai.rotate ?? []) {
+    const path = thumbPaths[t.photo - 1];
+    if (path && !rotated.includes(path)) { await rotatePhoto(r, sharp, path, t.degrees); rotated.push(path); }
+  }
+  const shrunk = await shrinkPhotos(r, sharp, await photoStats(r, sharp));
+  const filled = (ai.fills ?? []).filter((f) => f.value?.trim() && fillBlank(r, f.label, f.value.trim()));
   const spelt = trackSpelling(r, ai.spelling);
   const rank = { high: 0, medium: 1, low: 2 } as const;
   const issues: Issue[] = [...ai.issues].sort((a, b) => rank[a.severity] - rank[b.severity]);
@@ -170,9 +192,13 @@ export async function checkOne(admin: SupabaseClient, id: string) {
   const after = await g.json<{ headRevisionId: string }>(`files/${rep.drive_file_id}`, { fields: "headRevisionId", supportsAllDrives: "true" });
   const visitFromName = /(\d{1,2})[.\-_ ](\d{1,2})[.\-_ ](\d{2,4})/.exec(rep.file_name);
   const nameDate = visitFromName ? `${visitFromName[3].length === 2 ? `20${visitFromName[3]}` : visitFromName[3]}-${visitFromName[2].padStart(2, "0")}-${visitFromName[1].padStart(2, "0")}` : null;
+  const applied = ai.spelling.filter((s) => !spelt.skipped.includes(s)).map((s) => ({ find: s.find, replace: s.replace }));
   await admin.from("reports").update({
     status: "ready", ai_summary: ai.summary, issues, spelling_fixed: spelt.applied,
-    photos: { count: stats.count, blurry: stats.blurry, smallOnPage: stats.smallOnPage, stretched: stats.stretched, shrunk: shrunk.changed },
+    photos: { count: stats.count, blurry: stats.blurry, smallOnPage: stats.smallOnPage, stretched: stats.stretched, shrunk: shrunk.changed, rotated: rotated.length, reused, usual, uncaptioned: uncaptioned(r) },
+    photo_hashes: hashes, photo_count: stats.count, clerk_points: (ai.clerk_points ?? []).slice(0, 5),
+    fixes: { spelling: applied, filled, rotated: rotated.length, shrunk: shrunk.changed },
+    score: qualityScore(issues, spelt.applied, 0), // lateness is shown on its own on the Reports page
     size_before: raw.length, size_after: out.length, checked_revision: after.headRevisionId, checked_at: new Date().toISOString(),
     visit_date: ai.visit_date && /^\d{4}-\d{2}-\d{2}$/.test(ai.visit_date) ? ai.visit_date : (nameDate && !Number.isNaN(Date.parse(nameDate)) ? nameDate : null),
     report_number: ai.report_number, clerk_name: ai.clerk_name,
@@ -200,6 +226,21 @@ export async function draftFor(admin: SupabaseClient, reportId: string, sender: 
   };
 }
 
+/**
+ * The standard file name, like the best clerks use: "37 - Pershore - CoW Diary - 10.11.2026". Files named with a
+ * client's document code (SRP1065-BML-…, TAS2025-DFE-…) keep their name: the client's document control relies on it.
+ */
+export function standardName(rep: { file_name: string; report_number: string | null; visit_date: string | null; folder_name: string | null }, project: string) {
+  if (/^(SRP\s?\d|TAS20|PSBP|[A-Z0-9]{2,}-[A-Z0-9]{2,}-[A-Z0-9]{2,}-)/i.test(rep.file_name)) return null;
+  const num = (rep.report_number ?? "").replace(/^(no\.?|r)\s*/i, "").trim();
+  if (!num || !/^\d{1,4}$/.test(num) || !rep.visit_date || !project) return null;
+  const f = (rep.folder_name ?? "").toLowerCase();
+  const kind = /monthly/.test(f) ? "Monthly Report" : /m&e|mep/.test(f) ? (/report/.test(f) ? "M&E CoW Report" : "M&E CoW Diary") : /report/.test(f) ? "CoW Report" : "CoW Diary";
+  const [y, m, d] = rep.visit_date.split("-");
+  const clean = project.replace(/[\\/:*?"<>|]/g, "").trim();
+  return `${num.padStart(2, "0")} - ${clean} - ${kind} - ${d}.${m}.${y}.docx`;
+}
+
 /** 3. The checker's "Approve and send": PDF made from the checked Word file, saved next to it, emailed from their Gmail. */
 export async function approveAndSend(admin: SupabaseClient, reportId: string, who: { id: string; full_name: string | null }, m: { to: string[]; cc: string[]; subject: string; body: string }) {
   if (!m.to.length) throw new Error("Nobody to send it to: add the report list on the project's page");
@@ -210,11 +251,20 @@ export async function approveAndSend(admin: SupabaseClient, reportId: string, wh
   await admin.from("reports").update({ status: "approved", approved_by: who.id, approved_at: new Date().toISOString(), error: null }).eq("id", reportId);
   try {
     // the Word file as it is now (with the checker's edits), tracked changes left in accepted and comments taken out
+    // the standard file name for the Word file and its PDF (the clerk's name is kept on record)
+    const { data: proj } = rep.project_id ? await admin.from("projects").select("name").eq("id", rep.project_id).single() : { data: null };
+    const std = standardName(rep, proj?.name ?? rep.project_folder_name ?? "");
+    let fileName = rep.file_name;
+    if (std && std !== rep.file_name) {
+      await g.rename(rep.drive_file_id, std);
+      await admin.from("reports").update({ file_name: std, renamed_from: rep.file_name }).eq("id", reportId);
+      fileName = std;
+    }
     const clean = await cleanCopy(Buffer.from(await g.download(rep.drive_file_id)));
     const work = await conversionFolder(g);
-    const tmp = await g.putFile(`${rep.file_name.replace(/\.docx?$/i, "")} (for PDF)`, work, clean, DOCX, "application/vnd.google-apps.document");
+    const tmp = await g.putFile(`${fileName.replace(/\.docx?$/i, "")} (for PDF)`, work, clean, DOCX, "application/vnd.google-apps.document");
     const pdf = Buffer.from(await g.exportPdf(tmp.id));
-    const pdfName = `${rep.file_name.replace(/\.docx?$/i, "")}.pdf`;
+    const pdfName = `${fileName.replace(/\.docx?$/i, "")}.pdf`;
     const saved = await g.putFile(pdfName, rep.folder_id, pdf, "application/pdf");
     const sent = await sendReportEmail(admin, who.id, { ...m, fileName: pdfName, pdf });
     const at = new Date().toISOString();

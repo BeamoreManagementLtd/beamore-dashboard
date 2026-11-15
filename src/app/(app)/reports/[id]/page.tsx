@@ -11,6 +11,29 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
 type Issue = { severity: "high" | "medium" | "low"; kind: string; text: string };
+
+/** A friendly note to the clerk: what had to be fixed in this report and what to do next time. */
+function clerkNote(r: Record<string, unknown>, sender: string) {
+  const clerk = ((r.clerks as { name?: string } | null)?.name ?? (r.clerk_name as string | null) ?? "").split(" ")[0];
+  const f = (r.fixes ?? {}) as { spelling?: { find: string; replace: string }[]; filled?: { label: string }[]; rotated?: number; shrunk?: number };
+  const issues = ((r.issues ?? []) as Issue[]).filter((i) => i.severity !== "low" && i.kind !== "safety");
+  const fixed = [
+    f.spelling?.length ? `${f.spelling.length} spelling/grammar correction${f.spelling.length === 1 ? "" : "s"} (e.g. ${f.spelling.slice(0, 3).map((s) => `"${s.find}" → "${s.replace}"`).join(", ")})` : null,
+    f.filled?.length ? `boxes left empty: ${f.filled.map((x) => x.label).join(", ")}` : null,
+    f.rotated ? `${f.rotated} photo${f.rotated === 1 ? "" : "s"} on their side` : null,
+    f.shrunk ? `photos larger than needed (the file was ${(Number(r.size_before) / 1e6).toFixed(0)} MB; please resize before inserting)` : null,
+    ...issues.map((i) => i.text),
+  ].filter(Boolean) as string[];
+  const tips = ((r.clerk_points ?? []) as string[]).filter(Boolean);
+  if (!fixed.length && !tips.length) return `Hi ${clerk},\n\nThanks for your report (${r.file_name}). It needed no changes before it went out. Great work.\n\nKind regards,\n${sender}`;
+  return [
+    `Hi ${clerk},`, "",
+    `Thanks for your report (${r.file_name}). A few things needed fixing before it went to the client:`,
+    ...fixed.map((x) => `- ${x}`),
+    ...(tips.length ? ["", "For your next reports, it would help if you could:", ...tips.map((x) => `- ${x}`)] : []),
+    "", "Any questions, just give me a shout.", "", "Kind regards,", sender,
+  ].join("\n");
+}
 const SEV: Record<string, [string, string]> = { high: ["Must check", "bad"], medium: ["Should fix", "warn"], low: ["Minor", "muted"] };
 
 /** One report: what the AI found, then approve and send it from your own email with the standard email. */
@@ -77,6 +100,32 @@ export default async function ReportPage({ params, searchParams }: { params: Pro
           </form>
         </section>
       </div>
+
+      {r.checked_at && (
+        <div className="grid2">
+          <section className="panel">
+            <h2>What was changed {typeof r.score === "number" && <span className={`pill ${r.score >= 85 ? "good" : r.score >= 65 ? "warn" : "bad"}`} title="Quality score: how much needed fixing">{r.score}/100</span>}</h2>
+            {(() => {
+              const f = (r.fixes ?? {}) as { spelling?: { find: string; replace: string }[]; filled?: { label: string; value: string }[]; rotated?: number; shrunk?: number };
+              return (
+                <ul className="plain small">
+                  {!!f.spelling?.length && <li><b>Spelling and grammar ({f.spelling.length}):</b> {f.spelling.slice(0, 25).map((s) => `${s.find} → ${s.replace}`).join("; ")}</li>}
+                  {!!f.filled?.length && <li><b>Filled in:</b> {f.filled.map((x) => `${x.label}: ${x.value}`).join("; ")}</li>}
+                  {!!f.rotated && <li><b>Photos turned upright:</b> {f.rotated}</li>}
+                  {!!f.shrunk && <li><b>Photos made smaller:</b> {f.shrunk} ({mb(r.size_before)} → {mb(r.size_after)})</li>}
+                  {r.renamed_from && <li><b>Renamed</b> from {r.renamed_from}</li>}
+                  {!f.spelling?.length && !f.filled?.length && !f.rotated && !f.shrunk && <li>Nothing needed changing.</li>}
+                </ul>
+              );
+            })()}
+          </section>
+          <section className="panel">
+            <h2>Note for the clerk</h2>
+            <p className="small muted">Copy into an email to the clerk, so their next report needs less fixing.</p>
+            <textarea readOnly rows={10} style={{ width: "100%" }} defaultValue={clerkNote(r, me.full_name ?? me.email)} />
+          </section>
+        </div>
+      )}
 
       {open && (
         <section className="panel">

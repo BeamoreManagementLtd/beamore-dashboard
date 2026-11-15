@@ -116,6 +116,11 @@ export async function driveClient(admin: SupabaseClient) {
       (await call(`https://www.googleapis.com/drive/v3/${path}?${new URLSearchParams(params)}`)).json() as Promise<T>,
     download: async (fileId: string) => (await call(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media&supportsAllDrives=true`)).arrayBuffer(),
     /** A Google Sheet saved as .xlsx (Sheets can't be downloaded directly). */
+    /** Renames a file (nothing else about it changes). */
+    rename: async (fileId: string, name: string) => {
+      const res = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?supportsAllDrives=true`, { method: "PATCH", headers: { Authorization: `Bearer ${access}`, "Content-Type": "application/json" }, body: JSON.stringify({ name }), cache: "no-store" });
+      if (!res.ok) throw new Error(`Google Drive rename ${res.status}: ${(await res.text()).slice(0, 200)}`);
+    },
     /** A Google Doc saved as PDF (Drive limits this to 10 MB). */
     exportPdf: async (fileId: string) =>
       (await call(`https://www.googleapis.com/drive/v3/files/${fileId}/export?mimeType=application%2Fpdf`)).arrayBuffer(),
