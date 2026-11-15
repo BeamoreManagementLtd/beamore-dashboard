@@ -199,6 +199,9 @@ export function issuesTracker(r) {
   return out;
 }
 
+/** The photo's pixel shape the way round it's shown on the page (w/h, or h/w when it's stored turned on its side). */
+export const pixelShape = (pixels, shownShape) => (Math.abs(Math.log(pixels / shownShape)) <= Math.abs(Math.log(1 / pixels / shownShape)) ? pixels : 1 / pixels);
+
 /** Photo checks: needs sharp (passed in so this file stays free of native modules). */
 export async function photoStats(r, sharp) {
   const out = [];
@@ -208,7 +211,9 @@ export async function photoStats(r, sharp) {
     try { meta = await sharp(buf).metadata(); } catch { /* unreadable image */ }
     const uses = r.shown.filter((s) => s.path === path);
     const w = meta.width ?? 0, h = meta.height ?? 0;
-    const stretched = uses.some((u) => !u.cropped && w && h && Math.abs((u.cx / u.cy) / (w / h) - 1) > 0.08);
+    // a phone photo is often stored sideways with an "upright" tag, so compare with whichever way round matches how
+    // it's shown (Peter Lord's King's Maths School portraits were treated as landscape, 15 Nov 2026)
+    const stretched = uses.some((u) => !u.cropped && w && h && Math.abs((u.cx / u.cy) / pixelShape(w / h, u.cx / u.cy) - 1) > 0.08);
     // what matters is detail for the size it's shown at: 150-300 dots per inch prints well
     const shownCm = Math.max(0, ...uses.map((u) => u.cx / 360000));
     const dpi = shownCm && w ? Math.round(w / (shownCm / 2.54)) : null;
@@ -506,7 +511,8 @@ export function uniformPhotos(r, stats, rels) {
       const crop = /<a:srcRect\b[^>]*(l|t|r|b)="-?\d+"/.test(d);
       // keep each photo's orientation (Ronan, 15 Nov 2026): landscape photos all 4:3 and s wide, portrait all 3:4 and
       // s tall, near-square ones s square (as Christian's); only odd shapes (panoramas) trimmed to fit
-      const shown = crop ? +ext[1] / +ext[2] : x.ph.width / x.ph.height;
+      // portrait or landscape as it appears on the page (not as the pixels happen to be stored)
+      const shown = crop ? +ext[1] / +ext[2] : pixelShape(x.ph.width / x.ph.height, +ext[1] / +ext[2]);
       const shape = shown >= 1.15 ? 4 / 3 : shown <= 0.87 ? 3 / 4 : 1;
       const cx = Math.round(shape > 1 ? s : shape < 1 ? s * 0.75 : s);
       const cy = Math.round(shape > 1 ? s * 0.75 : shape < 1 ? s : s);
@@ -544,6 +550,16 @@ export async function saveReport(r) {
 }
 
 /** For the PDF: any tracked changes left are accepted, and comments taken out. The Word file itself isn't touched. */
+/** Makes the dashboard's own tracked changes (spelling fixes) part of the text; anyone else's are left alone. */
+export function acceptOwnRevisions(r) {
+  const mine = `w:author="${esc(AUTHOR)}"`;
+  r.xml = r.xml
+    .replace(/<w:del\b[^>]*>[\s\S]*?<\/w:del>/g, (m) => (m.slice(0, m.indexOf(">")).includes(mine) ? "" : m))
+    .replace(/<w:ins\b([^>]*)>([\s\S]*?)<\/w:ins>/g, (m, attrs, inner) => (attrs.includes(mine) ? inner : m));
+  r.spans = paragraphSpans(r.xml);
+  r.paragraphs = r.spans.map((s, i) => ({ i, text: textOf(r.xml.slice(s.start, s.end)) }));
+}
+
 export async function cleanCopy(buf) {
   const zip = await JSZip.loadAsync(buf);
   for (const part of Object.keys(zip.files).filter((n) => /^word\/(document|header\d*|footer\d*)\.xml$/.test(n))) {

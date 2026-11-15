@@ -127,8 +127,9 @@ export async function driveClient(admin: SupabaseClient) {
       if (!res.ok) throw new Error(`Google Drive move ${res.status}: ${(await res.text()).slice(0, 200)}`);
     },
     /**
-     * Puts a clerk's original report in Drive's bin (restorable for 30 days) once its checked copy has been sent
-     * (Ronan, 15 Nov 2026). The only thing the dashboard ever bins.
+     * Puts the dashboard's working copy of a report ("Checked (dashboard)" folder) in Drive's bin (restorable for 30
+     * days) once its contents have been written over the clerk's file and sent (Ronan, 15 Nov 2026). The only thing
+     * the dashboard ever bins.
      */
     binOriginalReport: async (fileId: string) => {
       const res = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?supportsAllDrives=true`, { method: "PATCH", headers: { Authorization: `Bearer ${access}`, "Content-Type": "application/json" }, body: JSON.stringify({ trashed: true }), cache: "no-store" });

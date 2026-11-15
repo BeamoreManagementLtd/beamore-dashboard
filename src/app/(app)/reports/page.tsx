@@ -69,6 +69,9 @@ export default async function Reports({ searchParams }: { searchParams: Promise<
 
   // timings this month: clerks (visit → upload) and checkers (upload → sent)
   const dm = doneMonth ?? [];
+  // sent reports whose feedback hasn't gone to the clerk (Andy K's list)
+  const { data: feedback } = await db.from("reports").select("id,file_name,clerk_name,sent_at,score,issues,clerk_points,clerks(name)")
+    .eq("status", "sent").is("clerk_email_sent_at", null).gte("sent_at", addDays(t, -30)).order("sent_at", { ascending: false }).limit(100);
   // each clerk's score trend over the last six months (getting better or worse), linking to the graph on their page
   const { data: history } = await db.from("reports").select("clerk_id,clerk_name,visit_date,checked_at,score,clerks(name)")
     .not("score", "is", null).gte("checked_at", addDays(t, -183)).order("checked_at");
@@ -144,6 +147,29 @@ export default async function Reports({ searchParams }: { searchParams: Promise<
                   <td className="small">{r.high ? <span className="pill bad">{r.high} must check</span> : null} {r.issueCount ? `${r.issueCount}` : r.status === "ready" ? "none" : ""}</td>
                   <td><span className={`pill ${tone}`}>{st}</span>{r.status === "failed" && <span className="two small neg">{(r.error ?? "").slice(0, 60)}</span>}</td>
                   <td className="small">{name(r.checker_id) ?? <span className="pill bad">None</span>}</td>
+                </tr>
+              );
+            })}</tbody>
+          </table></div>
+        )}
+      </section>
+
+      {/* Ronan, 15 Nov 2026: reports go out fast; the improvements are for Andy K to take up with the clerks afterwards */}
+      <section className="panel">
+        <h2>Feedback for clerks <span className="small muted">{(feedback ?? []).length}</span></h2>
+        <p className="small muted">Reports already sent in the last 30 days whose feedback email hasn&apos;t gone to the clerk yet. Open one to see everything the check found and the drafted email, change it if you like, and send it from your own email.</p>
+        {!(feedback ?? []).length ? <p className="empty">Nothing waiting.</p> : (
+          <div className="tbl-wrap"><table>
+            <thead><tr><th>Clerk</th><th>Report</th><th>Sent</th><th className="num">Score</th><th>Found</th></tr></thead>
+            <tbody>{(feedback ?? []).map((r) => {
+              const iss = (r.issues ?? []) as Issue[];
+              return (
+                <tr key={r.id}>
+                  <td className="small">{(r.clerks as unknown as { name?: string } | null)?.name ?? r.clerk_name ?? "—"}</td>
+                  <td className="small"><Link href={`/reports/${r.id}#clerk`}>{r.file_name}</Link></td>
+                  <td className="small">{fd(r.sent_at)}</td>
+                  <td className="num">{typeof r.score === "number" ? r.score : "—"}</td>
+                  <td className="small">{iss.filter((i) => i.severity !== "low").length} points{((r.clerk_points ?? []) as string[]).length ? `, ${(r.clerk_points as string[]).length} suggestions` : ""}</td>
                 </tr>
               );
             })}</tbody>

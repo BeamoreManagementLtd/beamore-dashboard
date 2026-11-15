@@ -25,7 +25,7 @@ function clerkNote(r: Record<string, unknown>, sender: string) {
   const fixed = [
     f.spelling?.length ? `${f.spelling.length} spelling/grammar correction${f.spelling.length === 1 ? "" : "s"} (e.g. ${f.spelling.slice(0, 3).map((s) => `"${s.find}" → "${s.replace}"`).join(", ")})` : null,
     f.renamed ? `the file name, to match the other reports in the folder (now "${f.renamed}")` : null,
-    f.mixed ? `the photos, now all the same size (about ${f.side_cm ?? 6} cm wide, like Christian Tate's reports)` : null,
+    f.mixed ? `the photos, now all the same size (about ${f.side_cm ?? 6} cm wide)` : null,
     f.stretched ? `${f.stretched} photo${f.stretched === 1 ? "" : "s"} that had stretched out of shape` : null,
     f.enlarged ? `${f.enlarged} photo${f.enlarged === 1 ? "" : "s"} that were a bit small to see on the page` : null,
     f.rotated ? `${f.rotated} photo${f.rotated === 1 ? "" : "s"} that were on their side` : null,
@@ -59,7 +59,7 @@ function clerkNote(r: Record<string, unknown>, sender: string) {
     ...(programmeHelp ? ["", "Clients read the progress vs programme section closely, so it's well worth getting right. This is the approach that works well:", ...PROGRAMME_METHOD, "", EXAMPLES.programme.intro, EXAMPLES.programme.marker] : []),
     ...(summaryHelp ? ["", ...SUMMARY_METHOD] : []),
     // the best bits of everyone's reports this one doesn't do yet (standards.ts)
-    ...(missed.length ? ["", "We're bringing together the best bits of everyone's reports so we all work the same way. A few ideas that would make yours even better:", ...missed.map((s) => `- ${tipFor(s, onDfeForm)} (${STANDARDS[s].from} are a good example)`)] : []),
+    ...(missed.length ? ["", "We're bringing together the best bits of everyone's reports so we all work the same way. A few ideas that would make yours even better:", ...missed.map((s) => `- ${tipFor(s, onDfeForm)}`)] : []),
     "", "Thanks again. Any questions, just give me a shout.", "", "Kind regards,", sender,
   ].join("\n");
 }
@@ -136,7 +136,7 @@ export default async function ReportPage({ params, searchParams }: { params: Pro
       {r.checked_at && (
         <div className="grid2">
           <section className="panel">
-            <h2>What was changed {typeof r.score === "number" && <span className={`pill ${r.score >= 85 ? "good" : r.score >= 65 ? "warn" : "bad"}`} title="Quality score: how much needed fixing">{r.score}/100</span>}</h2>
+            <h2>What was changed {typeof r.score === "number" && <span className={`pill ${r.score >= 70 ? "good" : r.score >= 55 ? "warn" : "bad"}`} title="Overall quality of the report, judged as a whole">{r.score}/100</span>}</h2>
             {(() => {
               const f = (r.fixes ?? {}) as { spelling?: { find: string; replace: string }[]; rotated?: number; shrunk?: number; stretched?: number; enlarged?: number; uniform?: number; side_cm?: number | null; renamed?: string | null };
               return (
@@ -154,10 +154,10 @@ export default async function ReportPage({ params, searchParams }: { params: Pro
               );
             })()}
           </section>
-          <section className="panel">
+          <section className="panel" id="clerk">
             <h2>Email to the clerk</h2>
             {r.clerk_email_sent_at ? <p className="callout good">Sent to the clerk {fdt(r.clerk_email_sent_at)} by {nameOf(r.clerk_email_sent_by) ?? ""}.</p>
-              : <p className="small muted">What had to be fixed and what to do better next time, with examples from Christian Tate&apos;s reports where they help (each [Example: …] line becomes the picture; delete the line to leave it out). Change anything you like, then send it, or leave it.</p>}
+              : <p className="small muted">What had to be fixed and what to do better next time, with example pictures where they help (each [Example – …] line becomes the picture; delete the line to leave it out). It never names other clerks or their reports. Change anything you like, then send it, or leave it.</p>}
             {conn ? (
               <form action={sendClerkEmail.bind(null, id)} className="form">
                 <div className="field"><label htmlFor="cto">To</label><input id="cto" name="to" defaultValue={(r.clerks as unknown as { email?: string } | null)?.email ?? ""} placeholder="the clerk's email" /></div>

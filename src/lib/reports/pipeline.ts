@@ -4,7 +4,7 @@ import sharp from "sharp";
 import { driveClient } from "@/lib/google";
 import { projectMatcher } from "@/lib/project-match";
 import { sendReportEmail } from "@/lib/google-user";
-import { readReport, photoStats, shrinkPhotos, trackSpelling, addComments, saveReport, photoHashes, reusedCount, uncaptioned, unticked, rotatePhoto, fixPhotoShapes, uniformPhotos, healthSafety, issuesTracker } from "./docx.mjs";
+import { readReport, photoStats, shrinkPhotos, trackSpelling, addComments, saveReport, photoHashes, reusedCount, uncaptioned, unticked, rotatePhoto, fixPhotoShapes, uniformPhotos, healthSafety, issuesTracker, cleanCopy, acceptOwnRevisions } from "./docx.mjs";
 
 /** 0-100: how much the report needed fixing (must-checks count most). Lateness is shown separately. */
 /**
@@ -38,7 +38,6 @@ export function programmeGaps(p: Programme | null | undefined) {
     !p.narrative ? "add at least 5-6 lines weighing up all the items, the causes, and where you think the project is" : "",
     !p.overall_weeks ? 'give your overall view in weeks, e.g. "I estimate the contractor is 3.5 weeks behind programme"' : "",
     p.looks_from_site_team ? "give your own independent view, not the site team's figures" : "",
-    p.percentages_shown ? "leave percentages out (use them to work out the weeks only)" : "",
   ].filter(Boolean);
 }
 import { conventionName } from "./naming.mjs";
@@ -180,7 +179,7 @@ export async function checkOne(admin: SupabaseClient, id: string) {
   const { data: clerks } = clerkIds.length ? await admin.from("clerks").select("id,name").in("id", clerkIds) : { data: [] };
   const since = new Date(Date.now() - 21 * 864e5).toISOString().slice(0, 10);
   const { data: visits } = rep.project_id ? await admin.from("diary_visits").select("visit_date,side,clerks(name)").eq("project_id", rep.project_id).gte("visit_date", since).order("visit_date") : { data: [] };
-  const visitList = [...new Set((visits ?? []).map((v) => `${v.visit_date} ${(v.clerks as unknown as { name?: string } | null)?.name ?? ""}${v.side === "planned" ? " (planned)" : ""}`.trim()))];
+  void [...new Set((visits ?? []).map((v) => `${v.visit_date} ${(v.clerks as unknown as { name?: string } | null)?.name ?? ""}${v.side === "planned" ? " (planned)" : ""}`.trim()))];
   const { data: earlier } = rep.project_id ? await admin.from("reports").select("report_number,visit_date,text_snapshot,photo_hashes,photo_count").eq("project_id", rep.project_id).eq("kind", rep.kind).neq("id", id).not("checked_at", "is", null).order("uploaded_at", { ascending: false }).limit(5) : { data: [] };
   const prev = earlier?.[0] ?? null;
   const counts = (earlier ?? []).map((e) => e.photo_count).filter((n): n is number => typeof n === "number");
@@ -198,7 +197,8 @@ export async function checkOne(admin: SupabaseClient, id: string) {
   const ai = await checkReport({
     fileName: rep.file_name, folder: rep.folder_name ?? "", project: p?.name ?? rep.project_folder_name ?? "", client: (p?.clients as unknown as { name?: string } | null)?.name ?? null,
     projectNumbers: [p?.dfe_project_number, p?.po_number].filter((x): x is string => !!x && /\d/.test(x)),
-    expectedClerks: (clerks ?? []).map((c) => c.name), diaryVisits: visitList,
+    // the diary's dates are only estimates for costing, so reports aren't checked against them (Ronan, 15 Nov 2026)
+    expectedClerks: (clerks ?? []).map((c) => c.name), diaryVisits: [],
     previous: prev ? { number: prev.report_number, date: prev.visit_date, text: prev.text_snapshot ?? "" } : null,
     paragraphs: r.paragraphs, blanks: r.blanks, placeholders: r.placeholders,
     photos: { count: stats.count, blurry: stats.blurry, smallOnPage: stats.smallOnPage, stretched: stats.stretched, mb: raw.length / 1e6, usual, reused, uncaptioned: uncaptioned(r) },
@@ -216,17 +216,20 @@ export async function checkOne(admin: SupabaseClient, id: string) {
 
   // put the fixes into the Word file: spelling, grammar and punctuation as tracked changes, photos turned upright, all
   // the same size (Christian's: 6 cm squares) and made smaller, issues as comments
+  // photos aren't turned automatically any more: from small samples the AI turned portrait photos sideways (Peter
+  // Lord, King's Maths School, 15 Nov 2026). Ones that look sideways are pointed out for the checker instead.
   const rotated: string[] = [];
-  for (const t of ai.rotate ?? []) {
-    const path = thumbPaths[t.photo - 1];
-    if (path && !rotated.includes(path)) { await rotatePhoto(r, sharp, path, t.degrees); rotated.push(path); }
-  }
+  const sideways = [...new Set((ai.rotate ?? []).map((t) => thumbPaths[t.photo - 1]).filter(Boolean))];
+  void rotatePhoto;
   // blank boxes are left for the clerk (Ronan, 15 Nov 2026); photo shapes and sizes are put right
   // every photo the same size (Christian's format); where that can't apply, at least stretched/tiny photos put right
   const uniform = uniformPhotos(r, await photoStats(r, sharp), await r.zip.file("word/_rels/document.xml.rels")!.async("string"));
   const shapes = uniform.changed ? { stretched: 0, enlarged: 0 } : await fixPhotoShapes(r, await photoStats(r, sharp));
   const shrunk = await shrinkPhotos(r, sharp, await photoStats(r, sharp));
   const spelt = trackSpelling(r, ai.spelling);
+  // spelling is fixed straight into the text, not left as tracked changes to accept (Ronan, 15 Nov 2026); the page
+  // lists every correction under "What was changed"
+  acceptOwnRevisions(r);
   const rank = { high: 0, medium: 1, low: 2 } as const;
   // not enough photos or not enough written, against the benchmark clerks' reports (weekly diaries: 35-57 photos,
   // 1,800-5,000 words); monthly reports aren't judged on this
@@ -264,7 +267,10 @@ export async function checkOne(admin: SupabaseClient, id: string) {
     trk.closedReasonUnclear.length ? `item${trk.closedReasonUnclear.length === 1 ? "" : "s"} ${nums(trk.closedReasonUnclear)} closed, but the comment doesn't say why (e.g. ${trk.unclearExamples[0] ? `item ${trk.unclearExamples[0].no}: "${trk.unclearExamples[0].comment}"` : ""})` : "",
   ].filter(Boolean);
   if (trkProblems.length) extra.push({ severity: "medium", kind: "other", text: `Issues tracker: ${trkProblems.join("; ")}`, p: null });
-  const issues: Issue[] = [...extra, ...ai.issues].sort((a, b) => rank[a.severity] - rank[b.severity]);
+  if (sideways.length) extra.push({ severity: "low", kind: "photos", text: `${sideways.length} photo${sideways.length === 1 ? "" : "s"} may be on ${sideways.length === 1 ? "its" : "their"} side: please check and turn by hand if so (not changed automatically)`, p: null });
+  // the date issued to the Lead Consultant is filled in by the office when it's sent (Ronan, 15 Nov 2026)
+  const notOurs = (i: Issue) => /date issued to (the )?lead consultant|issued to lead consultant/i.test(i.text) || (i.kind === "photos" && /caption/i.test(i.text) && !/fewer|only \d+ photo/i.test(i.text)) || /beamore'?s diary|in the diary for this job|diary (says|shows)/i.test(i.text);
+  const issues: Issue[] = [...extra, ...ai.issues.filter((i) => !notOurs(i))].sort((a, b) => rank[a.severity] - rank[b.severity]);
   if (spelt.skipped.length) issues.push({ severity: "low", kind: "other", text: `Spelling not changed automatically (please fix by hand): ${spelt.skipped.slice(0, 8).map((s) => `${s.find} → ${s.replace}`).join(", ")}`, p: null });
   await addComments(r, issues.filter((i) => i.severity !== "low").slice(0, 15).map((i) => ({ p: i.p, text: `${i.severity === "high" ? "Must check: " : ""}${i.text}` })));
   const out = await saveReport(r);
@@ -295,7 +301,9 @@ export async function checkOne(admin: SupabaseClient, id: string) {
     photo_hashes: hashes, photo_count: stats.count,
     fixes: { spelling: applied, rotated: rotated.length, shrunk: shrunk.changed, stretched: shapes.stretched, enlarged: shapes.enlarged, uniform: uniform.changed, mixed: !uniform.wasUniform, side_cm: uniform.side ? +(uniform.side / 360000).toFixed(1) : null, renamed: renamedTo, words, programme: prog ?? null, standards: ai.standards ?? null, health_safety: hs, tracker: trk },
     // lateness is shown on its own on the Reports page
-    score: qualityScore(issues, spelt.applied, 0, { renamed: !!renamedTo, mixedPhotos: !uniform.wasUniform, rotated: rotated.length, stretched: stats.stretched, oversized: shrunk.changed > 0 && raw.length > 10_000_000, standardsMissed: Object.values(ai.standards ?? {}).filter((v) => v === false).length }),
+    // the AI's overall judgement of the report (Ronan, 15 Nov 2026: counting off points per issue left good reports
+    // near 0); the old formula only if it didn't give one
+    score: Number.isFinite(ai.quality) && ai.quality >= 0 && ai.quality <= 100 ? Math.round(ai.quality) : qualityScore(issues, spelt.applied, 0, { renamed: !!renamedTo, mixedPhotos: !uniform.wasUniform, rotated: rotated.length, stretched: stats.stretched, oversized: shrunk.changed > 0 && raw.length > 10_000_000, standardsMissed: Object.values(ai.standards ?? {}).filter((v) => v === false).length }),
     clerk_points: [
       // worded as friendly suggestions, not orders (Ronan, 15 Nov 2026: "steer them in the right direction")
       ...(renamedTo ? [`If you could name the file the same way as the others in the folder, e.g. "${renamedTo.replace(/\.docx?$/i, "")}", it keeps everything easy to find`] : []),
@@ -303,7 +311,7 @@ export async function checkOne(admin: SupabaseClient, id: string) {
       ...(rotated.length ? ["A quick check that photos are the right way up before inserting them would help"] : []),
       ...(stats.stretched ? ["A handy tip: resizing photos from a corner (or holding Shift) stops them stretching out of shape"] : []),
       ...(raw.length > 10_000_000 ? [`The file came in at ${(raw.length / 1e6).toFixed(0)} MB, so it's worth shrinking the photos before inserting them (in Word: Picture Format > Compress Pictures)`] : []),
-      ...(!early && (hsGone.length || hsThin.length >= 3) ? [`It would be great to see all ${hs.length} health and safety items at the start of the report filled in, even briefly, rather than taken out or left as "N/A". This time it was ${hs.filter((h) => h.status !== "ok").map((h) => h.label).join(", ")}. ${onDfeForm ? "Christian Tate's St Leonards diaries" : "Keith Osorio's Holiday Inn Camden reports"} are a good example`] : []),
+      ...(!early && (hsGone.length || hsThin.length >= 3) ? [`It would be great to see all ${hs.length} health and safety items at the start of the report filled in, even briefly, rather than taken out or left as "N/A". This time it was ${hs.filter((h) => h.status !== "ok").map((h) => h.label).join(", ")}`] : []),
       ...(trkProblems.length ? [`On the issues tracker: it works best as a simple record of each issue and which report to read about it in (so no photos), with every item red, orange or green. When you close one, add the date, turn it green and add a line in the comments saying why it's closed, e.g. "certificate received 12/11/26" or "remedial work seen complete on 12/11/26", rather than leaving the earlier progress note as the last word`] : []),
       ...(prog && (prog.verdict === "weak" || prog.verdict === "missing") ? [`On the ${prog.dfe ? "progress vs programme section" : "progress summary"}, it would help to ${progGaps.join("; ") || "follow the approach below"}`] : []),
       ...(ai.clerk_points ?? []),
@@ -421,12 +429,17 @@ async function sendIfPdfReady(admin: SupabaseClient, reportId: string) {
     const at = new Date().toISOString();
     await admin.from("reports").update({ status: "sent", pdf_file_id: pdfFile.id, sent_at: at, done_at: at, sent_by: m.by, sent_to: m.to, sent_cc: m.cc, gmail_message_id: sent.id, pending_email: null, updated_at: at }).eq("id", reportId);
     if (rep.project_id) await admin.from("project_events").insert({ project_id: rep.project_id, source: "team", kind: "Report sent", who: m.by_name ?? sent.from, body: `${rep.pdf_name} sent from ${sent.from} to ${m.to.join(", ")}${m.cc.length ? `, cc ${m.cc.join(", ")}` : ""}` });
-    // sent: the clerk's original goes to Drive's bin (restorable for 30 days) and the checked copy takes its place
+    // sent: the clerk's own file is overwritten with the checked version, clean (spelling fixed, any changes the
+    // checker made, no comments left in), keeping its place in the folder and Drive's history of the old version; it
+    // takes the folder's naming pattern; the working copy in "Checked (dashboard)" then goes to the bin (Ronan, 15 Nov
+    // 2026: "it also then overwrites the file that the guys uploaded with the new one")
     if (rep.checked_file_id && rep.checked_folder_id) {
       try {
-        await g.binOriginalReport(rep.drive_file_id);
-        await g.move(rep.checked_file_id, rep.checked_folder_id, rep.folder_id);
-        await admin.from("reports").update({ original_trashed_at: new Date().toISOString(), file_name: rep.checked_name ?? rep.file_name }).eq("id", reportId);
+        const checked = Buffer.from(await g.download(rep.checked_file_id));
+        await g.replaceContent(rep.drive_file_id, await cleanCopy(checked), DOCX);
+        if (rep.checked_name && rep.checked_name !== rep.file_name) await g.rename(rep.drive_file_id, rep.checked_name).catch(() => undefined);
+        await g.binOriginalReport(rep.checked_file_id);
+        await admin.from("reports").update({ original_trashed_at: new Date().toISOString(), file_name: rep.checked_name ?? rep.file_name, checked_file_id: null }).eq("id", reportId);
       } catch (e) {
         await admin.from("reports").update({ error: `Sent, but tidying the folder didn't finish: ${(e instanceof Error ? e.message : String(e)).slice(0, 200)}` }).eq("id", reportId);
       }
