@@ -26,6 +26,16 @@ export async function findDiaries(drive: Awaited<ReturnType<typeof driveClient>>
   return out;
 }
 
+/**
+ * The diary the team is working in: this calendar year's (Diary 2026 until 31 December, then Diary 2027), else the
+ * newest one before it. Next year's file can exist well before January (Ronan, 16 Nov 2026), so "newest" isn't it.
+ */
+export function workingYear(files: Record<string, string>, today = new Date()) {
+  const now = String(today.getUTCFullYear());
+  const years = Object.keys(files).sort();
+  return years.filter((y) => y <= now).at(-1) ?? years[0];
+}
+
 /** Downloads the diaries from Drive (only when one has changed, unless forced) and loads them into the database. */
 export async function syncDiary(admin: SupabaseClient, { force = false } = {}) {
   const { data: run } = await admin.from("sync_runs").insert({ source: "diary" }).select("id").single();
@@ -51,7 +61,11 @@ export async function syncDiary(admin: SupabaseClient, { force = false } = {}) {
       parsed.push(parseDiary(wb, { year: Number(years[i]), fileLabel: metas[i].name }) as Parsed);
     }
     const newestFirst = [...parsed].reverse();
-    const pick = <K extends keyof Parsed>(k: K): Parsed[K] => newestFirst.find((p) => (p[k] as unknown[]).length)?.[k] ?? parsed[0][k];
+    // the single-copy tabs (Projects, Contact details, emails, POs) from the diary the team is working in, falling
+    // back to the others for anything it doesn't have
+    const wi = years.indexOf(workingYear(files));
+    const preferred = [parsed[wi], ...newestFirst.filter((p) => p !== parsed[wi])];
+    const pick = <K extends keyof Parsed>(k: K): Parsed[K] => preferred.find((p) => (p[k] as unknown[]).length)?.[k] ?? parsed[0][k];
     const merged = {
       visits: parsed.flatMap((p) => p.visits), absences: parsed.flatMap((p) => p.absences), invoiceLines: parsed.flatMap((p) => p.invoiceLines),
       rates: newestFirst.flatMap((p) => p.rates), clerks: [...new Set(parsed.flatMap((p) => p.clerks))],

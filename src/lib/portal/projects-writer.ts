@@ -5,6 +5,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type ExcelJS from "exceljs";
 import { driveClient } from "@/lib/google";
 import { loadWorkbook } from "@/lib/sync/load-workbook.mjs";
+import { workingYear } from "@/lib/sync/diary-sync";
 import { setCell } from "./diary-cells.mjs";
 import { sheetPath } from "./xlsx-sheet.mjs";
 
@@ -46,10 +47,16 @@ export async function writeProjectsTab(admin: SupabaseClient, { write = true } =
   if (error) throw new Error(error.message);
   const clerkName = new Map((clerks ?? []).map((c) => [c.id, c.name as string]));
   const results: { year: string; changed: number; waiting?: boolean; note: string }[] = [];
-  // the newest diary is the one people work in; older years keep their tab as it was
-  const year = Object.keys(files).sort().at(-1);
+  // the diary the team is working in (this year's), and next year's once it exists so its copy of the tab stays up to
+  // date until January; older years keep their tab as it was (Ronan, 16 Nov 2026)
+  const working = workingYear(files);
   let copied: string[] = [];
-  if (year) { const r = await writeOne(g, files[year], year, projects ?? [], clerkName, contacts ?? [], write); copied = r.copied ?? []; results.push({ year, changed: r.changed, waiting: r.waiting, note: r.note }); }
+  for (const year of Object.keys(files).sort().filter((y) => y >= working)) {
+    const r = await writeOne(g, files[year], year, projects ?? [], clerkName, contacts ?? [], write);
+    // the sync reads the working year's tab, so that's the one that settles the pending changes
+    if (year === working) copied = r.copied ?? [];
+    results.push({ year, changed: r.changed, waiting: r.waiting, note: r.note });
+  }
   // email list changes made on the dashboard are now in the diary: the diary sync can read those projects again
   // (only if nobody changed the lists again meanwhile)
   if (write) for (const id of copied) {
