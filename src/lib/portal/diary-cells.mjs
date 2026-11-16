@@ -21,6 +21,16 @@ export function setCell(xml, ref, text, style) {
   return xml.slice(0, m[0].index) + fresh + xml.slice(m[0].index + whole.length);
 }
 
+/** Replaces the contents of one existing cell with a number, keeping its style (e.g. an amount in a £ column). */
+export function setNumberCell(xml, ref, n) {
+  const re = new RegExp(String.raw`<((?:\w+:)?)c\b([^>]*?)\br="${ref}"([^>]*?)(\/>|>[\s\S]*?<\/\1c>)`, "g");
+  const m = [...xml.matchAll(re)];
+  if (m.length !== 1) throw new Error(`cell ${ref} isn't in the sheet as expected`);
+  const [whole, pre, a, b] = m[0];
+  const attrs = `${a} r="${ref}"${b}`.replace(/\s+t="[^"]*"/, "").replace(/\s*\/$/, "").trim().replace(/\s+/g, " ");
+  return xml.slice(0, m[0].index) + `<${pre}c ${attrs}><${pre}v>${Number(n)}</${pre}v></${pre}c>` + xml.slice(m[0].index + whole.length);
+}
+
 /** Sets the widths of some columns ({ 6: 30 } = column F, 30 characters wide); other columns keep theirs. */
 export function setColWidths(xml, widths) {
   const m = /<((?:\w+:)?)cols>([\s\S]*?)<\/\1cols>/.exec(xml);

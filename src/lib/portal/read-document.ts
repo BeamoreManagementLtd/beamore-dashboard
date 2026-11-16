@@ -58,7 +58,7 @@ const QUALIFICATION = {
 
 const INVOICE = {
   type: "object", additionalProperties: false,
-  required: ["readable", "is_invoice", "supplier", "invoice_number", "invoice_date", "period", "net_gbp", "vat_gbp", "gross_gbp", "cis", "days", "lines", "visits", "problems"],
+  required: ["readable", "is_invoice", "supplier", "invoice_number", "invoice_date", "period", "net_gbp", "vat_gbp", "gross_gbp", "cis", "days", "lines", "visits", "expenses", "problems"],
   properties: {
     readable: { type: "boolean" },
     is_invoice: { type: "boolean" },
@@ -84,6 +84,11 @@ const INVOICE = {
           half_days: { type: "integer", description: "1 = half day / one visit, 2 = full day" },
         },
       },
+    },
+    // costs on top of the site days, for the diary's "Other costs" line (Ronan, 15 Nov 2026)
+    expenses: {
+      type: "array", description: "Costs charged on top of the site days/visits: hotels, mileage, travel, parking, materials. Amounts before VAT. Empty if none",
+      items: { type: "object", additionalProperties: false, required: ["text", "amount_gbp"], properties: { text: { type: "string", description: "what it is, short, e.g. 'Premier Inn 2 nights'" }, amount_gbp: { type: "number" } } },
     },
     problems: { type: "array", items: s },
   },

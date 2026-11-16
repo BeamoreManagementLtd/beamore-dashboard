@@ -6,7 +6,7 @@ import type ExcelJS from "exceljs";
 import { driveClient } from "@/lib/google";
 import { loadWorkbook } from "@/lib/sync/load-workbook.mjs";
 import { matchSites } from "./read-document";
-import { setCell, cellStyle, greenVersion } from "./diary-cells.mjs";
+import { setCell, setNumberCell, cellStyle, greenVersion } from "./diary-cells.mjs";
 import { companyLabel } from "./contact-sheet.mjs";
 
 /**
@@ -128,6 +128,10 @@ export async function writeInvoiceToDiary(admin: SupabaseClient, uploadId: strin
 
   const changes: { sheet: string; ref: string; value: string; work: string; diary: string }[] = [];
   const markers: { sheet: string; ref: string }[] = [];
+  const expenses = ((((u.ai_result as { expenses?: { text: string; amount_gbp: number | null }[] } | null)?.expenses) ?? [])
+    .filter((e) => e && e.text && Number(e.amount_gbp) > 0));
+  const extras: { sheet: string; ref: string; text?: string; amount?: number }[] = [];
+  let expenseNote = "";
   for (const month of months) {
     const sheet = MONTHS[Number(month.slice(5)) - 1];
     const ws = wb.getWorksheet(sheet);
@@ -175,6 +179,19 @@ export async function writeInvoiceToDiary(admin: SupabaseClient, uploadId: strin
     }
     const label = rows.find((r) => /^invoice received$/i.test(String(cellVal(ws.getCell(r, s + 7)) ?? "").trim()));
     if (label) markers.push({ sheet, ref: `${colName(s + 7)}${label}` });
+    // the invoice's expenses (hotels, mileage...) on the block's "Other costs" line, so the block's total matches the
+    // invoice (Ronan, 15 Nov 2026); diaries from 2027 have that line under day 31
+    if (expenses.length && month === months[months.length - 1]) {
+      const oc = [1, 2, 3].map((k) => Math.max(...rows) + k).find((r) => /^other costs/i.test(String(cellVal(ws.getCell(r, s)) ?? "").trim()));
+      const total = Math.round(expenses.reduce((n, e) => n + Number(e.amount_gbp), 0) * 100) / 100;
+      if (!oc) expenseNote = `the invoice has £${total.toFixed(2)} of expenses (${expenses.map((e) => e.text).join(", ")}): this diary has no Other costs line, so add them by hand`;
+      else if (!isBlank(cellVal(ws.getCell(oc, s + 2))) || !isBlank(cellVal(ws.getCell(oc, s + 5)))) expenseNote = `${clerkName}'s Other costs line already has something in it; the invoice's £${total.toFixed(2)} of expenses weren't added`;
+      else {
+        extras.push({ sheet, ref: `${colName(s + 2)}${oc}`, text: expenses.map((e) => `${e.text} £${Number(e.amount_gbp).toFixed(2)}`).join("; ").slice(0, 250) });
+        extras.push({ sheet, ref: `${colName(s + 5)}${oc}`, amount: total });
+        expenseNote = `£${total.toFixed(2)} of expenses put on the Other costs line`;
+      }
+    }
   }
 
   // ---- patch only those cells in the original file
@@ -193,6 +210,10 @@ export async function writeInvoiceToDiary(admin: SupabaseClient, uploadId: strin
     const p = pathOf(sheet);
     let xml = await zip.file(p)!.async("string");
     for (const c of changes.filter((x) => x.sheet === sheet)) xml = setCell(xml, c.ref, c.value);
+    for (const e of extras.filter((x) => x.sheet === sheet)) {
+      try { xml = e.amount !== undefined ? setNumberCell(xml, e.ref, e.amount) : setCell(xml, e.ref, e.text ?? ""); }
+      catch { expenseNote = "the expenses couldn't be put on the Other costs line; please add them by hand"; }
+    }
     for (const m of markers.filter((x) => x.sheet === sheet)) {
       const st = cellStyle(xml, m.ref);
       const green = st ? greenVersion(styles, Number(st.s)) : null;
@@ -215,7 +236,7 @@ export async function writeInvoiceToDiary(admin: SupabaseClient, uploadId: strin
   await admin.from("portal_diary_cells").insert(changes.map((c) => ({ upload_id: uploadId, sheet: c.sheet, cell: c.ref, value: c.value, work_date: c.work, diary_date: c.diary, revision_after: after.headRevisionId })));
   for (const [wording, site] of learnt) await admin.from("site_aliases").upsert({ clerk_id: u.clerk_id, wording, site_as_typed: site, created_by: "AI" }, { onConflict: "clerk_id,wording" });
   const days = changes.length / 2;
-  return { state: "written", note: `${changes.length} half-day${changes.length === 1 ? "" : "s"} (${days} day${days === 1 ? "" : "s"}) written to ${[...new Set(changes.map((c) => c.sheet))].join(", ")}${markerNotes.length ? `; ${markerNotes.join("; ")}` : "; Invoice received marked green"}` };
+  return { state: "written", note: `${changes.length} half-day${changes.length === 1 ? "" : "s"} (${days} day${days === 1 ? "" : "s"}) written to ${[...new Set(changes.map((c) => c.sheet))].join(", ")}${markerNotes.length ? `; ${markerNotes.join("; ")}` : "; Invoice received marked green"}${expenseNote ? `; ${expenseNote}` : ""}` };
 }
 
 /** Every 15 minutes: invoices read by AI that are waiting to go into the diary (one at a time, so writes never overlap). */
