@@ -60,15 +60,36 @@ export async function ensureProjectFolder(admin: SupabaseClient, projectId: stri
   const added: string[] = [];
   for (const sub of spec.subfolders) if (!have.some((h) => same(h.name, sub))) { await mkdir(g, folderId, sub); added.push(sub); }
   await admin.from("projects").update({ drive_folder_id: folderId, folder_kind: kind }).eq("id", projectId);
-  const msg = `${reused ? "Using the existing" : "Created"} folder Work/${spec.parent}/${p.name} (${spec.label})${added.length ? `; added ${added.join(", ")}` : "; subfolders already there"}`;
+  const msg = `${p.drive_folder_id ? "Checked the" : reused ? "Using the existing" : "Created"} folder Work/${spec.parent}/${p.name} (${spec.label})${added.length ? `; added ${added.join(", ")}` : "; subfolders already there"}`;
   await log(admin, projectId, "Drive folder", msg);
   return msg;
 }
 
 export const infoRequestSubject = (name: string) => `${name}: project information needed`;
 
+/**
+ * The automatic checklist matches DfE or not (Ronan, 16 Nov 2026: Tang Hall Primary was added as won before the
+ * DfE check ran, got the standard list, and the draft never asked for the DfE project manager etc). Swaps the
+ * other list's untouched automatic items for this list's; anything already asked for, received or added by hand stays.
+ */
+export async function matchChecklist(admin: SupabaseClient, projectId: string) {
+  const { data: p } = await admin.from("projects").select("is_dfe").eq("id", projectId).single();
+  if (p?.is_dfe == null) return false;
+  const want = p.is_dfe ? INFO_DFE : INFO_STANDARD, other = p.is_dfe ? INFO_STANDARD : INFO_DFE;
+  const { data: items } = await admin.from("project_info").select("id,item,auto,requested_on,received_on").eq("project_id", projectId);
+  if (!items?.length || !items.some((i) => i.auto)) return false; // no automatic checklist to match
+  const drop = items.filter((i) => i.auto && !i.requested_on && !i.received_on && other.includes(i.item) && !want.includes(i.item));
+  const add = want.filter((w) => !items.some((i) => i.item.toLowerCase() === w.toLowerCase()));
+  if (!drop.length && !add.length) return false;
+  if (drop.length) await admin.from("project_info").delete().in("id", drop.map((i) => i.id));
+  if (add.length) await admin.from("project_info").insert(add.map((item) => ({ project_id: projectId, item, auto: true })));
+  await log(admin, projectId, "Checklist started", `Checklist changed to the ${p.is_dfe ? "DfE" : "standard"} list: added ${add.join(", ") || "nothing"}${drop.length ? `; took off ${drop.map((i) => i.item).join(", ")} (not asked for yet)` : ""}`);
+  return true;
+}
+
 /** S2: a Gmail draft to the client listing what we need. Only ever a draft. */
 export async function draftInfoRequest(admin: SupabaseClient, projectId: string) {
+  await matchChecklist(admin, projectId);
   const { data: p } = await admin.from("projects").select("id,name,client_id,is_dfe").eq("id", projectId).single();
   if (!p) throw new Error("project not found");
   const [{ data: items }, { data: reply }, { data: contacts }] = await Promise.all([

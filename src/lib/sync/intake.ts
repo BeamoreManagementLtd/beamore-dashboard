@@ -3,7 +3,7 @@ import JSZip from "jszip";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { driveClient } from "@/lib/google";
 import { INFO_DFE, INFO_STANDARD } from "@/lib/project-info";
-import { ensureProjectFolder, saveProjectAttachments, onWon } from "@/lib/project-setup";
+import { ensureProjectFolder, saveProjectAttachments, onWon, matchChecklist } from "@/lib/project-setup";
 import { loadWorkflows, WORKFLOW_COLUMNS, type WorkflowProject } from "@/lib/workflow";
 import { appendToRegister } from "@/lib/sync/register-sync";
 
@@ -109,6 +109,8 @@ export async function runIntake(admin: SupabaseClient) {
         : unsure
           ? { is_dfe: null, dfe_evidence: `Unsure: ${c.score === 1 ? `only a weak sign (${c.evidence})` : "sounds like a school but no DfE signs found"}` }
           : { is_dfe: false, dfe_evidence: "No DfE signs in the project's name, invoices, reports, recent emails or proposal" }).eq("id", p.id);
+      // a checklist made before this was known (e.g. added as won by hand) switches to the right list
+      if (!unsure) await matchChecklist(admin, p.id).catch(() => undefined);
       classified++;
     }
 

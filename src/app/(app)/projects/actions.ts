@@ -58,6 +58,9 @@ export async function setDfe(projectId: string, dfe: boolean) {
   const me = await requireProfile();
   const db = await createClient();
   await db.from("projects").update({ is_dfe: dfe, dfe_evidence: `Set by ${me.full_name ?? me.email}` }).eq("id", projectId);
+  const { matchChecklist } = await import("@/lib/project-setup");
+  const { createServiceClient } = await import("@/lib/supabase/server");
+  await matchChecklist(createServiceClient(), projectId).catch(() => undefined);
   revalidatePath(`/projects/${projectId}`);
   revalidatePath("/projects/dfe");
   revalidatePath("/due");
