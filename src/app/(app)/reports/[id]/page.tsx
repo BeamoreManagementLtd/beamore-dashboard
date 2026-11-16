@@ -136,7 +136,7 @@ export default async function ReportPage({ params, searchParams }: { params: Pro
               (Ronan, 15 Nov 2026): open it from Drive with "Open with → Microsoft Word", or download it */}
           {r.checked_file_id && !r.original_trashed_at && <p>
             <a className="btn small" href={`https://drive.google.com/file/d/${r.checked_file_id}/view`} target="_blank" rel="noreferrer">Show the checked copy in Drive</a>{" "}
-            <a className="btn small" href={`https://drive.google.com/uc?export=download&id=${r.checked_file_id}`}>Download to open in Word</a>
+            <a className="btn small" href={`/api/reports/${id}/word`}>Download to open in Word</a>
             <span className="two small muted">To change it: in Drive click <b>Open with → Microsoft Word</b> at the top (not Google Docs), so your changes save back to Drive. The download is for reading: changes to a downloaded copy don&apos;t go back.</span>
           </p>}
           <p className="small muted">Look through the checked copy (spelling is fixed as tracked changes; the AI&apos;s points are comments), make any changes, save, then approve and send here. The PDF has the changes accepted and no comments; the clerk&apos;s file keeps the tracked spelling changes so they can see them.</p>
