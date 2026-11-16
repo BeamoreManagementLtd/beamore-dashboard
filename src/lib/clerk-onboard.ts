@@ -61,10 +61,10 @@ export async function onboardNewClerk(admin: SupabaseClient, o: {
   }
 
   // 2 + 3 + 4. folders and the manual, shared with their new address
-  let personnelFolder: string | null = null, projectFolder: string | null = null, projectName: string | null = null, manualLink: string | null = null;
+  let projectFolder: string | null = null, projectName: string | null = null, manualLink: string | null = null;
   try {
     // made for the office, NOT shared with the clerk (Ronan, 16 Nov 2026): their uploads reach it through the portal
-    personnelFolder = await clerkFolder(admin, o.clerkId, o.name);
+    await clerkFolder(admin, o.clerkId, o.name);
     steps.push({ label: "Personnel folder made", ok: true, note: "For the office only; not shared with them" });
   } catch (e) { steps.push({ label: "Personnel folder", ok: false, note: e instanceof Error ? e.message.slice(0, 200) : "failed" }); }
   if (o.projectId) {
