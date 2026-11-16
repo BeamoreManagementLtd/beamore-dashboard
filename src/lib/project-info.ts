@@ -5,6 +5,9 @@ export const INFO_DFE = [
   "PO or project number for invoicing", "Distribution list for reports",
 ];
 export const INFO_STANDARD = [
-  "Contact info", "Site contacts & address", "PO number", "Copy of CPs", "Programme", "Drawings & specification",
+  "Contact info", "Site contacts & address", "PO number", "Copy of CPs", "Drawings & specification",
   "Distribution list for reports",
 ];
+/** No longer asked for: the client already sent it so we could price the job (Programme: Ronan, 16 Nov 2026). Taken off
+ *  automatic checklists unless it's already been received. */
+export const INFO_RETIRED = ["Programme"];

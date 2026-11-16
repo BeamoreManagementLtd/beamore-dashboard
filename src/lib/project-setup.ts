@@ -2,7 +2,7 @@ import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { driveClient } from "@/lib/google";
 import { setupProjectTracking } from "@/lib/xero-tracking";
-import { INFO_DFE, INFO_STANDARD } from "@/lib/project-info";
+import { INFO_DFE, INFO_STANDARD, INFO_RETIRED } from "@/lib/project-info";
 
 /**
  * What happens when a project is won (docs/workflows.html, S2/S4/S7):
@@ -74,16 +74,19 @@ export const infoRequestSubject = (name: string) => `${name}: project informatio
  */
 export async function matchChecklist(admin: SupabaseClient, projectId: string) {
   const { data: p } = await admin.from("projects").select("is_dfe").eq("id", projectId).single();
-  if (p?.is_dfe == null) return false;
-  const want = p.is_dfe ? INFO_DFE : INFO_STANDARD, other = p.is_dfe ? INFO_STANDARD : INFO_DFE;
+  // until we know whether it's a DfE job, only items no longer asked for are taken off
+  const known = p?.is_dfe != null;
+  const want = !known ? [] : p.is_dfe ? INFO_DFE : INFO_STANDARD, other = !known ? [] : p.is_dfe ? INFO_STANDARD : INFO_DFE;
   const { data: items } = await admin.from("project_info").select("id,item,auto,requested_on,received_on").eq("project_id", projectId);
   if (!items?.length || !items.some((i) => i.auto)) return false; // no automatic checklist to match
-  const drop = items.filter((i) => i.auto && !i.requested_on && !i.received_on && other.includes(i.item) && !want.includes(i.item));
+  const drop = items.filter((i) => i.auto && !i.received_on && ((!i.requested_on && other.includes(i.item) && !want.includes(i.item)) || INFO_RETIRED.includes(i.item)));
   const add = want.filter((w) => !items.some((i) => i.item.toLowerCase() === w.toLowerCase()));
   if (!drop.length && !add.length) return false;
+  const retired = drop.filter((i) => INFO_RETIRED.includes(i.item)), switched = drop.filter((i) => !INFO_RETIRED.includes(i.item));
   if (drop.length) await admin.from("project_info").delete().in("id", drop.map((i) => i.id));
   if (add.length) await admin.from("project_info").insert(add.map((item) => ({ project_id: projectId, item, auto: true })));
-  await log(admin, projectId, "Checklist started", `Checklist changed to the ${p.is_dfe ? "DfE" : "standard"} list: added ${add.join(", ") || "nothing"}${drop.length ? `; took off ${drop.map((i) => i.item).join(", ")} (not asked for yet)` : ""}`);
+  if (add.length || switched.length) await log(admin, projectId, "Checklist started", `Checklist changed to the ${p?.is_dfe ? "DfE" : "standard"} list: added ${add.join(", ") || "nothing"}${switched.length ? `; took off ${switched.map((i) => i.item).join(", ")} (not asked for yet)` : ""}`);
+  if (retired.length) await log(admin, projectId, "Checklist", `Took ${retired.map((i) => i.item).join(", ")} off the checklist: no longer asked for (the client sent it for pricing)`);
   return true;
 }
 
