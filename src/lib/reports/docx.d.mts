@@ -20,6 +20,7 @@ export type HsItem = { label: string; status: "missing" | "empty" | "thin" | "ok
 export function healthSafety(r: Report, dfe: boolean): HsItem[];
 export function acceptOwnRevisions(r: Report): void;
 export function withoutOwnMarks(buf: Buffer, opts?: { keepChanges?: boolean }): Promise<Buffer>;
+export function dropOrphanComments(r: Report): Promise<number>;
 export function nearText(r: Report, p: number | null | undefined): string | null;
 export type Tracker = { tables: number; items: number; photos: number; uncoloured: string[]; greenNoDate: string[]; closedNotGreen: string[]; closedNoReason: string[]; closedReasonUnclear: string[]; unclearExamples: { no: string; comment: string }[] };
 export function issuesTracker(r: Report): Tracker;

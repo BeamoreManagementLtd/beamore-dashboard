@@ -593,12 +593,29 @@ export async function withoutOwnMarks(buf, { keepChanges = false } = {}) {
   if (cx) {
     const mine = new Set([...cx.matchAll(/<w:comment\b[^>]*>/g)].filter((m) => m[0].includes(`w:author="${esc(AUTHOR)}"`)).map((m) => /w:id="(\d+)"/.exec(m[0])?.[1]));
     const id = (s) => /w:id="(\d+)"/.exec(s)?.[1];
+    // (a file saved in Word since has renumbered comments and tagged runs, <w:r w:rsidR=…>: the run is matched with its
+    // attributes, or its marker was left pointing at a deleted comment and Word called the file corrupted, Bramhall
+    // 16 Nov 2026)
     r.xml = r.xml
       .replace(/<w:commentRange(?:Start|End)\b[^>]*\/>/g, (m) => (mine.has(id(m)) ? "" : m))
-      .replace(/<w:r>(?:<w:rPr>(?:(?!<\/w:r>)[\s\S])*?<\/w:rPr>)?<w:commentReference\b[^>]*\/><\/w:r>/g, (m) => (mine.has(id(m.slice(m.indexOf("<w:commentReference")))) ? "" : m));
+      .replace(/<w:r\b[^>]*>(?:(?!<\/w:r>)[\s\S])*?<w:commentReference\b[^>]*\/>(?:(?!<\/w:r>)[\s\S])*?<\/w:r>/g, (m) => (mine.has(id(m.slice(m.indexOf("<w:commentReference")))) ? "" : m));
     r.zip.file("word/comments.xml", cx.replace(/<w:comment\b[^>]*>[\s\S]*?<\/w:comment>/g, (m) => (mine.has(id(m)) ? "" : m)), NO_FOLDERS);
   }
+  await dropOrphanComments(r);
   return saveReport(r);
+}
+
+/** Takes out comment markers that point at a comment that isn't there (Word won't open such a file). */
+export async function dropOrphanComments(r) {
+  const cx = (await r.zip.file("word/comments.xml")?.async("string")) ?? "";
+  const have = new Set([...cx.matchAll(/<w:comment\b[^>]*\bw:id="(\d+)"/g)].map((m) => m[1]));
+  const id = (s) => /w:id="(\d+)"/.exec(s)?.[1];
+  const before = r.xml.length;
+  r.xml = r.xml
+    .replace(/<w:commentRange(?:Start|End)\b[^>]*\/>/g, (m) => (have.has(id(m)) ? m : ""))
+    .replace(/<w:r\b[^>]*>(?:(?!<\/w:r>)[\s\S])*?<w:commentReference\b[^>]*\/>(?:(?!<\/w:r>)[\s\S])*?<\/w:r>/g, (m) => (have.has(id(m.slice(m.indexOf("<w:commentReference")))) ? m : ""));
+  if (r.xml.length !== before) { r.spans = paragraphSpans(r.xml); r.paragraphs = r.spans.map((s, i) => ({ i, text: textOf(r.xml.slice(s.start, s.end)) })); }
+  return before - r.xml.length;
 }
 
 /**

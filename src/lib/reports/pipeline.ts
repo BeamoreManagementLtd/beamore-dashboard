@@ -150,7 +150,9 @@ export async function scanReports(admin: SupabaseClient) {
       // the clerk changed their original after it was checked: say so (the checked copy may be out of date)
       // (the checker's own changes in Word count too, so this only says so, worded for both)
       const changedAfter = existing.checked_at && Date.parse(f.modifiedTime) > Date.parse(existing.checked_at) + 5 * 60_000 && ["ready", "failed"].includes(existing.status);
-      await admin.from("reports").update({ file_name: f.name, modified_at: f.modifiedTime, ...(changedAfter ? { error: "The report has been changed since it was checked (by the clerk, or in Word here). If the clerk has sent a new version, Check again: the new version is checked, keeping any changes made in Word." } : {}) }).eq("id", existing.id);
+      // folder names kept current too: a folder renamed in Drive (e.g. "MEP Diaries" to "M&E Diaries") would send the Word helper
+      // to a path that no longer exists (16 Nov 2026)
+      await admin.from("reports").update({ file_name: f.name, folder_id: rf.id, folder_name: rf.name.trim(), project_folder_id: pf.id, project_folder_name: pf.name, modified_at: f.modifiedTime, ...(changedAfter ? { error: "The report has been changed since it was checked (by the clerk, or in Word here). If the clerk has sent a new version, Check again: the new version is checked, keeping any changes made in Word." } : {}) }).eq("id", existing.id);
       continue;
     }
     await admin.from("reports").insert({
