@@ -4,19 +4,22 @@
 #   1. checks Word works and the shared Work folder is here (Google Drive for desktop)
 #   2. asks once for the dashboard key and keeps it for this Windows user only (Windows encrypts it)
 #   3. checks the key with the dashboard and makes a test PDF in Word
-#   4. sets up the task that runs the helper every 2 minutes, straight from this Drive folder (so updates reach it)
-# Safe to run again: it replaces the task and, if you say so, the key.
+#   4. copies the helper onto this PC and sets up the task that runs it every 2 minutes
+# The helper runs from its copy on this PC, not from Drive, so nobody can change what it runs by editing the Drive
+# folder. To update it, run this again: it replaces the copy and the task and, if you say so, the key.
 $ErrorActionPreference = "Stop"
 $TaskName = "Beamore report PDFs (Word)"
 $Dashboard = "https://dashboard.beamore.co.uk"
-$Helper = Join-Path $PSScriptRoot "word-pdf-helper.ps1"
+$Source = Join-Path $PSScriptRoot "word-pdf-helper.ps1"
 $Dir = Join-Path $env:LOCALAPPDATA "Beamore"
 $KeyFile = Join-Path $Dir "dashboard-key.dat"
+$Helper = Join-Path $Dir "word-pdf-helper.ps1"
+$WorkFile = Join-Path $Dir "work-folder.txt"
 New-Item -ItemType Directory -Force -Path $Dir | Out-Null
 function Step($m) { Write-Host ""; Write-Host "== $m" -ForegroundColor Cyan }
 function Fail($m) { Write-Host ""; Write-Host "STOPPED: $m" -ForegroundColor Red; exit 1 }
 
-if (-not (Test-Path -LiteralPath $Helper)) { Fail "word-pdf-helper.ps1 isn't next to this installer. Run it from the 'Dashboard helper' folder in Google Drive." }
+if (-not (Test-Path -LiteralPath $Source)) { Fail "word-pdf-helper.ps1 isn't next to this installer. Run it from the 'Dashboard helper' folder in Google Drive." }
 
 Step "1. Checking Word"
 try { $w = New-Object -ComObject Word.Application; $ver = $w.Version; $w.Quit(); [void][Runtime.InteropServices.Marshal]::ReleaseComObject($w) }
@@ -24,9 +27,20 @@ catch { Fail "Word didn't start on this PC. Install Microsoft Word (and sign in 
 Write-Host "Word $ver works."
 
 Step "2. Checking the Work folder in Google Drive"
-$work = Get-PSDrive -PSProvider FileSystem | ForEach-Object { Join-Path $_.Root "My Drive\Work" } | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
-if (-not $work) { Fail "Couldn't find 'My Drive\Work'. Install Google Drive for desktop, sign in with the Beamore Google account that has the Work folder, and wait for it to appear (e.g. G:\My Drive\Work)." }
+# "My Drive\Work", or a shared-folder shortcut ("G:\.shortcut-targets-by-id\<id>\Work", as on the server PC); the
+# right one has the Schools folder in it
+$work = $null
+foreach ($d in Get-PSDrive -PSProvider FileSystem) {
+  $c = @(Join-Path $d.Root "My Drive\Work")
+  $s = Join-Path $d.Root ".shortcut-targets-by-id"
+  if (Test-Path -LiteralPath $s) { $c += Get-ChildItem -LiteralPath $s -Directory -Force -ErrorAction SilentlyContinue | ForEach-Object { Join-Path $_.FullName "Work" } }
+  foreach ($p in $c) { if (-not $work -and (Test-Path -LiteralPath $p) -and (Test-Path -LiteralPath (Join-Path $p "Schools"))) { $work = $p } }
+}
+if (-not $work) { Fail "Couldn't find the Work folder (with Schools in it). Check Google Drive for desktop is signed in and Work shows in File Explorer, then run this again." }
 Write-Host "Found $work"
+Set-Content -LiteralPath $WorkFile -Value $work
+Copy-Item -LiteralPath $Source -Destination $Helper -Force
+Write-Host "Helper copied to $Helper"
 
 Step "3. The dashboard key"
 if (Test-Path -LiteralPath $KeyFile) {

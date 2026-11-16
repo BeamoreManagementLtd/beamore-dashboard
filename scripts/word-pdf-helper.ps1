@@ -1,6 +1,6 @@
 # Beamore report PDFs, made with Word (Ronan, 15 Nov 2026: Google spoils the layout).
 # Runs on the Beamore server PC (always on; Word + Google Drive for desktop) every 2 minutes from Task Scheduler, set up
-# by install-word-helper.ps1, and runs this file straight from the Drive folder so changes reach it automatically:
+# by install-word-helper.ps1, which copies this file onto that PC (run the installer again to update it):
 #   1. asks the dashboard which approved reports are waiting for a PDF
 #   2. opens a COPY of each in Word, accepts any tracked changes left, removes comments, saves it as PDF
 #   3. puts the PDF next to the report in the Google Drive folder (Drive for desktop uploads it)
@@ -11,12 +11,21 @@ param([switch]$Once, [string]$Test, [string]$TestOut)
 
 $ErrorActionPreference = "Stop"
 $Dashboard = "https://dashboard.beamore.co.uk"
-# the shared Work folder through Google Drive for desktop: G: here, but whichever letter Drive has on this PC
-$Root = "G:\My Drive\Work"
-if (-not (Test-Path -LiteralPath $Root)) {
-  $found = Get-PSDrive -PSProvider FileSystem | ForEach-Object { Join-Path $_.Root "My Drive\Work" } | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
-  if ($found) { $Root = $found }
+# the shared Work folder through Google Drive for desktop: the one the installer found (work-folder.txt), else
+# "My Drive\Work" or a shared-folder shortcut ("<drive>\.shortcut-targets-by-id\<id>\Work", as on the server PC),
+# on whichever letter Drive has
+function Find-WorkFolder {
+  foreach ($d in Get-PSDrive -PSProvider FileSystem) {
+    $c = @(Join-Path $d.Root "My Drive\Work")
+    $s = Join-Path $d.Root ".shortcut-targets-by-id"
+    if (Test-Path -LiteralPath $s) { $c += Get-ChildItem -LiteralPath $s -Directory -Force -ErrorAction SilentlyContinue | ForEach-Object { Join-Path $_.FullName "Work" } }
+    foreach ($p in $c) { if ((Test-Path -LiteralPath $p) -and (Test-Path -LiteralPath (Join-Path $p "Schools"))) { return $p } }
+  }
+  return $null
 }
+$WorkFile = Join-Path $env:LOCALAPPDATA "Beamore\work-folder.txt"
+$Root = if (Test-Path -LiteralPath $WorkFile) { (Get-Content -LiteralPath $WorkFile -Raw).Trim() } else { "G:\My Drive\Work" }
+if (-not (Test-Path -LiteralPath $Root)) { $found = Find-WorkFolder; if ($found) { $Root = $found } }
 $Log = Join-Path $env:LOCALAPPDATA "Beamore\word-pdf-helper.log"
 # the dashboard key: saved by the installer for this Windows user only (Windows encrypts it), or, on the PC with the
 # dashboard's code, from its .env.local
