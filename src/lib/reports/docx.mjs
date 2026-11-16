@@ -302,13 +302,18 @@ export async function addComments(r, comments) {
   let xml = r.xml;
   const firstText = r.paragraphs.find((p) => p.text.trim())?.i ?? 0;
   const sorted = comments.map((c) => ({ ...c, p: Number.isInteger(c.p) && r.spans[c.p] ? c.p : firstText })).sort((a, b) => b.p - a.p);
+  // positions are worked out afresh for each comment: two comments on the same paragraph (often the first one, where
+  // general points go) used the old end of the paragraph for the second and broke the file (Word wouldn't open it,
+  // 16 Nov 2026)
+  let spans = r.spans;
   for (const c of sorted) {
-    const span = r.spans[c.p];
+    const span = spans[c.p];
     let px = xml.slice(span.start, span.end);
     const head = /^<w:p\b[^>]*>(?:<w:pPr>[\s\S]*?<\/w:pPr>)?/.exec(px)[0];
     px = head + `<w:commentRangeStart w:id="${id}"/>` + px.slice(head.length, -"</w:p>".length)
       + `<w:commentRangeEnd w:id="${id}"/><w:r><w:commentReference w:id="${id}"/></w:r></w:p>`;
     xml = xml.slice(0, span.start) + px + xml.slice(span.end);
+    spans = paragraphSpans(xml);
     add.push(`<w:comment w:id="${id}" w:author="${AUTHOR}" w:date="${d}" w:initials="AI"><w:p><w:r><w:t xml:space="preserve">${esc(c.text)}</w:t></w:r></w:p></w:comment>`);
     id++;
   }
@@ -545,6 +550,9 @@ export function uniformPhotos(r, stats, rels) {
 
 /** The changed report as a file. */
 export async function saveReport(r) {
+  // never save a file Word can't open: a tag cut open by an edit leaves a "<" inside another tag
+  const bad = /<[^<>]*</.exec(r.xml);
+  if (bad) throw new Error(`The checked file came out damaged near "${r.xml.slice(Math.max(0, bad.index - 60), bad.index + 60).replace(/\s+/g, " ")}"; nothing was saved`);
   r.zip.file("word/document.xml", r.xml, NO_FOLDERS);
   return r.zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE", compressionOptions: { level: 6 } });
 }
@@ -558,6 +566,25 @@ export function acceptOwnRevisions(r) {
     .replace(/<w:ins\b([^>]*)>([\s\S]*?)<\/w:ins>/g, (m, attrs, inner) => (attrs.includes(mine) ? inner : m));
   r.spans = paragraphSpans(r.xml);
   r.paragraphs = r.spans.map((s, i) => ({ i, text: textOf(r.xml.slice(s.start, s.end)) }));
+}
+
+/**
+ * A report the dashboard has already marked up, back to plain text before it's checked again: its own spelling
+ * changes accepted and its own comments taken out. Anyone else's tracked changes and comments are left alone.
+ */
+export async function withoutOwnMarks(buf) {
+  const r = await readReport(buf);
+  acceptOwnRevisions(r);
+  const cx = await r.zip.file("word/comments.xml")?.async("string");
+  if (cx) {
+    const mine = new Set([...cx.matchAll(/<w:comment\b[^>]*>/g)].filter((m) => m[0].includes(`w:author="${esc(AUTHOR)}"`)).map((m) => /w:id="(\d+)"/.exec(m[0])?.[1]));
+    const id = (s) => /w:id="(\d+)"/.exec(s)?.[1];
+    r.xml = r.xml
+      .replace(/<w:commentRange(?:Start|End)\b[^>]*\/>/g, (m) => (mine.has(id(m)) ? "" : m))
+      .replace(/<w:r>(?:<w:rPr>(?:(?!<\/w:r>)[\s\S])*?<\/w:rPr>)?<w:commentReference\b[^>]*\/><\/w:r>/g, (m) => (mine.has(id(m.slice(m.indexOf("<w:commentReference")))) ? "" : m));
+    r.zip.file("word/comments.xml", cx.replace(/<w:comment\b[^>]*>[\s\S]*?<\/w:comment>/g, (m) => (mine.has(id(m)) ? "" : m)), NO_FOLDERS);
+  }
+  return saveReport(r);
 }
 
 /**

@@ -83,6 +83,8 @@ export default async function ReportPage({ params, searchParams }: { params: Pro
   ]);
   const p = r.projects as unknown as { id: string; name: string } | null;
   const issues = (r.issues ?? []) as Issue[];
+  // checked in the clerk's own file (from 16 Nov 2026) rather than a copy in "Checked (dashboard)"
+  const inPlace = !!r.checked_file_id && r.checked_file_id === r.drive_file_id;
   const photos = (r.photos ?? {}) as { count?: number; blurry?: number; smallOnPage?: number; stretched?: number; shrunk?: number };
   const mb = (n: number | null) => (n ? `${(n / 1e6).toFixed(1)} MB` : "—");
   const open = ["new", "checking", "ready", "failed"].includes(r.status);
@@ -129,17 +131,19 @@ export default async function ReportPage({ params, searchParams }: { params: Pro
             {" "}Photos: {photos.count ?? 0}{photos.blurry ? `, ${photos.blurry} low detail` : ""}{photos.smallOnPage ? `, ${photos.smallOnPage} shown small` : ""}{photos.stretched ? `, ${photos.stretched} stretched` : ""}{photos.shrunk ? `; ${photos.shrunk} made smaller` : ""}.
             {" "}File {mb(r.size_before)} → {mb(r.size_after)}. Checked {fdt(r.checked_at)}.</p>}
           {/* open it in Word from Google Drive on your computer: opening it in Google Docs spoils the layout */}
-          {r.main_folder && r.checked_name && !r.original_trashed_at && <div className="field"><label className="small muted" htmlFor="wp">The checked copy, to open in Word (on your computer, Google Drive)</label>
-            <input id="wp" readOnly value={`G:\\My Drive\\Work\\${r.main_folder}\\${r.project_folder_name}\\${r.folder_name}\\Checked (dashboard)\\${r.checked_name}`} style={{ width: "100%", fontFamily: "monospace", fontSize: 12 }} /></div>}
-          {r.main_folder && <p className="small muted">The clerk&apos;s original is left as it was until the report is sent: <span style={{ fontFamily: "monospace" }}>{r.folder_name}\{r.renamed_from ?? r.file_name}</span>{r.original_trashed_at ? ` (overwritten with the checked version when it was sent, ${fdt(r.original_trashed_at)}; Drive keeps the old version under File information → Manage versions)` : ". When it's sent, the checked version (tracked spelling changes kept, comments taken out) is written over it."}</p>}
+          {r.main_folder && r.checked_name && !r.original_trashed_at && <div className="field"><label className="small muted" htmlFor="wp">The checked report, to open in Word (on your computer, Google Drive)</label>
+            <input id="wp" readOnly value={`G:\\My Drive\\Work\\${r.main_folder}\\${r.project_folder_name}\\${r.folder_name}\\${inPlace ? "" : "Checked (dashboard)\\"}${r.checked_name}`} style={{ width: "100%", fontFamily: "monospace", fontSize: 12 }} /></div>}
+          {r.main_folder && (inPlace
+            ? <p className="small muted">Checked in the clerk&apos;s own file, in its folder{r.renamed_from ? ` (renamed from ${r.renamed_from})` : ""}. The version the clerk uploaded is kept in Drive (File information → Manage versions), and Check again starts from it. When it&apos;s sent, the comments are taken out of the file; the tracked spelling changes stay so the clerk can see them.</p>
+            : <p className="small muted">The clerk&apos;s original is left as it was until the report is sent: <span style={{ fontFamily: "monospace" }}>{r.folder_name}\{r.renamed_from ?? r.file_name}</span>{r.original_trashed_at ? ` (overwritten with the checked version when it was sent, ${fdt(r.original_trashed_at)}; Drive keeps the old version under File information → Manage versions)` : ". When it's sent, the checked version (tracked spelling changes kept, comments taken out) is written over it."}</p>)}
           {/* Google's viewer spoils a Word file's layout, and a web link can't open a Drive file straight in Word
               (Ronan, 15 Nov 2026): open it from Drive with "Open with → Microsoft Word", or download it */}
           {r.checked_file_id && !r.original_trashed_at && <p>
-            <a className="btn small" href={`https://drive.google.com/file/d/${r.checked_file_id}/view`} target="_blank" rel="noreferrer">Show the checked copy in Drive</a>{" "}
+            <a className="btn small" href={`https://drive.google.com/file/d/${r.checked_file_id}/view`} target="_blank" rel="noreferrer">Show the report in Drive</a>{" "}
             <a className="btn small" href={`/api/reports/${id}/word`}>Download to open in Word</a>
             <span className="two small muted">To change it: in Drive click <b>Open with → Microsoft Word</b> at the top (not Google Docs), so your changes save back to Drive. The download is for reading: changes to a downloaded copy don&apos;t go back.</span>
           </p>}
-          <p className="small muted">Look through the checked copy (spelling is fixed as tracked changes; the AI&apos;s points are comments), make any changes, save, then approve and send here. The PDF has the changes accepted and no comments; the clerk&apos;s file keeps the tracked spelling changes so they can see them.</p>
+          <p className="small muted">Look through the checked report (spelling is fixed as tracked changes; the AI&apos;s points are comments), make any changes, save, then approve and send here. The PDF has the changes accepted and no comments; the clerk&apos;s file keeps the tracked spelling changes so they can see them.</p>
         </section>
 
         <section className="panel">

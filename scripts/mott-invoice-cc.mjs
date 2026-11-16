@@ -31,7 +31,8 @@ const { data: ics } = await db.from("invoice_contacts").select("id,project_id,cl
 let changed = 0;
 for (const p of projects) {
   const o = officeByJob.get(String(p.number)); if (!o) continue;
-  if (/birmingham/i.test(o.office) || /finished/i.test(o.status) || p.stage === "complete") continue;
+  // finished jobs too with --finished (Ronan, 16 Nov 2026: their invoices still showed only Louise French)
+  if (/birmingham/i.test(o.office) || (!process.argv.includes("--finished") && (/finished/i.test(o.status) || p.stage === "complete"))) continue;
   const own = ics.find((c) => c.project_id === p.id), inv = own ?? ics.find((c) => !c.project_id && c.client_id === p.client_id);
   const to = emails(inv?.to_emails);
   const reportMott = [];

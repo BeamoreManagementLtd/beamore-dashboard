@@ -135,6 +135,14 @@ export async function driveClient(admin: SupabaseClient) {
       const res = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?supportsAllDrives=true`, { method: "PATCH", headers: { Authorization: `Bearer ${access}`, "Content-Type": "application/json" }, body: JSON.stringify({ trashed: true }), cache: "no-store" });
       if (!res.ok) throw new Error(`Google Drive bin ${res.status}: ${(await res.text()).slice(0, 200)}`);
     },
+    /** One saved version of a file (Drive's version history), e.g. a report as the clerk uploaded it. */
+    downloadRevision: async (fileId: string, revisionId: string) =>
+      (await call(`https://www.googleapis.com/drive/v3/files/${fileId}/revisions/${revisionId}?alt=media&supportsAllDrives=true`)).arrayBuffer(),
+    /** Keeps a version for good (Drive otherwise drops old versions of Word files after 30 days). */
+    keepRevision: async (fileId: string, revisionId: string) => {
+      const res = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}/revisions/${revisionId}?supportsAllDrives=true`, { method: "PATCH", headers: { Authorization: `Bearer ${access}`, "Content-Type": "application/json" }, body: JSON.stringify({ keepForever: true }), cache: "no-store" });
+      if (!res.ok) throw new Error(`Google Drive keep version ${res.status}: ${(await res.text()).slice(0, 200)}`);
+    },
     /** A Google Doc saved as PDF (Drive limits this to 10 MB). */
     exportPdf: async (fileId: string) =>
       (await call(`https://www.googleapis.com/drive/v3/files/${fileId}/export?mimeType=application%2Fpdf`)).arrayBuffer(),
