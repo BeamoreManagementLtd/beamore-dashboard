@@ -11,7 +11,7 @@ export default async function AskPage() {
   const { data: reqs } = await db.from("ai_requests").select("id,at,summary,status,answer").eq("requested_by", me.id).gte("at", new Date(Date.now() - 14 * 864e5).toISOString()).order("at", { ascending: false }).limit(10);
   return (
     <>
-      <div className="head"><div><h1>Ask</h1><p>Ask anything about projects, clerks, invoices, the diary or the to-do list. It looks things up and answers, and can do work for you: add or tick off to-dos, add project notes, set clerks, mark information received. Anything outside Beamore work, or bigger changes, goes to Ronan to approve first.{me.role === "director" ? " You can also ask it to search your email." : ""}</p></div></div>
+      <div className="head"><div><h1>Ask</h1><p>Ask anything about projects, clerks of works, reports and their scores, invoices, holidays, the diary or the to-do list. It looks things up and answers, and can do work for you: add or tick off to-dos, add project notes, set clerks, mark information received. Anything outside Beamore work, or bigger changes, goes to Ronan to approve first.{me.role === "director" ? " You can also ask it to search your email." : ""}</p></div></div>
       <AskBox />
       {!!reqs?.length && (
         <section className="panel">

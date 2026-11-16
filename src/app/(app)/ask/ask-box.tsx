@@ -4,7 +4,7 @@ import Link from "next/link";
 import { ask } from "./actions";
 
 type Turn = { role: "user" | "assistant"; text: string };
-const EXAMPLES = ["Which jobs still need a clerk?", "What's overdue for Gleeds?", "When does Dave Finn's insurance expire?", "What's outstanding for Cannon Wharf?"];
+const EXAMPLES = ["Which jobs still need a clerk?", "What's overdue for Gleeds?", "When does Dave Finn's insurance expire?", "Whose reports are improving?"];
 
 const LINK = /(\/(?:projects|personnel|clerk-portal|invoices|due|reports|workflows|finance)(?:\/[\w-]+)?(?:\?[\w=&-]+)?)/g;
 /** Bold (**text**) and dashboard paths ("/projects/abc") in the answer become bold text and links. */
@@ -55,7 +55,7 @@ export function AskBox({ compact = false }: { compact?: boolean }) {
         </div>
       )}
       <form className="ask-form" onSubmit={(e) => { e.preventDefault(); send(q); }}>
-        <textarea ref={input} rows={compact ? 1 : 2} value={q} onChange={(e) => setQ(e.target.value)} placeholder="Ask about any project, clerk, invoice or to-do…"
+        <textarea ref={input} rows={compact ? 1 : 2} value={q} onChange={(e) => setQ(e.target.value)} placeholder="Ask about any project, clerk, report, invoice or to-do…"
           onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(q); } }} />
         <button className="btn primary" disabled={busy || !q.trim()}>{busy ? "…" : "Ask"}</button>
       </form>
