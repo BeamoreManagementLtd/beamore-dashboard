@@ -27,7 +27,7 @@ export default async function Reports({ searchParams }: { searchParams: Promise<
   const h = await loadHolidays();
   const monthStart = /^\d{4}-\d{2}$/.test(month ?? "") ? `${month}-01` : `${t.slice(0, 7)}-01`;
   const [{ data: open }, { data: settings }, { data: staff }, { data: doneMonth }, { data: lastRun }, { data: turn }, { data: recentVisits }, { data: recentReports }] = await Promise.all([
-    db.from("reports").select("id,file_name,folder_name,project_id,project_folder_name,kind,visit_date,uploaded_at,status,issues,checker_id,error,clerks(name),projects(name)").in("status", OPEN).order("uploaded_at"),
+    db.from("reports").select("id,file_name,folder_name,project_id,project_folder_name,kind,visit_date,uploaded_at,status,issues,score,fixes,checker_id,error,clerks(name),projects(name)").in("status", OPEN).order("uploaded_at"),
     db.from("report_settings").select("clerk_days,team_days").eq("id", 1).single(),
     db.from("profiles").select("id,full_name,email").order("full_name"),
     db.from("reports").select("id,clerk_id,clerk_name,visit_date,uploaded_at,done_at,sent_at,sent_by,status,issues,spelling_fixed,score,fixes,clerks(name)").in("status", ["sent", "done", ...OPEN]).gte("uploaded_at", monthStart),
@@ -131,7 +131,7 @@ export default async function Reports({ searchParams }: { searchParams: Promise<
       <section className="panel">
         {!shown.length ? <p className="empty">Nothing waiting.</p> : (
           <div className="tbl-wrap"><table>
-            <thead><tr><th /><th>Project</th><th>Report</th><th>Clerk</th><th>Visit</th><th>Uploaded</th><th>Due out</th><th>Issues</th><th>Status</th><th>Checker</th></tr></thead>
+            <thead><tr><th /><th>Project</th><th>Report</th><th>Clerk</th><th>Visit</th><th>Uploaded</th><th>Due out</th><th>Issues</th><th className="num" title="The AI&apos;s overall score for the report, out of 100 (grey: scored the old way; check it again)">Score</th><th>Status</th><th>Checker</th></tr></thead>
             <tbody>{shown.map((r) => {
               const p = r.projects as unknown as { name?: string } | null;
               const [st, tone] = STATUS[r.status] ?? [r.status, "muted"];
@@ -145,6 +145,9 @@ export default async function Reports({ searchParams }: { searchParams: Promise<
                   <td className="small">{fd(r.uploaded_at)}{r.clerkLate ? <span className="two neg">{r.clerkLate} day{r.clerkLate === 1 ? "" : "s"} late</span> : null}</td>
                   <td className={`small ${r.colour === "red" ? "neg" : ""}`}>{fd(r.due)}</td>
                   <td className="small">{r.high ? <span className="pill bad">{r.high} must check</span> : null} {r.issueCount ? `${r.issueCount}` : r.status === "ready" ? "none" : ""}</td>
+                  <td className="num">{typeof r.score === "number" ? (((r.fixes ?? {}) as { score_by?: string }).score_by === "overall"
+                    ? <b className={r.score >= 85 ? "pos" : r.score < 70 ? "neg" : ""} title={`${(r.score / 10).toFixed(1)} out of 10`}>{r.score}</b>
+                    : <span className="muted" title="Scored the old way: open it and check again">{r.score}*</span>) : ""}</td>
                   <td><span className={`pill ${tone}`}>{st}</span>{r.status === "failed" && <span className="two small neg">{(r.error ?? "").slice(0, 60)}</span>}</td>
                   <td className="small">{name(r.checker_id) ?? <span className="pill bad">None</span>}</td>
                 </tr>

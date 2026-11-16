@@ -299,7 +299,8 @@ export async function checkOne(admin: SupabaseClient, id: string) {
     status: "ready", ai_summary: ai.summary, issues, spelling_fixed: spelt.applied,
     photos: { count: stats.count, blurry: stats.blurry, smallOnPage: stats.smallOnPage, stretched: stats.stretched, shrunk: shrunk.changed, rotated: rotated.length, reused, usual, uncaptioned: uncaptioned(r) },
     photo_hashes: hashes, photo_count: stats.count,
-    fixes: { spelling: applied, rotated: rotated.length, shrunk: shrunk.changed, stretched: shapes.stretched, enlarged: shapes.enlarged, uniform: uniform.changed, mixed: !uniform.wasUniform, side_cm: uniform.side ? +(uniform.side / 360000).toFixed(1) : null, renamed: renamedTo, words, programme: prog ?? null, standards: ai.standards ?? null, health_safety: hs, tracker: trk },
+    fixes: { spelling: applied, rotated: rotated.length, shrunk: shrunk.changed, stretched: shapes.stretched, enlarged: shapes.enlarged, uniform: uniform.changed, mixed: !uniform.wasUniform, side_cm: uniform.side ? +(uniform.side / 360000).toFixed(1) : null, renamed: renamedTo, words, programme: prog ?? null, standards: ai.standards ?? null, health_safety: hs, tracker: trk,
+      score_by: Number.isFinite(ai.quality) && ai.quality >= 0 && ai.quality <= 100 ? "overall" : "formula" },
     // lateness is shown on its own on the Reports page
     // the AI's overall judgement of the report (Ronan, 15 Nov 2026: counting off points per issue left good reports
     // near 0); the old formula only if it didn't give one

@@ -91,7 +91,12 @@ export default async function ReportPage({ params, searchParams }: { params: Pro
     <>
       <p className="small"><Link href="/reports">Reports</Link>{p && <> · <Link href={`/projects/${p.id}`}>{p.name}</Link></>}</p>
       <div className="head"><div><h1 style={{ wordBreak: "break-word" }}>{r.file_name}</h1>
-        <p>{p?.name ?? r.project_folder_name} · {r.folder_name} · {(r.clerks as unknown as { name?: string } | null)?.name ?? r.clerk_name ?? "clerk not known"}{r.report_number ? ` · No. ${r.report_number}` : ""}</p></div></div>
+        <p>{p?.name ?? r.project_folder_name} · {r.folder_name} · {(r.clerks as unknown as { name?: string } | null)?.name ?? r.clerk_name ?? "clerk not known"}{r.report_number ? ` · No. ${r.report_number}` : ""}</p></div>
+        {/* the report's mark, up front (Ronan, 16 Nov 2026: "where do I see that?") */}
+        {typeof r.score === "number" && (((r.fixes ?? {}) as { score_by?: string }).score_by === "overall"
+          ? <div className="tile" style={{ minWidth: 150, textAlign: "center" }} title="The AI's overall judgement of the whole report: detail, health and safety, progress section, photos, follow-up, accuracy, layout and spelling"><span className="label">Report score</span><span className={`big ${r.score >= 85 ? "pos" : r.score < 70 ? "neg" : ""}`}>{r.score}<small className="muted">/100</small></span><span className="small muted">{(r.score / 10).toFixed(1)} out of 10</span></div>
+          : <div className="tile" style={{ minWidth: 150, textAlign: "center" }} title="Scored before the overall score was brought in (counting off points per issue), so it's far too low. Use Check again below to re-score it."><span className="label">Report score</span><span className="big muted">{r.score}<small>/100</small></span><span className="small muted">old scoring: check again</span></div>)}
+      </div>
       {error && <p className="callout bad">{error}</p>}
       {clerk === "sent" && <p className="callout good">Sent to the clerk.</p>}
       {r.error && r.status !== "failed" && <p className="callout bad">{r.error}</p>}
@@ -103,6 +108,9 @@ export default async function ReportPage({ params, searchParams }: { params: Pro
           {r.status === "new" && <p className="muted">Waiting for the clerk to finish with it (30 minutes untouched), then it&apos;s checked automatically.</p>}
           {r.status === "checking" && <p className="muted">Being checked now…</p>}
           {r.status === "failed" && <><p className="callout bad">The check failed: {r.error}</p><form action={checkAgain.bind(null, id)}><button className="btn">Try the check again</button></form></>}
+          {r.status === "ready" && typeof r.score === "number" && ((r.fixes ?? {}) as { score_by?: string }).score_by !== "overall" && (
+            <form action={checkAgain.bind(null, id)} className="callout"><span className="small">This report was scored the old way. Check it again to get its overall score (the checked copy is made afresh, so do this before changing it by hand).</span> <button className="btn small">Check again</button></form>
+          )}
           {r.ai_summary && <p>{r.ai_summary}</p>}
           {!!issues.length && <ul className="plain">{issues.map((i, k) => <li key={k} style={{ marginBottom: 6 }}><span className={`pill ${SEV[i.severity]?.[1] ?? "muted"}`}>{SEV[i.severity]?.[0] ?? i.severity}</span> {i.text}</li>)}</ul>}
           {r.checked_at && <p className="small muted">
@@ -143,7 +151,7 @@ export default async function ReportPage({ params, searchParams }: { params: Pro
       {r.checked_at && (
         <div className="grid2">
           <section className="panel">
-            <h2>What was changed {typeof r.score === "number" && <span className={`pill ${r.score >= 70 ? "good" : r.score >= 55 ? "warn" : "bad"}`} title="Overall quality of the report, judged as a whole">{r.score}/100</span>}</h2>
+            <h2>What was changed {typeof r.score === "number" && <span className={`pill ${r.score >= 85 ? "good" : r.score >= 70 ? "warn" : "bad"}`} title="Overall quality of the report, judged as a whole">{r.score}/100</span>}</h2>
             {(() => {
               const f = (r.fixes ?? {}) as { spelling?: { find: string; replace: string }[]; rotated?: number; shrunk?: number; stretched?: number; enlarged?: number; uniform?: number; side_cm?: number | null; renamed?: string | null };
               return (
