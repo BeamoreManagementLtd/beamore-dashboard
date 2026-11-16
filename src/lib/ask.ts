@@ -80,6 +80,27 @@ TOOLS.find((x) => x.name === "lookup")!.description = TOOLS.find((x) => x.name =
 
 // scores are given out of 100 only (Ronan, 16 Nov 2026)
 const out10 = (n: number | null | undefined) => (typeof n === "number" ? { out_of_100: Math.round(n) } : null);
+// The clerk a report belongs to (Ronan, 16 Nov 2026: one line per clerk when ranking). The name written on the report
+// wins (whoever covered the visit wrote it), matched to the clerks list by surname and first initial, so "Andy
+// Collier", "A Collier" and "Andrew Collier" are one person; the linked clerk only when the report names nobody.
+async function clerkNamer(db: SupabaseClient) {
+  const clerks = ((await db.from("clerks").select("id,name")).data ?? []) as { id: string; name: string }[];
+  const parts = (n: string) => n.toLowerCase().replace(/[^a-z\s'-]/g, " ").split(/\s+/).filter(Boolean);
+  const byId = new Map(clerks.map((c) => [c.id, c.name]));
+  return (written: string | null, clerkId: string | null) => {
+    const w = parts(written ?? "");
+    if (w.length >= 2) {
+      const sur = w.at(-1)!, init = w[0][0];
+      const hits = clerks.filter((c) => { const p = parts(c.name); return p.at(-1) === sur && p[0]?.[0] === init; });
+      if (hits.length === 1) return hits[0].name;
+      const linked = clerkId ? byId.get(clerkId) : null;
+      if (linked && parts(linked).at(-1) === sur) return linked;
+      const same = clerks.filter((c) => parts(c.name).at(-1) === sur); // "Antony" / "Tony" Larkins: the only Larkins
+      if (same.length === 1) return same[0].name;
+    }
+    return written?.trim() || (clerkId && byId.get(clerkId)) || "Unknown";
+  };
+}
 const isNew = (r: { fixes?: unknown }) => (r.fixes as { score_by?: string } | null)?.score_by === "parts";
 
 export async function run(db: SupabaseClient, me: Profile, name: string, a: Record<string, unknown>): Promise<unknown> {
@@ -227,7 +248,7 @@ export async function run(db: SupabaseClient, me: Profile, name: string, a: Reco
       return { done: "Saved in Ronan's Gmail Drafts (not sent)" };
     }
     case "reports": {
-      let q = db.from("reports").select("id,file_name,status,score,visit_date,report_number,clerk_name,kind,uploaded_at,checked_at,sent_at,spelling_fixed,issues,fixes,error,folder_name,project_folder_name,checker_id,projects(number,display_name)");
+      let q = db.from("reports").select("id,file_name,status,score,visit_date,report_number,clerk_name,clerk_id,kind,uploaded_at,checked_at,sent_at,spelling_fixed,issues,fixes,error,folder_name,project_folder_name,checker_id,projects(number,display_name)");
       if (a.status) q = q.eq("status", String(a.status));
       if (a.from) q = q.gte("visit_date", String(a.from));
       if (a.to) q = q.lte("visit_date", String(a.to));
@@ -243,12 +264,13 @@ export async function run(db: SupabaseClient, me: Profile, name: string, a: Reco
       if (error) return { error: error.message };
       const rows = data ?? [];
       const staff = new Map(((await db.from("profiles").select("id,full_name")).data ?? []).map((x) => [x.id as string, x.full_name as string]));
+      const who = await clerkNamer(db);
       return rows.map((r) => {
         const fx = (r.fixes ?? {}) as { score_parts?: { label: string; got: number; of: number; note?: string; improve?: string }[]; spelling?: unknown[] };
         const issues = (r.issues ?? []) as { severity: string; text: string }[];
         const p = r.projects as unknown as { number?: number; display_name?: string } | null;
         return {
-          project: p ? `${p.display_name} ${p.number}` : r.project_folder_name, clerk: r.clerk_name, report: r.report_number, visit_date: r.visit_date, file: r.file_name, kind: r.kind === "me" ? "M&E" : "building",
+          project: p ? `${p.display_name} ${p.number}` : r.project_folder_name, clerk: who(r.clerk_name, r.clerk_id), report: r.report_number, visit_date: r.visit_date, file: r.file_name, kind: r.kind === "me" ? "M&E" : "building",
           status: r.status, score: out10(r.score), score_method: r.score == null ? null : isNew(r) ? "current (7 parts)" : "old scoring", checked: r.checked_at?.slice(0, 10) ?? null, sent: r.sent_at?.slice(0, 10) ?? null,
           checker: r.checker_id ? staff.get(r.checker_id) ?? null : null, spelling_fixed: r.spelling_fixed, problem: r.error,
           ...(a.detail ? { score_breakdown: fx.score_parts ?? null, issues } : { main_issues: issues.filter((i) => i.severity !== "low").slice(0, 3).map((i) => i.text.slice(0, 160)) }),
@@ -258,13 +280,13 @@ export async function run(db: SupabaseClient, me: Profile, name: string, a: Reco
     }
     case "report_scores": {
       const since = new Date(Date.now() - (Number(a.days) || 90) * 864e5).toISOString().slice(0, 10);
-      let q = db.from("reports").select("clerk_name,score,visit_date,uploaded_at,fixes,projects(display_name,number)").not("score", "is", null).gte("uploaded_at", since).order("uploaded_at");
-      if (a.clerk) q = q.ilike("clerk_name", like(a.clerk));
-      const { data } = await q.limit(1000);
+      const { data } = await db.from("reports").select("clerk_name,clerk_id,score,visit_date,uploaded_at,fixes,projects(display_name,number)").not("score", "is", null).gte("uploaded_at", since).order("uploaded_at").limit(1000);
+      const who = await clerkNamer(db);
       const by = new Map<string, { score: number; at: string; project: string }[]>();
       for (const r of (data ?? []).filter(isNew)) {
         const p = r.projects as unknown as { display_name?: string; number?: number } | null;
-        const k = (r.clerk_name ?? "Unknown").trim();
+        const k = who(r.clerk_name, r.clerk_id);
+        if (a.clerk && !k.toLowerCase().includes(String(a.clerk).toLowerCase()) && !(r.clerk_name ?? "").toLowerCase().includes(String(a.clerk).toLowerCase())) continue;
         by.set(k, [...(by.get(k) ?? []), { score: Number(r.score), at: String(r.visit_date ?? r.uploaded_at).slice(0, 10), project: p ? `${p.display_name} ${p.number}` : "" }]);
       }
       return [...by].map(([clerk, l]) => {
@@ -351,7 +373,7 @@ export async function askDashboard(db: SupabaseClient, me: Profile, history: Tur
 Only help with Beamore's work: its projects, clients, clerks, invoices, reports, diary, to-dos, construction and clerk of works knowledge, and writing work emails or documents. If the request is anything else (personal projects, general chat, homework, unrelated coding or writing), or you're unsure, do NOT answer it: call request_permission with a short summary, then tell them you've asked Ronan.`;
   const system = `You answer questions and get work done for the team at Beamore Management Ltd, a UK clerk of works consultancy (construction quality inspections, many on DfE school projects). You are inside their dashboard. Today is ${today}. You're talking to ${me.full_name ?? me.email} (${director ? "the director, Ronan" : "a member of staff"}).
 
-You can see everything about the business: projects, clients, clerks of works (contacts, compliance, holidays, diary, where they work), clerk of works reports (scores, issues, status) and to-dos. Use "reports" and "report_scores" for reports, and "lookup" for anything the other tools don't cover. Private financials (margins, rates, costs, profit) are for Ronan only.${director ? "" : " If asked for those, say they're Ronan's to share."} Give report scores out of 100 only (e.g. 78/100), never out of 10. Report scores are for the office: never put them in anything for a clerk.
+You can see everything about the business: projects, clients, clerks of works (contacts, compliance, holidays, diary, where they work), clerk of works reports (scores, issues, status) and to-dos. Use "reports" and "report_scores" for reports, and "lookup" for anything the other tools don't cover. Private financials (margins, rates, costs, profit) are for Ronan only.${director ? "" : " If asked for those, say they're Ronan's to share."} People's names are often written differently (Andy / Andrew Collier, A M Marris, Christian M. Tate, Tony / Antony Larkins): treat close matches as the same person and combine their figures, saying which names you combined; only keep them apart if something shows they're different people. report_scores already combines them. Give report scores out of 100 only (e.g. 78/100), never out of 10. Report scores are for the office: never put them in anything for a clerk.
 Look things up with the tools before answering; never guess facts. Answer in plain British English, short and direct: lead with the answer, then the key details. Use project names with their numbers (e.g. "Lydiate 1104") and people's names. When it helps, end with a link to the page in the dashboard (the 'link' field, e.g. /projects/abc). If the data doesn't say, say so.
 You can also do things with the action tools (add or tick off to-dos, add project notes, set clerks, mark information received, mark jobs won or lost, save email drafts). Only do what was asked; confirm what you did in one line. Emails are only ever saved as drafts for Ronan to send.${scope}`;
   const messages: Anthropic.MessageParam[] = [
