@@ -46,6 +46,8 @@ export function isSpellingSlip(find: string, replace: string) {
   if (Math.abs(a.length - b.length) > 1) return false;
   const joinedA = a.join(""), joinedB = b.join("");
   if (joinedA === joinedB) return true; // "car park" / "carpark"
+  // words run together or split with a typo ("though out" -> "throughout", "issue's forseen" -> "issues foreseen")
+  if (Math.abs(a.length - b.length) <= 1 && dist(joinedA, joinedB) <= Math.max(1, Math.floor(joinedB.length / 6))) return true;
   for (let i = 0; i < Math.min(a.length, b.length); i++) {
     if (a[i] === b[i]) continue;
     if (GRAMMAR_SWAPS.some((g) => g.has(a[i]) && g.has(b[i]))) continue;
@@ -263,6 +265,7 @@ export async function checkOne(admin: SupabaseClient, id: string) {
   // and each one is counted to see whether a clerk is improving (Ronan, 16 Nov 2026)
   // only real spelling slips: the AI once "corrected" Swift cladding to Swisspearl cladding (16 Nov 2026), so a fix
   // must stay close to what was written (a typo, doubled word, capital, punctuation), never a different word
+  const heldBack = (ai.spelling ?? []).filter((s) => !isSpellingSlip(s.find, s.replace));
   ai.spelling = (ai.spelling ?? []).filter((s) => isSpellingSlip(s.find, s.replace));
   const spelt = trackSpelling(r, ai.spelling);
   void acceptOwnRevisions;
@@ -308,6 +311,8 @@ export async function checkOne(admin: SupabaseClient, id: string) {
   const notOurs = (i: Issue) => /date issued to (the )?lead consultant|issued to lead consultant/i.test(i.text) || (i.kind === "photos" && /caption/i.test(i.text) && !/fewer|only \d+ photo/i.test(i.text)) || /beamore'?s diary|in the diary for this job|diary (says|shows)/i.test(i.text);
   const issues: Issue[] = [...extra, ...ai.issues.filter((i) => !notOurs(i))].sort((a, b) => rank[a.severity] - rank[b.severity]);
   if (spelt.skipped.length) issues.push({ severity: "low", kind: "other", text: `Spelling not changed automatically (please fix by hand): ${spelt.skipped.slice(0, 8).map((s) => `${s.find} → ${s.replace}`).join(", ")}`, p: null });
+  // suggested rewordings that change more than spelling: left for the checker to decide, never made automatically
+  if (heldBack.length) issues.push({ severity: "low", kind: "other", text: `Suggested wording changes, not made (check and change by hand only if right): ${heldBack.slice(0, 8).map((s) => `"${s.find}" → "${s.replace}"`).join("; ")}`, p: heldBack[0]?.p ?? null });
   await addComments(r, issues.filter((i) => i.severity !== "low").slice(0, 15).map((i) => ({ p: i.p, text: `${i.severity === "high" ? "Must check: " : ""}${i.text}` })));
   const out = await saveReport(r);
 
