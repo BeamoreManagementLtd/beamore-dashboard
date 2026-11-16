@@ -146,7 +146,7 @@ export default async function Reports({ searchParams }: { searchParams: Promise<
                   <td className={`small ${r.colour === "red" ? "neg" : ""}`}>{fd(r.due)}</td>
                   <td className="small">{r.high ? <span className="pill bad">{r.high} must check</span> : null} {r.issueCount ? `${r.issueCount}` : r.status === "ready" ? "none" : ""}</td>
                   <td className="num">{typeof r.score === "number" ? (((r.fixes ?? {}) as { score_by?: string }).score_by === "parts"
-                    ? <b className={r.score >= 85 ? "pos" : r.score < 70 ? "neg" : ""} title={`${(r.score / 10).toFixed(1)} out of 10`}>{r.score}</b>
+                    ? <b className={r.score >= 85 ? "pos" : r.score < 70 ? "neg" : ""}>{r.score}</b>
                     : <span className="muted" title="Scored the old way: open it and check again">{r.score}*</span>) : ""}</td>
                   <td><span className={`pill ${tone}`}>{st}</span>{r.status === "failed" && <span className="two small neg">{(r.error ?? "").slice(0, 60)}</span>}</td>
                   <td className="small">{name(r.checker_id) ?? <span className="pill bad">None</span>}</td>

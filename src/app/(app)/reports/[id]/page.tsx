@@ -98,7 +98,7 @@ export default async function ReportPage({ params, searchParams }: { params: Pro
         <p>{p?.name ?? r.project_folder_name} · {r.folder_name} · {(r.clerks as unknown as { name?: string } | null)?.name ?? r.clerk_name ?? "clerk not known"}{r.report_number ? ` · No. ${r.report_number}` : ""}</p></div>
         {/* the report's mark, up front (Ronan, 16 Nov 2026: "where do I see that?") */}
         {typeof r.score === "number" && (scoreParts.length
-          ? <div className="tile" style={{ minWidth: 150, textAlign: "center" }} title="Marked on the report as the clerk sent it, before any corrections: see How the score was worked out"><span className="label">Report score</span><span className={`big ${r.score >= 85 ? "pos" : r.score < 70 ? "neg" : ""}`}>{r.score}<small className="muted">/100</small></span><span className="small muted">{(r.score / 10).toFixed(1)} out of 10</span></div>
+          ? <div className="tile" style={{ minWidth: 150, textAlign: "center" }} title="Marked on the report as the clerk sent it, before any corrections: see How the score was worked out"><span className="label">Report score</span><span className={`big ${r.score >= 85 ? "pos" : r.score < 70 ? "neg" : ""}`}>{r.score}<small className="muted">/100</small></span></div>
           : <div className="tile" style={{ minWidth: 150, textAlign: "center" }} title="Scored the old way, so it isn't comparable. It'll be re-checked."><span className="label">Report score</span><span className="big muted">{r.score}<small>/100</small></span><span className="small muted">old scoring</span></div>)}
       </div>
       {/* how the mark was made up (Ronan, 16 Nov 2026): information 40, then 10 each for the rest */}
@@ -107,7 +107,7 @@ export default async function ReportPage({ params, searchParams }: { params: Pro
           <h2>How the score was worked out <span className="small muted">on the report as the clerk sent it, before any corrections</span></h2>
           <table><tbody>{scoreParts.map((s) => (
             <tr key={s.label}><td>{s.label}</td><td className={`num ${s.got >= s.of * 0.85 ? "pos" : s.got < s.of * 0.6 ? "neg" : ""}`}><b>{s.got}</b> / {s.of}</td><td className="small"><span className="muted">{s.note}</span>{s.improve && s.got < s.of && <span className="two">{s.improve}</span>}</td></tr>
-          ))}<tr><td><b>Total</b></td><td className="num"><b>{r.score}</b> / 100</td><td className="small muted">{(r.score / 10).toFixed(1)} out of 10</td></tr></tbody></table>
+          ))}<tr><td><b>Total</b></td><td className="num"><b>{r.score}</b> / 100</td><td /></tr></tbody></table>
         </section>
       )}
       {error && <p className="callout bad">{error}</p>}
