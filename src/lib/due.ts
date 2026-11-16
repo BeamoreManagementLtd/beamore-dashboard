@@ -7,8 +7,9 @@ import { loadWorkflows, WORKFLOW_COLUMNS, daysSince, type WorkflowProject } from
 
 /**
  * The team due list. Most items are worked out from live data each time (they disappear once the underlying thing is
- * done); people can also add their own tasks. Default owners: chasing → Judy, report checks → the named checker,
- * linking/sign-off → the director.
+ * done); people can also add their own tasks. Default owners (Ronan, 16 Nov 2026): chasing invoices and
+ * clients → Ronan or Judy (joint), report checks → the named checker, setting up jobs, clerk paperwork and the diary →
+ * Ronan. Anyone can move an item to someone else on the due list.
  */
 export type DueItem = {
   key: string;
@@ -52,9 +53,13 @@ export async function buildDueList(db: SupabaseClient, me: Profile): Promise<Due
     return { owner: p ? (p.full_name ?? p.email).split(" ")[0] : fallbackName, ownerId: p?.id ?? null };
   };
   const directorName = people.find((p) => p.role === "director")?.full_name?.split(" ")[0] ?? "Ronan";
+  // jobs either Ronan or Judy can do: on both their lists until one of them does it (Ronan, 16 Nov 2026)
+  const joint = { owner: `${directorName} or Judy`, ownerId: null };
+  const ronan = director ? ownerOf(me.id, null) : ownerOf(null, directorName);
+  const ownerOr = (id: string | null | undefined, fallback: { owner: string | null; ownerId: string | null }) => (id ? ownerOf(id, null) : fallback);
   const items: DueItem[] = [];
 
-  // ---- chasing (Judy unless someone else owns the chase)
+  // ---- chasing (Ronan or Judy unless someone owns the chase)
   type Chase = { status: string; next_action: string | null; next_action_due: string | null; promised_date: string | null; owner_id: string | null };
   // Weekly rhythm: an overdue invoice comes back 7 days after its last chase (a chase email seen in Gmail, or a phone
   // call / email logged by the team), so it isn't on the list every day. A next-action date typed by hand wins if later.
@@ -72,12 +77,12 @@ export async function buildDueList(db: SupabaseClient, me: Profile): Promise<Due
     const link = `/invoices/${encodeURIComponent(i.number)}`;
     const last = lastChase.get(i.id)?.slice(0, 10);
     if (cs?.status === "our_move") { // the client has written back: answer them, no weekly wait
-      items.push({ key: `ourmove-${i.id}`, kind: "Chasing", title: `${i.number}: we owe ${client} a reply`, due: t, link, ...ownerOf(cs.owner_id, "Judy") });
+      items.push({ key: `ourmove-${i.id}`, kind: "Chasing", title: `${i.number}: we owe ${client} a reply`, due: t, link, ...ownerOr(cs.owner_id, joint) });
       continue;
     }
     if (cs?.promised_date && cs.promised_date >= t) continue; // payment promised: wait for the date
     if (cs?.promised_date && cs.promised_date < t) {
-      items.push({ key: `promise-${i.id}`, kind: "Chasing", title: `${i.number}: promised payment hasn't arrived`, detail: `${client} promised ${cs.promised_date}`, due: cs.promised_date, link, ...ownerOf(cs.owner_id, "Judy") });
+      items.push({ key: `promise-${i.id}`, kind: "Chasing", title: `${i.number}: promised payment hasn't arrived`, detail: `${client} promised ${cs.promised_date}`, due: cs.promised_date, link, ...ownerOr(cs.owner_id, joint) });
       continue;
     }
     if (!last && (!cs || cs.status === "new")) { notChased++; if (!oldestNew || i.due < oldestNew) oldestNew = i.due; continue; }
@@ -85,10 +90,10 @@ export async function buildDueList(db: SupabaseClient, me: Profile): Promise<Due
     const next = cs?.next_action_due && cs.next_action_due > weekly ? cs.next_action_due : weekly;
     if (next > t) continue; // chased in the last week: back on the list on `next`
     const ago = last ? Math.round((Date.parse(t) - Date.parse(last)) / 864e5) : null;
-    items.push({ key: `chase-${i.id}`, kind: "Chasing", title: `Chase ${i.number} again`, detail: `${client}${ago != null ? ` · last chased ${ago} days ago (${last})` : ""}${cs?.next_action ? ` · ${cs.next_action}` : ""}`, due: next, link, ...ownerOf(cs?.owner_id, "Judy") });
+    items.push({ key: `chase-${i.id}`, kind: "Chasing", title: `Chase ${i.number} again`, detail: `${client}${ago != null ? ` · last chased ${ago} days ago (${last})` : ""}${cs?.next_action ? ` · ${cs.next_action}` : ""}`, due: next, link, ...ownerOr(cs?.owner_id, joint) });
   }
   if (notChased)
-    items.push({ key: "not-chased", kind: "Chasing", title: `${notChased} overdue invoice${notChased > 1 ? "s" : ""} not chased yet`, detail: "Start with the oldest", due: t, link: "/invoices", ...ownerOf(null, "Judy") });
+    items.push({ key: "not-chased", kind: "Chasing", title: `${notChased} overdue invoice${notChased > 1 ? "s" : ""} not chased yet`, detail: "Start with the oldest", due: t, link: "/invoices", ...joint });
 
   // ---- reports waiting to check, one line per checker
   const q = queue.data ?? [];
@@ -98,7 +103,7 @@ export async function buildDueList(db: SupabaseClient, me: Profile): Promise<Due
     const late = mine.filter((r) => r.due && r.due < t).length;
     const earliest = mine.map((r) => r.due).filter(Boolean).sort()[0] ?? null;
     if (c === "Unknown")
-      items.push({ key: "reports-nochecker", kind: "Reports", title: `${mine.length} report${mine.length > 1 ? "s" : ""} with no checker`, detail: `Decide who checks ${[...new Set(mine.map((r) => r.project_name).filter(Boolean))].slice(0, 6).join(", ")}${mine.length > 6 ? "…" : ""} and add them to the report scanner's checker list`, due: earliest, link: "/reports?checker=Unknown", ...ownerOf(null, "Judy") });
+      items.push({ key: "reports-nochecker", kind: "Reports", title: `${mine.length} report${mine.length > 1 ? "s" : ""} with no checker`, detail: `Decide who checks ${[...new Set(mine.map((r) => r.project_name).filter(Boolean))].slice(0, 6).join(", ")}${mine.length > 6 ? "…" : ""} and add them to the report scanner's checker list`, due: earliest, link: "/reports?checker=Unknown", ...joint });
     else
       items.push({ key: `reports-${c}`, kind: "Reports", title: `Check ${mine.length} report${mine.length > 1 ? "s" : ""}`, detail: late ? `${late} past due` : undefined, due: earliest, link: `/reports?checker=${encodeURIComponent(c)}`, ...ownerOf(null, c) });
   }
@@ -115,7 +120,7 @@ export async function buildDueList(db: SupabaseClient, me: Profile): Promise<Due
     byProj.set(p.id, x);
   }
   for (const [pid, x] of byProj)
-    items.push({ key: `info-${pid}`, kind: "Projects", title: `${x.name}: chase the client for project information`, detail: x.items.join(", "), due: addDays(x.since, 7), link: `/projects/${pid}`, ...ownerOf(null, "Judy") });
+    items.push({ key: `info-${pid}`, kind: "Projects", title: `${x.name}: chase the client for project information`, detail: x.items.join(", "), due: addDays(x.since, 7), link: `/projects/${pid}`, ...joint });
 
   // ---- project workflows (docs/workflows.html): pricing, set-up and close-out reminders
   {
@@ -125,7 +130,6 @@ export async function buildDueList(db: SupabaseClient, me: Profile): Promise<Due
     const list = ((active ?? []) as unknown as (WorkflowProject & { display_name: string })[])
       .filter((p) => p.stage_changed_at || !["enquiry", "pricing"].includes(p.stage));
     const wfs = await loadWorkflows(db, list);
-    const judy = ownerOf(null, "Judy");
     for (const p of list) {
       const w = wfs.get(p.id)!;
       const days = daysSince(p.stage_changed_at) ?? 0;
@@ -143,12 +147,11 @@ export async function buildDueList(db: SupabaseClient, me: Profile): Promise<Due
         else if (p.stage === "sent" && p.stage_changed_at && days >= 7)
           add(`Ask for a reply: ${p.display_name}`, `Proposal sent ${days} days ago, no reply yet. Reminds again every 7 days`, toDirector, addDays(p.stage_changed_at.slice(0, 10), 7 * Math.floor(days / 7)));
       } else if (w.current === "setup" && (w.status.waitingOn === "us" || w.status.waitingOn === "admin")) {
-        const clerkStep = w.stages[1].steps.find((x) => x.state === "now")?.id === "S3";
-        add(`Set up ${p.display_name}`, w.status.text, clerkStep ? toDirector : judy);
+        add(`Set up ${p.display_name}`, w.status.text, toDirector);
       } else if (w.current === "start" && w.status.waitingOn === "you") {
         add(`Has ${p.display_name} started on site?`, w.status.text, toDirector);
       } else if (w.current === "start" && w.status.waitingOn === "admin" && p.start_date && p.start_date <= addDays(t, 14)) {
-        add(`Book the clerk in the diary for ${p.display_name}`, w.status.text, judy, addDays(p.start_date, -14) < t ? t : addDays(p.start_date, -14));
+        add(`Book the clerk in the diary for ${p.display_name}`, w.status.text, toDirector, addDays(p.start_date, -14) < t ? t : addDays(p.start_date, -14));
       } else if (w.current === "closeout" && w.quiet)
         add(`Is ${p.display_name} finished, paused or still going?`, w.status.text.replace(/ Waiting on you.*$/, ""), toDirector);
     }
@@ -235,18 +238,18 @@ export async function buildDueList(db: SupabaseClient, me: Profile): Promise<Due
   for (const c of compliance.data ?? []) {
     const name = (c.clerks as unknown as { name: string } | null)?.name ?? "Clerk";
     if (c.dbs_recheck && c.dbs_recheck <= addDays(t, 30))
-      items.push({ key: `dbs-${name}`, kind: "Personnel", title: `${name}: DBS recheck due`, due: c.dbs_recheck, link: "/personnel", ...ownerOf(null, "Judy") });
+      items.push({ key: `dbs-${name}`, kind: "Personnel", title: `${name}: DBS recheck due`, due: c.dbs_recheck, link: "/personnel", ...ronan });
     if (c.chartership_renewal && c.chartership_renewal <= addDays(t, 30))
-      items.push({ key: `chart-${name}`, kind: "Personnel", title: `${name}: chartership renewal due`, due: c.chartership_renewal, link: "/personnel", ...ownerOf(null, "Judy") });
+      items.push({ key: `chart-${name}`, kind: "Personnel", title: `${name}: chartership renewal due`, due: c.chartership_renewal, link: "/personnel", ...ronan });
     const clerkLink = `/personnel/${c.clerk_id}`;
     const active = (c.clerks as unknown as { active: boolean } | null)?.active !== false;
     for (const [field, label] of [["pi_insurance_expiry", "professional indemnity insurance"], ["pl_insurance_expiry", "public liability insurance"], ["cscs_expiry", "CSCS card"]] as const) {
       const d = c[field] as string | null;
       if (active && d && d <= addDays(t, 30))
-        items.push({ key: `${field}-${c.clerk_id}`, kind: "Personnel", title: `${name}: ${label} ${d < t ? "expired" : "expires soon"}`, detail: "Ask for the new certificate and update the date", due: d, link: clerkLink, ...ownerOf(null, "Judy") });
+        items.push({ key: `${field}-${c.clerk_id}`, kind: "Personnel", title: `${name}: ${label} ${d < t ? "expired" : "expires soon"}`, detail: "Ask for the new certificate and update the date", due: d, link: clerkLink, ...ronan });
     }
     if (c.onboarding_started && !c.onboarding_complete)
-      items.push({ key: `onboard-${c.clerk_id}`, kind: "Personnel", title: `Onboard ${name}`, detail: "New clerk: insurance, DBS, CSCS, PPE, terms and set-up. Not ready for site until it's all done", due: addDays(c.onboarding_started as string, 7), link: clerkLink, ...ownerOf(null, "Judy") });
+      items.push({ key: `onboard-${c.clerk_id}`, kind: "Personnel", title: `Onboard ${name}`, detail: "New clerk: insurance, DBS, CSCS, PPE, terms and set-up. Not ready for site until it's all done", due: addDays(c.onboarding_started as string, 7), link: clerkLink, ...ronan });
   }
 
   // ---- holidays: dashboard entries still to go in the diary, and planned (grey) visits on holiday days
@@ -257,7 +260,7 @@ export async function buildDueList(db: SupabaseClient, me: Profile): Promise<Due
     const name = (h.clerks as unknown as { name: string } | null)?.name ?? "Clerk";
     // the dashboard now writes holidays into the diary itself; only ones it couldn't write are left for a person
     if (h.source === "dashboard" && !h.synced_to_diary_at && h.diary_state !== "waiting" && h.diary_state !== "written")
-      items.push({ key: `hol-${h.id}`, kind: "Personnel", title: `Add ${name}'s holiday to the diary`, detail: `${span(h)}${h.part_day ? ` (${h.part_day})` : ""}: put "Holiday" in the comments${h.diary_note ? ` (${h.diary_note})` : ""}`, due: addDays(h.date_from, -7) < t ? t : addDays(h.date_from, -7), link: `/diary?week=${h.date_from}&clerk=${h.clerk_id}`, ...ownerOf(null, "Judy") });
+      items.push({ key: `hol-${h.id}`, kind: "Personnel", title: `Add ${name}'s holiday to the diary`, detail: `${span(h)}${h.part_day ? ` (${h.part_day})` : ""}: put "Holiday" in the comments${h.diary_note ? ` (${h.diary_note})` : ""}`, due: addDays(h.date_from, -7) < t ? t : addDays(h.date_from, -7), link: `/diary?week=${h.date_from}&clerk=${h.clerk_id}`, ...ronan });
     const { data: clash } = await db.from("diary_visits").select("visit_date,site_as_typed").eq("clerk_id", h.clerk_id).eq("side", "planned")
       .gte("visit_date", h.date_from < t ? t : h.date_from).lte("visit_date", h.date_to).order("visit_date").limit(5);
     if (clash?.length)
@@ -271,7 +274,7 @@ export async function buildDueList(db: SupabaseClient, me: Profile): Promise<Due
   ]);
   const noDbs = (act ?? []).filter((a) => !(withDbs ?? []).some((w) => w.clerk_id === a.clerk_id)).length;
   if (noDbs)
-    items.push({ key: "dbs-missing", kind: "Personnel", title: `Add DBS details for ${noDbs} clerk${noDbs > 1 ? "s" : ""}`, detail: "Working with us but no DBS record in the dashboard", due: null, link: "/personnel", ...ownerOf(null, "Judy") });
+    items.push({ key: "dbs-missing", kind: "Personnel", title: `Add DBS details for ${noDbs} clerk${noDbs > 1 ? "s" : ""}`, detail: "Working with us but no DBS record in the dashboard", due: null, link: "/personnel", ...ronan });
 
   // ---- diary month routine (the grey/salmon layout starts with November 2026)
   const monthStart = t.slice(0, 7) + "-01";
@@ -314,8 +317,16 @@ export async function buildDueList(db: SupabaseClient, me: Profile): Promise<Due
   for (const k of (tasks.data ?? []).filter((k) => director || !(k.kind ?? "").startsWith("Work list"))) // Ronan's Todoist work list is his own
     items.push({ key: `task-${k.id}`, kind: "Task", title: k.title, detail: [k.kind, k.ai_note].filter(Boolean).join(" · ") || undefined, due: k.due, link: k.link ?? undefined, taskId: k.id, ...ownerOf(k.owner_id, k.owner_name ?? null) });
 
+  // ---- items moved to someone else on the due list
+  const { data: moved } = await db.from("due_owner_overrides").select("due_key,owner_id,owner_name");
+  for (const i of items) {
+    const m = (moved ?? []).find((x) => x.due_key === i.key);
+    if (m && !i.taskId) Object.assign(i, m.owner_id ? ownerOf(m.owner_id, null) : { owner: m.owner_name, ownerId: null });
+  }
+
   return items.sort((a, b) => (a.due ?? "9999").localeCompare(b.due ?? "9999") || a.title.localeCompare(b.title));
 }
 
+/** Mine: given to me by id or first name, or a joint job ("Ronan or Judy") with me in it. */
 export const isMine = (i: DueItem, me: Profile) =>
-  i.ownerId === me.id || (!i.ownerId && !!i.owner && first(i.owner) === first(me.full_name ?? me.email));
+  i.ownerId === me.id || (!i.ownerId && !!i.owner && i.owner.split(/\s+or\s+/).some((n) => first(n) === first(me.full_name ?? me.email)));

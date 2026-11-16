@@ -189,9 +189,23 @@ export async function syncTodoist(admin: SupabaseClient) {
   const already = new Set((sentBefore ?? []).map((a) => (a.detail as { id: string }).id));
   const closedHere = (all ?? []).filter((t) => t.todoist_id && t.done_at && !already.has(t.todoist_id) && !items.some((i) => i.id === t.todoist_id && (finished(i) || excluded(i.section_id))));
   for (const t of closedHere) cmds.push({ type: "item_complete", args: { id: t.todoist_id } });
+  // moved to someone else on the dashboard's due list: the card moves to their column too (a joint job goes on
+  // Ronan's), otherwise the board would move it back next time it changed (16 Nov 2026)
+  const { data: moveAsks } = await admin.from("portal_audit").select("detail").eq("action", "todoist-move-wanted").gte("at", new Date(Date.now() - 14 * 864e5).toISOString());
+  const { data: movesDone } = await admin.from("portal_audit").select("detail").eq("action", "todoist-moved").gte("at", new Date(Date.now() - 14 * 864e5).toISOString());
+  const doneMoves = new Set((movesDone ?? []).map((a) => (a.detail as { ask: string }).ask));
+  const movesNow: { ask: string }[] = [];
+  for (const a of moveAsks ?? []) {
+    const d = a.detail as { ask: string; task: string };
+    const t = (all ?? []).find((x) => x.id === d.task);
+    if (doneMoves.has(d.ask) || !t?.todoist_id || t.done_at) continue;
+    const where = target(t) ?? {};
+    cmds.push({ type: "item_move", args: { id: t.todoist_id, ...(where.section_id ? { section_id: where.section_id } : { project_id: projectId }) } });
+    movesNow.push({ ask: d.ask });
+  }
 
   // ---- dashboard -> Todoist: Ronan's due list (tasks are above)
-  const due = (await buildDueList(admin, me as Profile)).filter((d) => !d.taskId && (d.ownerId === me.id || d.owner === null || d.owner === "Ronan"));
+  const due = (await buildDueList(admin, me as Profile)).filter((d) => !d.taskId && (d.ownerId === me.id || d.owner === null || (d.owner ?? "").split(/\s+or\s+/).includes("Ronan")));
   const { data: mirrored } = await admin.from("todoist_due_items").select("due_key,todoist_id,title,ticked_in_todoist_at");
   const have = new Map((mirrored ?? []).map((m) => [m.due_key, m]));
   const nowKeys = new Set(due.map((d) => d.key));
@@ -213,6 +227,7 @@ export async function syncTodoist(admin: SupabaseClient) {
   for (const d of due) { const m = have.get(d.key); if (m && m.title !== d.title) await admin.from("todoist_due_items").update({ title: d.title }).eq("due_key", d.key); }
   if (dealtWith.length) await admin.from("todoist_due_items").delete().in("due_key", dealtWith.map((m) => m.due_key));
   if (closedHere.length) await admin.from("portal_audit").insert(closedHere.map((t) => ({ actor: "dashboard", action: "todoist-closed", detail: { id: t.todoist_id } })));
+  if (movesNow.length) await admin.from("portal_audit").insert(movesNow.map((m) => ({ actor: "dashboard", action: "todoist-moved", detail: m })));
 
   // a fresh sync token after our own changes, so they aren't read back next time as new
   const fin = await call({ sync_token: r.sync_token, resource_types: JSON.stringify(["items"]) });

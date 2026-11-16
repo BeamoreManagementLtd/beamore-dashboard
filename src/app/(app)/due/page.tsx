@@ -4,7 +4,7 @@ import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { staffPeople } from "@/lib/staff";
 import { buildDueList, isMine, type DueItem } from "@/lib/due";
 import { fd } from "@/lib/format";
-import { addTask, completeTask } from "./actions";
+import { addTask, completeTask, moveDueItem } from "./actions";
 
 export const dynamic = "force-dynamic";
 
@@ -18,11 +18,12 @@ export default async function Due({ searchParams }: { searchParams: Promise<{ wh
   const groups = new Map<string, DueItem[]>();
   for (const i of shown) groups.set(i.owner ?? "Unassigned", [...(groups.get(i.owner ?? "Unassigned") ?? []), i]);
   const late = shown.filter((i) => i.due && i.due < t).length;
+  const joint = `${people.find((p) => p.role === "director")?.first ?? "Ronan"} or Judy`;
 
   return (
     <>
       <div className="head">
-        <div><h1>Due list</h1><p>{shown.length} things to do{late ? `, ${late} overdue` : ""}. Most items clear themselves once the job is done.</p></div>
+        <div><h1>Due list</h1><p>{shown.length} things to do{late ? `, ${late} overdue` : ""}. Most items clear themselves once the job is done. Use Move to give one to someone else.</p></div>
       </div>
       <nav className="row">
         <a href="/due" className={`btn ${who !== "mine" ? "primary" : ""}`}>Everyone</a>
@@ -53,6 +54,17 @@ export default async function Due({ searchParams }: { searchParams: Promise<{ wh
                 <td style={{ width: 90 }}><span className="pill neutral">{i.kind}</span></td>
                 <td>{i.link ? <Link href={i.link}><b>{i.title}</b></Link> : <b>{i.title}</b>}{i.detail && <span className="two">{i.detail}</span>}</td>
                 <td className={`num ${i.due && i.due < t ? "neg" : ""}`}>{i.due ? (i.due < t ? `${fd(i.due)} · overdue` : i.due === t ? "Today" : fd(i.due)) : "—"}</td>
+                <td style={{ width: 210 }}>
+                  {/* move it to someone else's list, or make it a joint job */}
+                  <form action={moveDueItem.bind(null, i.key, i.taskId ?? null)} className="row" style={{ gap: 4, flexWrap: "nowrap" }}>
+                    <select name="to" aria-label="Move to" defaultValue="" style={{ maxWidth: 140 }}>
+                      <option value="" disabled>Move to…</option>
+                      {people.map((p) => <option key={p.email} value={p.profileId ?? `name:${p.first}`}>{p.first}</option>)}
+                      <option value="joint">{joint}</option>
+                    </select>
+                    <button className="btn small">Move</button>
+                  </form>
+                </td>
                 <td className="num" style={{ width: 70 }}>
                   {i.taskId && <form action={completeTask.bind(null, i.taskId)}><button className="btn">Done</button></form>}
                 </td>

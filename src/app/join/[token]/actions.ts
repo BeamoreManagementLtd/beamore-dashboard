@@ -38,7 +38,8 @@ export async function submitJoin(token: string, form: FormData) {
       for (const [f, label] of files) { try { saved.push(await uploadToFolder(admin, folder, f, label)); } catch { failed.push(label); } }
     } catch { failed.push(...files.map(([, l]) => l)); }
   }
-  const { data: judy } = await admin.from("profiles").select("id").ilike("full_name", "Judy%").limit(1);
-  await admin.from("tasks").insert({ owner_id: judy?.[0]?.id ?? null, owner_name: "Judy", title: `Check ${name}'s new clerk form`, kind: "Personnel", link: `/personnel/${c.clerk_id}`, due: new Date().toISOString().slice(0, 10) });
+  // new clerks' paperwork is Ronan's (16 Nov 2026); it can be moved to someone else on the due list
+  const { data: ronan } = await admin.from("profiles").select("id").eq("role", "director").limit(1);
+  await admin.from("tasks").insert({ owner_id: ronan?.[0]?.id ?? null, owner_name: ronan?.[0]?.id ? null : "Ronan", title: `Check ${name}'s new clerk form`, kind: "Personnel", link: `/personnel/${c.clerk_id}`, due: new Date().toISOString().slice(0, 10) });
   redirect(`/join/${token}?done=1${failed.length ? `&failed=${encodeURIComponent(failed.join(", "))}` : ""}`);
 }
