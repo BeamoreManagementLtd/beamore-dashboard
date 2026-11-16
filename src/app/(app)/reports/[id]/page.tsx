@@ -140,20 +140,18 @@ export default async function ReportPage({ params, searchParams }: { params: Pro
             {r.spelling_fixed} spelling fix{r.spelling_fixed === 1 ? "" : "es"} made as tracked changes in the Word file (and listed under What was changed). The points above aren&apos;t put in the file.
             {" "}Photos: {photos.count ?? 0}{photos.blurry ? `, ${photos.blurry} low detail` : ""}{photos.smallOnPage ? `, ${photos.smallOnPage} shown small` : ""}{photos.stretched ? `, ${photos.stretched} stretched` : ""}{photos.shrunk ? `; ${photos.shrunk} made smaller` : ""}.
             {" "}File {mb(r.size_before)} → {mb(r.size_after)}. Checked {fdt(r.checked_at)}.</p>}
-          {/* open it in Word from Google Drive on your computer: opening it in Google Docs spoils the layout */}
-          {r.main_folder && r.checked_name && !r.original_trashed_at && <div className="field"><label className="small muted" htmlFor="wp">The checked report, to open in Word (on your computer, Google Drive)</label>
-            <input id="wp" readOnly value={`G:\\My Drive\\Work\\${r.main_folder}\\${r.project_folder_name}\\${r.folder_name}\\${inPlace ? "" : "Checked (dashboard)\\"}${r.checked_name}`} style={{ width: "100%", fontFamily: "monospace", fontSize: 12 }} /></div>}
+          {/* edit it in the project folder on your own computer (Ronan, 16 Nov 2026): no download or open-in-Drive
+              buttons, which confused people because that's not where the report is edited */}
+          {r.main_folder && r.checked_name && !r.original_trashed_at && <div className="callout info">
+            <b>Edit the report in the project folder.</b> Open it in Word from the project&apos;s folder on your computer, make your changes, save, then come back here to approve and send.
+            <div className="field" style={{ marginTop: 8 }}><label className="small muted" htmlFor="wp">Where it is</label>
+              <input id="wp" readOnly value={`G:\\My Drive\\Work\\${r.main_folder}\\${r.project_folder_name}\\${r.folder_name}\\${inPlace ? "" : "Checked (dashboard)\\"}${r.checked_name}`} style={{ width: "100%", fontFamily: "monospace", fontSize: 12 }} /></div>
+            {r.folder_id && <p className="small" style={{ margin: "6px 0 0" }}><a href={`https://drive.google.com/drive/folders/${r.folder_id}`} target="_blank" rel="noreferrer">See the folder in Google Drive</a> <span className="muted">(to find it; edit it from the project folder on your computer)</span></p>}
+          </div>}
           {r.main_folder && (inPlace
             ? <p className="small muted">Checked in the clerk&apos;s own file, in its folder{r.renamed_from ? ` (renamed from ${r.renamed_from})` : ""}. The version the clerk uploaded is kept in Drive (File information → Manage versions), and Check again starts from it. When it&apos;s sent, the tracked spelling changes stay in the file so the clerk can see them.</p>
             : <p className="small muted">The clerk&apos;s original is left as it was until the report is sent: <span style={{ fontFamily: "monospace" }}>{r.folder_name}\{r.renamed_from ?? r.file_name}</span>{r.original_trashed_at ? ` (overwritten with the checked version when it was sent, ${fdt(r.original_trashed_at)}; Drive keeps the old version under File information → Manage versions)` : ". When it's sent, the checked version (tracked spelling changes kept, comments taken out) is written over it."}</p>)}
-          {/* Google's viewer spoils a Word file's layout, and a web link can't open a Drive file straight in Word
-              (Ronan, 15 Nov 2026): open it from Drive with "Open with → Microsoft Word", or download it */}
-          {r.checked_file_id && !r.original_trashed_at && <p>
-            <a className="btn small" href={`https://drive.google.com/file/d/${r.checked_file_id}/view`} target="_blank" rel="noreferrer">Show the report in Drive</a>{" "}
-            <a className="btn small" href={`/api/reports/${id}/word`}>Download to open in Word</a>
-            <span className="two small muted">To change it: in Drive click <b>Open with → Microsoft Word</b> at the top (not Google Docs), so your changes save back to Drive. The download is for reading: changes to a downloaded copy don&apos;t go back.</span>
-          </p>}
-          <p className="small muted">Open the report in Word and go through the points above page by page (spelling is already fixed as tracked changes: reject any you don&apos;t want), make any changes, save, then approve and send here. The PDF has the changes accepted and no comments; the clerk&apos;s file keeps the tracked spelling changes so they can see them.</p>
+          <p className="small muted">Open the report in Word from the project folder and go through the points above page by page (spelling is already fixed as tracked changes: reject any you don&apos;t want), make any changes, save, then approve and send here. The PDF has the changes accepted and no comments; the clerk&apos;s file keeps the tracked spelling changes so they can see them.</p>
         </section>
 
         <section className="panel">
