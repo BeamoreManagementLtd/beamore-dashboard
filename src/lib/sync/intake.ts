@@ -117,8 +117,14 @@ export async function runIntake(admin: SupabaseClient) {
     // "assumed received" (untick any that are really missing) instead of being chased.
     const { data: fresh } = await admin.from("projects").select("id,display_name,is_dfe,dfe_evidence,stage,stage_changed_at")
       .in("stage", STARTING).not("is_dfe", "is", null);
-    const { data: hasList } = await admin.from("project_info").select("project_id");
-    const listed = new Set((hasList ?? []).map((h) => h.project_id));
+    // read every row: past 1,000 the checklist was added again each hour (16 Nov 2026: Kings Maths had it 12 times)
+    const listed = new Set<string>();
+    for (let from = 0; ; from += 1000) {
+      const { data: page, error: pageErr } = await admin.from("project_info").select("project_id").order("id").range(from, from + 999);
+      if (pageErr) throw new Error(`checklists: ${pageErr.message}`);
+      for (const h of page ?? []) listed.add(h.project_id as string);
+      if ((page?.length ?? 0) < 1000) break;
+    }
     for (const p of fresh ?? []) {
       if (listed.has(p.id)) continue;
       const list = p.is_dfe ? INFO_DFE : INFO_STANDARD;
