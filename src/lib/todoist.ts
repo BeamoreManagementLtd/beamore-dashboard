@@ -60,6 +60,31 @@ async function send(cmds: Cmd[]) {
 /** Raw Todoist commands (used to add comments to cards). */
 export async function todoistCommands(cmds: Cmd[]) { return send(cmds); }
 
+/** Cards ticked off in a project over the last N days (title, description, when). */
+export async function todoistCompleted(projectId: string, days: number) {
+  const out: { id: string; content: string; description?: string; completed_at?: string }[] = [];
+  const until = new Date(), since = new Date(Date.now() - days * 864e5);
+  // the API takes at most about 3 months per call, in windows
+  for (let from = since; from < until; from = new Date(from.getTime() + 80 * 864e5)) {
+    const to = new Date(Math.min(until.getTime(), from.getTime() + 80 * 864e5));
+    let cursor: string | null = null;
+    do {
+      const q = new URLSearchParams({ since: from.toISOString(), until: to.toISOString(), project_id: projectId, limit: "200", ...(cursor ? { cursor } : {}) });
+      const res = await fetch(`https://api.todoist.com/api/v1/tasks/completed/by_completion_date?${q}`, { headers: { Authorization: `Bearer ${process.env.TODOIST_API_TOKEN}` }, cache: "no-store" });
+      if (!res.ok) throw new Error(`Todoist completed ${res.status}: ${(await res.text()).slice(0, 150)}`);
+      const j = (await res.json()) as { items?: typeof out; next_cursor?: string | null };
+      out.push(...(j.items ?? []));
+      cursor = j.next_cursor ?? null;
+    } while (cursor);
+  }
+  return out;
+}
+
+/** A full read of projects, columns and open cards (the email-to-to-do job). */
+export async function todoistBoard() {
+  return call({ sync_token: "*", resource_types: JSON.stringify(["projects", "sections", "items"]) });
+}
+
 const finished = (i: Item) => !!i.checked || !!i.completed_at || !!i.is_deleted;
 const firstOf = (name: string) => name.trim().split(/[\s']/)[0].toLowerCase();
 
