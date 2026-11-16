@@ -218,3 +218,21 @@ export async function saveProjectAttachments(admin: SupabaseClient, projectId: s
   }
   return saved;
 }
+
+/**
+ * Give an allocated clerk the project's Drive folder (Ronan, 16 Nov 2026): shared with their Beamore address as an editor,
+ * no Google notification email. Makes the folder first if the project hasn't got one. Never removes anyone's access.
+ */
+export async function shareFolderWithClerk(admin: SupabaseClient, projectId: string, clerkId: string) {
+  const { data: c } = await admin.from("clerks").select("name,email").eq("id", clerkId).maybeSingle();
+  const email = (c?.email as string | null)?.trim().toLowerCase();
+  if (!email) { await log(admin, projectId, "Drive folder", `Not shared with ${c?.name ?? "the clerk"}: no email address on their Personnel record`); return; }
+  let folderId = (await admin.from("projects").select("drive_folder_id").eq("id", projectId).single()).data?.drive_folder_id as string | null;
+  if (!folderId) { await ensureProjectFolder(admin, projectId); folderId = (await admin.from("projects").select("drive_folder_id").eq("id", projectId).single()).data?.drive_folder_id ?? null; }
+  if (!folderId) throw new Error("the project has no Drive folder");
+  const g = await driveClient(admin);
+  const perms = (await g.json<{ permissions: { emailAddress?: string }[] }>(`files/${folderId}/permissions`, { supportsAllDrives: "true", fields: "permissions(emailAddress)" })).permissions;
+  if (perms.some((x) => x.emailAddress?.toLowerCase() === email)) { await log(admin, projectId, "Drive folder", `${c?.name} already has the project folder`); return; }
+  await g.post(`https://www.googleapis.com/drive/v3/files/${folderId}/permissions?sendNotificationEmail=false&supportsAllDrives=true`, { type: "user", role: "writer", emailAddress: email });
+  await log(admin, projectId, "Drive folder", `Project folder shared with ${c?.name} (${email}), can edit`);
+}
