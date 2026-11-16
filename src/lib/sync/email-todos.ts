@@ -143,7 +143,8 @@ export async function runEmailTodos(admin: SupabaseClient, opts: { hours?: numbe
         commented++;
         continue;
       }
-      if (d.action !== "new" || !d.title || byThread.has(d.thread)) continue;
+      // a "comment" whose card isn't on the board any more, but with a title: a new card, unless the thread has one
+      if ((d.action !== "new" && d.action !== "comment") || !d.title || byThread.has(d.thread)) continue;
       const owner = d.owner ?? "Ronan";
       const person = owner === "Ronan" ? null : staff.find((s) => s.first.toLowerCase() === owner.toLowerCase());
       const section = person ? listId(person.first) : colId(d.column ?? "Email replies") ?? colId("General admin");
