@@ -9,7 +9,8 @@ import { STANDARDS, STANDARD_KEYS, type StandardsMet } from "./standards";
  */
 export const REPORT_MODEL = "claude-sonnet-5-5";
 
-export type Issue = { severity: "high" | "medium" | "low"; kind: string; text: string; p: number | null };
+/** near: a few words from where it is in the report; page: the page Word puts that on (filled in by the office PC) */
+export type Issue = { severity: "high" | "medium" | "low"; kind: string; text: string; p: number | null; near?: string | null; page?: number | null };
 export type Check = {
   summary: string; visit_date: string | null; report_number: string | null; clerk_name: string | null;
   spelling: { p: number; find: string; replace: string }[]; issues: Issue[];

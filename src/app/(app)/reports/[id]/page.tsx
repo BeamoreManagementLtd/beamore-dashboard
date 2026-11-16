@@ -13,7 +13,7 @@ import { assignChecker, sendReport, markDone, ignoreReport, checkAgain, sendCler
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
-type Issue = { severity: "high" | "medium" | "low"; kind: string; text: string };
+type Issue = { severity: "high" | "medium" | "low"; kind: string; text: string; near?: string | null; page?: number | null };
 
 /** A friendly note to the clerk: what had to be fixed in this report and what to do next time. */
 function clerkNote(r: Record<string, unknown>, sender: string) {
@@ -84,6 +84,7 @@ export default async function ReportPage({ params, searchParams }: { params: Pro
   const p = r.projects as unknown as { id: string; name: string } | null;
   const issues = (r.issues ?? []) as Issue[];
   // checked in the clerk's own file (from 16 Nov 2026) rather than a copy in "Checked (dashboard)"
+  const pagesState = (r.fixes as { pages_state?: string } | null)?.pages_state ?? null;
   const inPlace = !!r.checked_file_id && r.checked_file_id === r.drive_file_id;
   const photos = (r.photos ?? {}) as { count?: number; blurry?: number; smallOnPage?: number; stretched?: number; shrunk?: number };
   const mb = (n: number | null) => (n ? `${(n / 1e6).toFixed(1)} MB` : "—");
@@ -125,16 +126,25 @@ export default async function ReportPage({ params, searchParams }: { params: Pro
             <form action={checkAgain.bind(null, id)} className="callout"><span className="small">This report was checked with the old rules. Check it again for the new score (the checked copy is made afresh, so do this before changing it by hand).</span> <button className="btn small">Check again</button></form>
           )}
           {r.ai_summary && <p>{r.ai_summary}</p>}
-          {!!issues.length && <ul className="plain">{issues.map((i, k) => <li key={k} style={{ marginBottom: 6 }}><span className={`pill ${SEV[i.severity]?.[1] ?? "muted"}`}>{SEV[i.severity]?.[0] ?? i.severity}</span> {i.text}</li>)}</ul>}
+          {/* the points to look at, in page order (Ronan, 16 Nov 2026: here with page numbers, not as comments in the
+              Word file). Points about the whole report come first. */}
+          {!!issues.length && <table className="issues"><tbody>{[...issues].sort((a, b) => (a.near ? (a.page ?? 9999) : -1) - (b.near ? (b.page ?? 9999) : -1)).map((i, k) => (
+            <tr key={k}>
+              <td style={{ width: 82, whiteSpace: "nowrap", verticalAlign: "top" }}><b>{i.near ? (i.page ? `Page ${i.page}` : pagesState === "waiting" ? "Page …" : "Page ?") : "Whole report"}</b></td>
+              <td style={{ verticalAlign: "top" }}><span className={`pill ${SEV[i.severity]?.[1] ?? "muted"}`}>{SEV[i.severity]?.[0] ?? i.severity}</span> {i.text}
+                {i.near && <span className="two small muted">Look for: &ldquo;{i.near}&rdquo;</span>}</td>
+            </tr>
+          ))}</tbody></table>}
+          {pagesState === "waiting" && issues.some((i) => i.near) && <p className="small muted">Page numbers come from Word on the office PC, usually within a few minutes of the check. Until then, search in Word for the words shown (Ctrl+F).</p>}
           {r.checked_at && <p className="small muted">
-            {r.spelling_fixed} spelling fix{r.spelling_fixed === 1 ? "" : "es"} made as tracked changes in the checked copy (and listed under What was changed); issues added as comments in the Word file.
+            {r.spelling_fixed} spelling fix{r.spelling_fixed === 1 ? "" : "es"} made as tracked changes in the Word file (and listed under What was changed). The points above aren&apos;t put in the file.
             {" "}Photos: {photos.count ?? 0}{photos.blurry ? `, ${photos.blurry} low detail` : ""}{photos.smallOnPage ? `, ${photos.smallOnPage} shown small` : ""}{photos.stretched ? `, ${photos.stretched} stretched` : ""}{photos.shrunk ? `; ${photos.shrunk} made smaller` : ""}.
             {" "}File {mb(r.size_before)} → {mb(r.size_after)}. Checked {fdt(r.checked_at)}.</p>}
           {/* open it in Word from Google Drive on your computer: opening it in Google Docs spoils the layout */}
           {r.main_folder && r.checked_name && !r.original_trashed_at && <div className="field"><label className="small muted" htmlFor="wp">The checked report, to open in Word (on your computer, Google Drive)</label>
             <input id="wp" readOnly value={`G:\\My Drive\\Work\\${r.main_folder}\\${r.project_folder_name}\\${r.folder_name}\\${inPlace ? "" : "Checked (dashboard)\\"}${r.checked_name}`} style={{ width: "100%", fontFamily: "monospace", fontSize: 12 }} /></div>}
           {r.main_folder && (inPlace
-            ? <p className="small muted">Checked in the clerk&apos;s own file, in its folder{r.renamed_from ? ` (renamed from ${r.renamed_from})` : ""}. The version the clerk uploaded is kept in Drive (File information → Manage versions), and Check again starts from it. When it&apos;s sent, the comments are taken out of the file; the tracked spelling changes stay so the clerk can see them.</p>
+            ? <p className="small muted">Checked in the clerk&apos;s own file, in its folder{r.renamed_from ? ` (renamed from ${r.renamed_from})` : ""}. The version the clerk uploaded is kept in Drive (File information → Manage versions), and Check again starts from it. When it&apos;s sent, the tracked spelling changes stay in the file so the clerk can see them.</p>
             : <p className="small muted">The clerk&apos;s original is left as it was until the report is sent: <span style={{ fontFamily: "monospace" }}>{r.folder_name}\{r.renamed_from ?? r.file_name}</span>{r.original_trashed_at ? ` (overwritten with the checked version when it was sent, ${fdt(r.original_trashed_at)}; Drive keeps the old version under File information → Manage versions)` : ". When it's sent, the checked version (tracked spelling changes kept, comments taken out) is written over it."}</p>)}
           {/* Google's viewer spoils a Word file's layout, and a web link can't open a Drive file straight in Word
               (Ronan, 15 Nov 2026): open it from Drive with "Open with → Microsoft Word", or download it */}
@@ -143,7 +153,7 @@ export default async function ReportPage({ params, searchParams }: { params: Pro
             <a className="btn small" href={`/api/reports/${id}/word`}>Download to open in Word</a>
             <span className="two small muted">To change it: in Drive click <b>Open with → Microsoft Word</b> at the top (not Google Docs), so your changes save back to Drive. The download is for reading: changes to a downloaded copy don&apos;t go back.</span>
           </p>}
-          <p className="small muted">Look through the checked report (spelling is fixed as tracked changes; the AI&apos;s points are comments), make any changes, save, then approve and send here. The PDF has the changes accepted and no comments; the clerk&apos;s file keeps the tracked spelling changes so they can see them.</p>
+          <p className="small muted">Open the report in Word and go through the points above page by page (spelling is already fixed as tracked changes: reject any you don&apos;t want), make any changes, save, then approve and send here. The PDF has the changes accepted and no comments; the clerk&apos;s file keeps the tracked spelling changes so they can see them.</p>
         </section>
 
         <section className="panel">

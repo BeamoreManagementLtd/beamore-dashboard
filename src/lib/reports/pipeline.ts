@@ -4,7 +4,7 @@ import sharp from "sharp";
 import { driveClient } from "@/lib/google";
 import { projectMatcher } from "@/lib/project-match";
 import { sendReportEmail } from "@/lib/google-user";
-import { readReport, photoStats, shrinkPhotos, trackSpelling, addComments, saveReport, photoHashes, reusedCount, uncaptioned, unticked, rotatePhoto, fixPhotoShapes, uniformPhotos, healthSafety, issuesTracker, cleanCopy, acceptOwnRevisions, withoutOwnMarks } from "./docx.mjs";
+import { readReport, photoStats, shrinkPhotos, trackSpelling, saveReport, nearText, photoHashes, reusedCount, uncaptioned, unticked, rotatePhoto, fixPhotoShapes, uniformPhotos, healthSafety, issuesTracker, cleanCopy, acceptOwnRevisions, withoutOwnMarks } from "./docx.mjs";
 
 /** 0-100: how much the report needed fixing (must-checks count most). Lateness is shown separately. */
 /**
@@ -325,7 +325,9 @@ export async function checkOne(admin: SupabaseClient, id: string) {
   if (spelt.skipped.length) issues.push({ severity: "low", kind: "other", text: `Spelling not changed automatically (please fix by hand): ${spelt.skipped.slice(0, 8).map((s) => `${s.find} → ${s.replace}`).join(", ")}`, p: null });
   // suggested rewordings that change more than spelling: left for the checker to decide, never made automatically
   if (heldBack.length) issues.push({ severity: "low", kind: "other", text: `Suggested wording changes, not made (check and change by hand only if right): ${heldBack.slice(0, 8).map((s) => `"${s.find}" → "${s.replace}"`).join("; ")}`, p: heldBack[0]?.p ?? null });
-  await addComments(r, issues.filter((i) => i.severity !== "low").slice(0, 15).map((i) => ({ p: i.p, text: `${i.severity === "high" ? "Must check: " : ""}${i.text}` })));
+  // the points are listed on the dashboard with their page number, not put in the Word file as comments (Ronan, 16 Nov
+  // 2026): a few words from each place are kept, and the office PC's Word helper looks up the page they fall on
+  for (const i of issues) i.near = nearText(r, i.p);
   const out = await saveReport(r);
 
   // only if the clerk hasn't changed it while we were checking
@@ -370,7 +372,7 @@ export async function checkOne(admin: SupabaseClient, id: string) {
     photos: { count: stats.count, blurry: stats.blurry, smallOnPage: stats.smallOnPage, stretched: stats.stretched, shrunk: shrunk.changed, rotated: rotated.length, reused, usual, uncaptioned: uncaptioned(r) },
     photo_hashes: hashes, photo_count: stats.count,
     fixes: { spelling: applied, rotated: rotated.length, shrunk: shrunk.changed, stretched: shapes.stretched, enlarged: shapes.enlarged, uniform: uniform.changed, mixed: !uniform.wasUniform, side_cm: uniform.side ? +(uniform.side / 360000).toFixed(1) : null, renamed: nameFixed, words, programme: prog ?? null, standards: ai.standards ?? null, health_safety: hs, tracker: trk,
-      score_by: "parts", score_parts: parts },
+      score_by: "parts", score_parts: parts, pages_state: issues.some((i) => i.near) ? "waiting" : "none" },
     // lateness is shown on its own on the Reports page
     score: scoreTotal(parts),
     clerk_points: [
@@ -525,3 +527,33 @@ async function sendIfPdfReady(admin: SupabaseClient, reportId: string) {
 
 /** The folder checked copies went in before reports were checked in place (16 Nov 2026); old ones may still be there. */
 export const CHECKED_FOLDER = "Checked (dashboard)";
+
+/**
+ * Page numbers for the points found in a report (Ronan, 16 Nov 2026: listed on the dashboard by page, not as comments
+ * in the Word file). A Word file has no fixed pages, so the Word helper on the office PC opens each checked report,
+ * finds each point's few words and says which page Word puts them on.
+ */
+export async function pagesQueue(admin: SupabaseClient) {
+  const { data } = await admin.from("reports").select("id,main_folder,project_folder_name,folder_name,file_name,checked_at,issues,checked_file_id,drive_file_id")
+    .eq("status", "ready").eq("fixes->>pages_state", "waiting").order("checked_at").limit(3);
+  return (data ?? []).filter((r) => r.checked_file_id === r.drive_file_id && r.main_folder).map((r) => ({
+    id: r.id, rev: r.checked_at, main_folder: r.main_folder, project_folder: r.project_folder_name, report_folder: r.folder_name, file_name: r.file_name,
+    find: ((r.issues ?? []) as Issue[]).map((i, k) => ({ k, near: i.near ?? null })).filter((x) => x.near),
+  }));
+}
+
+/** The helper's answer: { rev, pages: { [issue index]: page or null }, total }, or an error. */
+export async function pagesFound(admin: SupabaseClient, id: string, body: { rev?: string; pages?: Record<string, number | null>; total?: number; error?: string }) {
+  const { data: r } = await admin.from("reports").select("checked_at,issues,fixes").eq("id", id).single();
+  if (!r || r.checked_at !== body.rev) return false; // checked again since: the new check asks afresh
+  const fixes = { ...(r.fixes ?? {}) } as Record<string, unknown>;
+  if (body.error) {
+    // tried three times, then left: the points still show, with their words to search for
+    const tries = Number(fixes.pages_tries ?? 0) + 1;
+    await admin.from("reports").update({ fixes: { ...fixes, pages_tries: tries, pages_state: tries >= 3 ? "failed" : "waiting", pages_error: body.error.slice(0, 200) } }).eq("id", id);
+    return false;
+  }
+  const issues = ((r.issues ?? []) as Issue[]).map((i, k) => ({ ...i, page: typeof body.pages?.[k] === "number" ? body.pages[k] : i.page ?? null }));
+  await admin.from("reports").update({ issues, fixes: { ...fixes, pages_state: "done", page_count: body.total ?? null } }).eq("id", id);
+  return true;
+}

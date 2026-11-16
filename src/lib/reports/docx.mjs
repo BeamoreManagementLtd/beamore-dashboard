@@ -571,10 +571,24 @@ export function acceptOwnRevisions(r) {
 /**
  * A report the dashboard has already marked up, back to plain text before it's checked again: its own spelling
  * changes accepted and its own comments taken out. Anyone else's tracked changes and comments are left alone.
+ * With keepChanges, only the dashboard's comments come out (the tracked spelling changes stay).
  */
-export async function withoutOwnMarks(buf) {
+
+/**
+ * A few words from the start of a paragraph (or the next one with words in it), for finding that place again: Word
+ * looks them up to give the page number, and the checker can search for them. Cut at a tab or line break.
+ */
+export function nearText(r, p) {
+  if (!Number.isInteger(p)) return null;
+  for (let k = p; k < Math.min(r.paragraphs.length, p + 4); k++) {
+    const t = (r.paragraphs[k]?.text ?? "").split(/[\t\n]/).map((x) => x.trim()).find((x) => /[A-Za-z]{3}/.test(x));
+    if (t) return t.length > 60 ? t.slice(0, 60).replace(/\s+\S*$/, "") : t;
+  }
+  return null;
+}
+export async function withoutOwnMarks(buf, { keepChanges = false } = {}) {
   const r = await readReport(buf);
-  acceptOwnRevisions(r);
+  if (!keepChanges) acceptOwnRevisions(r);
   const cx = await r.zip.file("word/comments.xml")?.async("string");
   if (cx) {
     const mine = new Set([...cx.matchAll(/<w:comment\b[^>]*>/g)].filter((m) => m[0].includes(`w:author="${esc(AUTHOR)}"`)).map((m) => /w:id="(\d+)"/.exec(m[0])?.[1]));

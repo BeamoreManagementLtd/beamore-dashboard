@@ -4,7 +4,8 @@
 #   2. opens a COPY of each in Word, accepts any tracked changes left, removes comments, saves it as PDF
 #   3. puts the PDF next to the report in the Google Drive folder (Drive for desktop uploads it)
 #   4. tells the dashboard, which then emails it from the checker's own email
-# The clerk's Word file itself is never opened or changed here.
+#   5. looks up the page numbers of the points found in newly checked reports, for the dashboard
+# Reports are only ever opened as throwaway copies here; the Word file in Drive is never changed.
 param([switch]$Once, [string]$Test, [string]$TestOut)
 
 $ErrorActionPreference = "Stop"
@@ -39,6 +40,47 @@ function Convert-WithWord([string]$Docx, [string]$Pdf) {
   }
 }
 
+# Page numbers for a checked report's points (Ronan, 16 Nov 2026: listed on the dashboard by page, not as comments in
+# the Word file). On a throwaway COPY: the spelling changes are rejected so the text matches the words the dashboard
+# kept, then each point's words are found and the page Word puts them on is noted.
+function Get-Pages([string]$Docx, $Find) {
+  $tmp = Join-Path $env:TEMP ("beamore-" + [guid]::NewGuid().ToString() + ".docx")
+  Copy-Item -LiteralPath $Docx -Destination $tmp
+  $before = @(Get-Process WINWORD -ErrorAction SilentlyContinue | ForEach-Object Id)
+  $word = New-Object -ComObject Word.Application
+  $pages = @{}
+  try {
+    $word.Visible = $false; $word.DisplayAlerts = 0
+    $doc = $word.Documents.Open($tmp)
+    $doc.TrackRevisions = $false
+    if ($doc.Revisions.Count -gt 0) { $doc.Revisions.RejectAll() }
+    if ($doc.Comments.Count -gt 0) { $doc.DeleteAllComments() }
+    $doc.Repaginate()
+    foreach ($f in $Find) {
+      $page = $null
+      # the words as kept, then shorter if Word can't match them all (a tab, a field, a symbol in the middle)
+      $words = ($f.near -split '\s+')
+      foreach ($n in (@($words.Count, 6, 3) | Where-Object { $_ -le $words.Count } | Select-Object -Unique)) {
+        $text = (($words | Select-Object -First $n) -join ' ').Replace('^', '^^')
+        if ($text.Length -lt 4) { continue }
+        $rng = $doc.Content
+        $fd = $rng.Find; $fd.ClearFormatting(); $fd.Text = $text; $fd.MatchCase = $false; $fd.MatchWildcards = $false; $fd.Forward = $true; $fd.Wrap = 0
+        if ($fd.Execute()) { $page = [int]$rng.Information(3); break }   # 3 = page number of the found text
+      }
+      $pages["$($f.k)"] = $page
+    }
+    $total = [int]$doc.ComputeStatistics(2)   # 2 = pages
+    try { $doc.Saved = $true } catch { }
+    return @{ pages = $pages; total = $total }
+  } finally {
+    try { $word.Quit() } catch { }
+    try { [void][Runtime.InteropServices.Marshal]::ReleaseComObject($word) } catch { }
+    Start-Sleep -Seconds 2
+    Get-Process WINWORD -ErrorAction SilentlyContinue | Where-Object { $before -notcontains $_.Id } | Stop-Process -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $tmp -ErrorAction SilentlyContinue
+  }
+}
+
 if ($Test) { Convert-WithWord $Test $TestOut; "PDF: $TestOut"; exit }
 
 # the dashboard's key (the same one its scheduled jobs use), from the dashboard folder on this PC
@@ -51,7 +93,7 @@ do {
     $queue = Invoke-RestMethod -Uri "$Dashboard/api/reports/pdf-queue" -Headers $headers -TimeoutSec 60
     foreach ($job in $queue.jobs) {
       try {
-        # the checked copy is in "Checked (dashboard)" inside the report folder; the PDF goes in the report folder
+        # the checked report is in the report folder (older ones: in "Checked (dashboard)"); the PDF goes in the report folder
         $folder = Join-Path $Root (Join-Path $job.main_folder (Join-Path $job.project_folder $job.report_folder))
         $docx = Join-Path (Join-Path $folder $job.checked_folder) $job.file_name
         if (-not (Test-Path -LiteralPath $docx)) { Write-Log "not on this PC yet: $docx"; continue }
@@ -64,5 +106,23 @@ do {
       } catch { Write-Log "failed $($job.file_name): $($_.Exception.Message)"; Invoke-RestMethod -Method Post -Uri "$Dashboard/api/reports/pdf-made?id=$($job.id)&error=$([uri]::EscapeDataString($_.Exception.Message))" -Headers $headers -TimeoutSec 60 | Out-Null }
     }
   } catch { Write-Log "dashboard not reached: $($_.Exception.Message)" }
+  # then page numbers for the points on newly checked reports (PDFs first: they hold up an email)
+  try {
+    $pq = Invoke-RestMethod -Uri "$Dashboard/api/reports/pages-queue" -Headers $headers -TimeoutSec 60
+    foreach ($job in $pq.jobs) {
+      $docx = Join-Path $Root (Join-Path $job.main_folder (Join-Path $job.project_folder (Join-Path $job.report_folder $job.file_name)))
+      if (-not (Test-Path -LiteralPath $docx)) { Write-Log "pages: not on this PC yet: $docx"; continue }
+      try {
+        $res = Get-Pages $docx $job.find
+        $body = @{ rev = $job.rev; pages = $res.pages; total = $res.total } | ConvertTo-Json -Depth 4 -Compress
+        Invoke-RestMethod -Method Post -Uri "$Dashboard/api/reports/pages-found?id=$($job.id)" -Headers $headers -ContentType "application/json" -Body $body -TimeoutSec 60 | Out-Null
+        Write-Log "pages for $($job.file_name)"
+      } catch {
+        Write-Log "pages failed $($job.file_name): $($_.Exception.Message)"
+        $body = @{ rev = $job.rev; error = $_.Exception.Message } | ConvertTo-Json -Compress
+        Invoke-RestMethod -Method Post -Uri "$Dashboard/api/reports/pages-found?id=$($job.id)" -Headers $headers -ContentType "application/json" -Body $body -TimeoutSec 60 | Out-Null
+      }
+    }
+  } catch { Write-Log "pages: dashboard not reached: $($_.Exception.Message)" }
   if (-not $Once) { Start-Sleep -Seconds 120 }
 } while (-not $Once)
