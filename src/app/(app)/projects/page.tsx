@@ -3,6 +3,7 @@ import { requireProfile } from "@/lib/auth";
 import { linkSite, ignoreSite } from "./actions";
 import { createClient } from "@/lib/supabase/server";
 import { fd } from "@/lib/format";
+import { NewProjectForm } from "./new-project-form";
 
 export const dynamic = "force-dynamic";
 
@@ -15,13 +16,15 @@ export default async function Projects({ searchParams }: { searchParams: Promise
   await requireProfile();
   const { stage = "live" } = await searchParams;
   const db = await createClient();
-  const [{ data: rows }, { data: counts }, { data: unmatched }, { data: diaryDays }, { data: unmatchedSites }, { data: allProjects }] = await Promise.all([
+  const [{ data: rows }, { data: counts }, { data: unmatched }, { data: diaryDays }, { data: unmatchedSites }, { data: allProjects }, { data: clients }, { data: last }] = await Promise.all([
     db.from("projects").select("id,display_name,stage,agreed_days_building,agreed_days_me,next_action,next_action_due,clients(name)").eq("stage", stage).order("name"),
     db.from("projects").select("stage"),
     db.from("unmatched_invoice_refs").select("reference,last_invoice,client,invoices").order("reference"),
     db.from("project_diary_days").select("*"),
     db.from("unmatched_diary_sites").select("site_as_typed,last_seen,days").is("resolved_project_id", null).eq("ignored", false).order("days", { ascending: false }),
     db.from("projects").select("id,display_name").order("name"),
+    db.from("clients").select("id,name").order("name"),
+    db.from("projects").select("number").order("number", { ascending: false }).limit(1),
   ]);
   const n = (s: string) => (counts ?? []).filter((c) => c.stage === s).length;
   const dd = new Map((diaryDays ?? []).map((d) => [d.project_id as string, d]));
@@ -64,6 +67,10 @@ export default async function Projects({ searchParams }: { searchParams: Promise
           </tbody></table>
         </details>
       )}
+      <details className="panel" id="new">
+        <summary><b>+ New project</b> <span className="small muted">a phone enquiry, or a job to set up before any cost proposal</span></summary>
+        <NewProjectForm clients={clients ?? []} nextNumber={(last?.[0]?.number ?? 1000) + 1} />
+      </details>
       <nav className="row">
         {STAGES.map(([k, l]) => (
           <a key={k} href={`/projects?stage=${k}`} className={`btn ${k === stage ? "primary" : ""}`}>{l} <span className="small">{n(k)}</span></a>

@@ -299,6 +299,53 @@ export async function createFromRequest(requestId: string, form: FormData) {
   redirect(`/projects/${p.id}`);
 }
 
+/**
+ * "New project" by hand (Ronan, 16 Nov 2026): a job that came in by phone, or one to set up before any cost proposal.
+ * Takes the next BM number; the hourly intake adds its row to the Cost Proposals Register, the same as an emailed request.
+ * Starting it as won runs the usual won set-up (folders, checklist, clerk to-dos).
+ */
+export type NewProjectResult = { message?: string; id?: string };
+const NEW_STAGES = ["enquiry", "pricing", "sent", "won_arranging", "live"];
+export async function createProject(_: NewProjectResult | null, form: FormData): Promise<NewProjectResult> {
+  const me = await requireProfile();
+  const db = await createClient();
+  const name = (s(form, "name") ?? "").replace(/\s+/g, " ");
+  const stage = s(form, "stage") ?? "pricing";
+  const newClient = (s(form, "new_client") ?? "").replace(/\s+/g, " ");
+  let client = s(form, "client_id");
+  if (name.length < 2) return { message: "Give the project a name, e.g. St Aidans." };
+  if (/\d{4}$/.test(name)) return { message: "Leave the BM number off the name: the dashboard gives it the next number." };
+  if (!NEW_STAGES.includes(stage)) return { message: "Pick a stage." };
+  const { data: same } = await db.from("projects").select("display_name,stage").ilike("name", name);
+  if (same?.length && !form.get("confirm_duplicate")) return { message: `There's already ${same.map((p) => `${p.display_name} (${p.stage.replace("_", " ")})`).join(", ")}. Open that one instead, or tick "It's a different job" and add it again.` };
+  if (!client && newClient) {
+    const { data: all } = await db.from("clients").select("id,name,aliases");
+    const hit = (all ?? []).find((c) => c.name.toLowerCase() === newClient.toLowerCase() || (c.aliases ?? []).some((a: string) => a.toLowerCase() === newClient.toLowerCase()));
+    if (hit) client = hit.id;
+    else {
+      const { data: c, error } = await db.from("clients").insert({ name: newClient }).select("id").single();
+      if (error) return { message: `Couldn't add the client: ${error.message}` };
+      client = c.id;
+    }
+  }
+  const { data: last } = await db.from("projects").select("number").order("number", { ascending: false }).limit(1);
+  const number = (last?.[0]?.number ?? 1000) + 1;
+  const { data: p, error } = await db.from("projects").insert({ number, name, client_id: client, stage, stage_changed_at: new Date().toISOString(), site: s(form, "site") }).select("id").single();
+  if (error) return { message: `Couldn't add it: ${error.message}` };
+  await db.from("project_events").insert({ project_id: p.id, source: "team", kind: "Project added", who: me.full_name ?? me.email,
+    body: `Added by hand by ${me.full_name ?? me.email}${s(form, "note") ? `: ${s(form, "note")}` : ""}`, created_by: me.id });
+  if (stage === "won_arranging" || stage === "live") {
+    const { onWon } = await import("@/lib/project-setup");
+    const { createServiceClient } = await import("@/lib/supabase/server");
+    await onWon(createServiceClient(), p.id).catch(() => undefined);
+  }
+  revalidatePath("/projects");
+  revalidatePath("/workflows");
+  const { redirect } = await import("next/navigation");
+  redirect(`/projects/${p.id}`);
+  return { id: p.id };
+}
+
 export async function ignoreRequest(requestId: string) {
   await requireProfile();
   const db = await createClient();
