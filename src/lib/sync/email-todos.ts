@@ -209,7 +209,7 @@ Write titles like Ronan does: short and plain, starting with a verb, naming the 
       thread: { type: "string" }, action: { type: "string", enum: ["none", "new", "comment"] }, title: { type: "string" }, summary: { type: "string" },
       owner: { type: "string", enum: ["Ronan", "Judy", "Anel"] }, column: { type: "string", enum: Object.keys(RONAN_COLUMNS) }, due: { type: ["string", "null"] }, card: { type: "string" },
     }, required: ["thread", "action"] } } }, required: ["decisions"] } }],
-    tool_choice: { type: "tool", name: "save" },
+    tool_choice: { type: "auto" }, // forced tool use isn't offered on this model; the system prompt asks for it
     messages: [{ role: "user", content: emails.map((e) => e.text).join("\n\n=====\n\n") }],
   });
   const use = res.content.find((c) => c.type === "tool_use");
