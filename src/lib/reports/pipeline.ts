@@ -342,14 +342,16 @@ export async function checkOne(admin: SupabaseClient, id: string) {
   }
   // the checked version is saved over the clerk's own file, where it is, and renamed to the folder's pattern (Ronan,
   // 16 Nov 2026). A copy in "Checked (dashboard)" from before then is put in the bin: this replaces it.
-  const checkedName = renamedTo ?? (rep.checked_name && rep.checked_file_id === rep.drive_file_id ? rep.checked_name : rep.file_name);
+  // characters Windows can't have in a file name (e.g. "09:11:26") become dots, or the file never reaches the office PC
+  // and Word can't make its PDF (16 Nov 2026)
+  const checkedName = (renamedTo ?? (rep.checked_name && rep.checked_file_id === rep.drive_file_id ? rep.checked_name : rep.file_name)).replace(/[:*?"<>|]/g, ".");
   await g.replaceContent(rep.drive_file_id, out, DOCX);
   if (checkedName !== rep.file_name) await g.rename(rep.drive_file_id, checkedName).catch(() => undefined);
   if (rep.checked_file_id && rep.checked_file_id !== rep.drive_file_id) await g.binOriginalReport(rep.checked_file_id).catch(() => undefined);
   const after = await g.json<{ headRevisionId: string }>(`files/${rep.drive_file_id}`, { fields: "headRevisionId", supportsAllDrives: "true" });
   await admin.from("reports").update({
     checked_file_id: rep.drive_file_id, checked_folder_id: rep.folder_id, checked_name: checkedName, file_name: checkedName,
-    original_revision_id: sourceRev, renamed_from: renamedTo ? rep.file_name : rep.renamed_from ?? null,
+    original_revision_id: sourceRev, renamed_from: checkedName !== rep.file_name ? rep.file_name : rep.renamed_from ?? null,
   }).eq("id", id);
   const visitFromName = /(\d{1,2})[.\-_ ](\d{1,2})[.\-_ ](\d{2,4})/.exec(rep.file_name);
   const nameDate = visitFromName ? `${visitFromName[3].length === 2 ? `20${visitFromName[3]}` : visitFromName[3]}-${visitFromName[2].padStart(2, "0")}-${visitFromName[1].padStart(2, "0")}` : null;
