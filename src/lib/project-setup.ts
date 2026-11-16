@@ -109,9 +109,10 @@ export async function draftInfoRequest(admin: SupabaseClient, projectId: string)
   if (!to) to = ((contacts?.[0]?.to_emails as string[] | undefined) ?? []).join(", ");
   const list = (items ?? []).map((i) => `- ${i.item}`).join("\n") || "- (add the items needed)";
   const chasing = (items ?? []).some((i) => i.requested_on);
+  // Ronan's wording (16 Nov 2026)
   const body = chasing
-    ? `Hello,\n\nJust following up on the information for ${p.name}. We're still waiting on:\n\n${list}\n\nCould you send these over when you get a moment?\n\nMany thanks,\nRonan\n\nRonan O'Boyle\nBeamore Management Ltd`
-    : `Hello,\n\nThank you for appointing Beamore on ${p.name}. So we can get set up, could you please send us the following:\n\n${list}\n\nMany thanks,\nRonan\n\nRonan O'Boyle\nBeamore Management Ltd`;
+    ? `Hi\n\nJust following up on the information for ${p.name}. We're still waiting on:\n\n${list}\n\nCould you send these over when you get a moment?\n\nRegards\n\nRonan O'Boyle\nBeamore Management Ltd`
+    : `Hi\n\nSo we can get set up for ${p.name}, could you please send us the following:\n\n${list}\n\nRegards\n\nRonan O'Boyle\nBeamore Management Ltd`;
   const headers = [to && `To: ${to}`, `Subject: ${subject}`, inReplyTo && `In-Reply-To: ${inReplyTo}`, inReplyTo && `References: ${inReplyTo}`,
     "MIME-Version: 1.0", "Content-Type: text/plain; charset=UTF-8"].filter(Boolean);
   const raw = `${headers.join("\r\n")}\r\n\r\n${body.replace(/\n/g, "\r\n")}`;
