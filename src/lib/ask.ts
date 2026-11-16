@@ -34,6 +34,16 @@ const TOOLS: Anthropic.Tool[] = [
     input_schema: { type: "object", properties: { clerk: S("part of the clerk's name"), project_number: { type: "integer" }, from: S("YYYY-MM-DD"), to: S("YYYY-MM-DD") }, required: ["from", "to"] } },
   { name: "portal_uploads", description: "What clerks have uploaded on the clerk portal (insurance, certificates, invoices) and any problems.",
     input_schema: { type: "object", properties: { clerk: S("part of the clerk's name"), problems_only: { type: "boolean" } } } },
+  { name: "reports", description: "Clerk of works reports the dashboard has checked: project, clerk, report number, visit date, status (new, checking, ready = checked and waiting to be sent, approved, sent, done), score out of 100 and out of 10 with how it was worked out, the issues found, spelling fixed, who checks it, when sent. Sort by score to find the best or worst.",
+    input_schema: { type: "object", properties: { clerk: S("part of the clerk's name"), project: S("part of the project name, or its number"), status: S("one status, or empty for all"), from: S("visit date from, YYYY-MM-DD"), to: S("visit date to, YYYY-MM-DD"), sort: { type: "string", enum: ["score_high", "score_low", "newest"] }, limit: { type: "integer", description: "default 20, up to 100" }, detail: { type: "boolean", description: "include the score breakdown and all issues (use for one or a few reports)" } } } },
+  { name: "report_scores", description: "Report scores by clerk: average and latest score out of 100 and out of 10, how many reports, best and worst, and whether they're improving. Scores are for the office only; never pass them on to clerks.",
+    input_schema: { type: "object", properties: { clerk: S("part of a clerk's name, or empty for everyone"), days: { type: "integer", description: "how far back, default 90" } } } },
+  { name: "lookup", description: `Read any business table directly when the other tools don't cover it. Tables: ${"{TABLES}"}. Filters are exact (eq), contains (ilike, case-insensitive), on/after (gte), on/before (lte), empty (is_null) or filled (not_null). Use columns "*" first if unsure of the column names.`,
+    input_schema: { type: "object", properties: {
+      table: S("one of the tables listed"), columns: S("comma-separated column names, or * (default)"),
+      filters: { type: "array", items: { type: "object", properties: { column: S("column"), op: { type: "string", enum: ["eq", "ilike", "gte", "lte", "is_null", "not_null"] }, value: S("value (not needed for is_null/not_null)") }, required: ["column", "op"] } },
+      order: S("column to sort by; add ' desc' for newest/highest first"), limit: { type: "integer", description: "default 30, up to 100" },
+    }, required: ["table"] } },
   // ---- actions (they change things; everything is logged)
   { name: "add_task", description: "Add a to-do on the dashboard (it also appears in Todoist for Ronan, Judy and Anel).",
     input_schema: { type: "object", properties: { title: S("what needs doing"), for_person: S("first name of who it's for (Ronan, Judy, Anel, Andy); empty = the person asking"), due: S("YYYY-MM-DD, optional") }, required: ["title"] } },
@@ -56,6 +66,20 @@ const TOOLS: Anthropic.Tool[] = [
 ];
 
 const first = (me: Profile) => (me.full_name ?? me.email).split(" ")[0];
+
+/**
+ * What "lookup" can read (Ronan, 16 Nov 2026: anything about the business except private financials). Staff get the
+ * business tables; the director also gets the finance ones. Logins, tokens and the AI's own logs are never readable.
+ */
+const BUSINESS_TABLES = ["projects", "clients", "clerks", "clerk_compliance", "clerk_companies", "clerk_evidence", "clerk_candidates", "job_applications",
+  "onboarding_items", "insurance_policies", "reports", "report_queue", "report_settings", "diary_visits", "absences", "holiday_requests", "site_aliases",
+  "project_info", "project_events", "project_steps", "project_contacts", "project_planned_months", "price_requests", "proposal_revisions",
+  "portal_uploads", "portal_expectations", "tasks", "invoices", "chase_state", "chase_events", "invoice_contacts"];
+const FINANCE_TABLES = ["rates", "clerk_costs", "project_finance", "finance_snapshots", "proposal_revision_fees", "month_signoffs", "invoice_drafts", "xero_draft_invoices", "portal_invoice_checks"];
+TOOLS.find((x) => x.name === "lookup")!.description = TOOLS.find((x) => x.name === "lookup")!.description!.replace("{TABLES}", `${BUSINESS_TABLES.join(", ")} (and for Ronan only: ${FINANCE_TABLES.join(", ")})`);
+
+const out10 = (n: number | null | undefined) => (typeof n === "number" ? { out_of_100: Math.round(n), out_of_10: Math.round(n) / 10 } : null);
+const isNew = (r: { fixes?: unknown }) => (r.fixes as { score_by?: string } | null)?.score_by === "parts";
 
 export async function run(db: SupabaseClient, me: Profile, name: string, a: Record<string, unknown>): Promise<unknown> {
   const t = new Date().toISOString().slice(0, 10);
@@ -201,6 +225,83 @@ export async function run(db: SupabaseClient, me: Profile, name: string, a: Reco
       await g.post("https://gmail.googleapis.com/gmail/v1/users/me/drafts", { message: { raw: Buffer.from(raw).toString("base64url") } });
       return { done: "Saved in Ronan's Gmail Drafts (not sent)" };
     }
+    case "reports": {
+      let q = db.from("reports").select("id,file_name,status,score,visit_date,report_number,clerk_name,kind,uploaded_at,checked_at,sent_at,spelling_fixed,issues,fixes,error,folder_name,project_folder_name,checker_id,projects(number,display_name)");
+      if (a.status) q = q.eq("status", String(a.status));
+      if (a.from) q = q.gte("visit_date", String(a.from));
+      if (a.to) q = q.lte("visit_date", String(a.to));
+      if (a.clerk) q = q.ilike("clerk_name", like(a.clerk));
+      if (a.project) {
+        const n = Number(a.project);
+        const { data: ps } = Number.isInteger(n) && n > 0 ? await db.from("projects").select("id").eq("number", n) : await db.from("projects").select("id").ilike("display_name", like(a.project));
+        q = q.in("project_id", (ps ?? []).map((p) => p.id));
+      }
+      const sort = String(a.sort ?? "newest");
+      q = sort === "newest" ? q.order("uploaded_at", { ascending: false }) : q.not("score", "is", null).order("score", { ascending: sort === "score_low" });
+      const { data, error } = await q.limit(Math.min(100, Number(a.limit) || 20));
+      if (error) return { error: error.message };
+      const rows = data ?? [];
+      const staff = new Map(((await db.from("profiles").select("id,full_name")).data ?? []).map((x) => [x.id as string, x.full_name as string]));
+      return rows.map((r) => {
+        const fx = (r.fixes ?? {}) as { score_parts?: { label: string; got: number; of: number; note?: string; improve?: string }[]; spelling?: unknown[] };
+        const issues = (r.issues ?? []) as { severity: string; text: string }[];
+        const p = r.projects as unknown as { number?: number; display_name?: string } | null;
+        return {
+          project: p ? `${p.display_name} ${p.number}` : r.project_folder_name, clerk: r.clerk_name, report: r.report_number, visit_date: r.visit_date, file: r.file_name, kind: r.kind === "me" ? "M&E" : "building",
+          status: r.status, score: out10(r.score), score_method: r.score == null ? null : isNew(r) ? "current (7 parts)" : "old scoring", checked: r.checked_at?.slice(0, 10) ?? null, sent: r.sent_at?.slice(0, 10) ?? null,
+          checker: r.checker_id ? staff.get(r.checker_id) ?? null : null, spelling_fixed: r.spelling_fixed, problem: r.error,
+          ...(a.detail ? { score_breakdown: fx.score_parts ?? null, issues } : { main_issues: issues.filter((i) => i.severity !== "low").slice(0, 3).map((i) => i.text.slice(0, 160)) }),
+          link: `/reports/${r.id}`,
+        };
+      });
+    }
+    case "report_scores": {
+      const since = new Date(Date.now() - (Number(a.days) || 90) * 864e5).toISOString().slice(0, 10);
+      let q = db.from("reports").select("clerk_name,score,visit_date,uploaded_at,fixes,projects(display_name,number)").not("score", "is", null).gte("uploaded_at", since).order("uploaded_at");
+      if (a.clerk) q = q.ilike("clerk_name", like(a.clerk));
+      const { data } = await q.limit(1000);
+      const by = new Map<string, { score: number; at: string; project: string }[]>();
+      for (const r of (data ?? []).filter(isNew)) {
+        const p = r.projects as unknown as { display_name?: string; number?: number } | null;
+        const k = (r.clerk_name ?? "Unknown").trim();
+        by.set(k, [...(by.get(k) ?? []), { score: Number(r.score), at: String(r.visit_date ?? r.uploaded_at).slice(0, 10), project: p ? `${p.display_name} ${p.number}` : "" }]);
+      }
+      return [...by].map(([clerk, l]) => {
+        const avg = l.reduce((s, x) => s + x.score, 0) / l.length;
+        const half = Math.floor(l.length / 2);
+        const early = half ? l.slice(0, half).reduce((s, x) => s + x.score, 0) / half : null, late = half ? l.slice(half).reduce((s, x) => s + x.score, 0) / (l.length - half) : null;
+        const best = l.reduce((m, x) => (x.score > m.score ? x : m)), worst = l.reduce((m, x) => (x.score < m.score ? x : m));
+        return { clerk, reports: l.length, average: out10(avg), latest: { ...out10(l.at(-1)!.score), on: l.at(-1)!.at, project: l.at(-1)!.project }, best: { ...out10(best.score), project: best.project }, worst: { ...out10(worst.score), project: worst.project },
+          trend: early == null || late == null ? "too few reports" : late - early >= 3 ? "improving" : early - late >= 3 ? "getting worse" : "steady" };
+      }).sort((x, y) => (y.average?.out_of_100 ?? 0) - (x.average?.out_of_100 ?? 0));
+    }
+    case "lookup": {
+      const table = String(a.table ?? "");
+      const allowed = me.role === "director" ? [...BUSINESS_TABLES, ...FINANCE_TABLES] : BUSINESS_TABLES;
+      if (!allowed.includes(table)) return { error: FINANCE_TABLES.includes(table) ? "That's private financial information (Ronan only)." : `Not a table I can read. Tables: ${allowed.join(", ")}` };
+      const ident = /^[a-z_][a-z0-9_]*$/;
+      const cols = String(a.columns ?? "*").split(",").map((c) => c.trim()).filter(Boolean);
+      if (!cols.every((c) => c === "*" || ident.test(c))) return { error: "Column names are letters and underscores only" };
+      let q = db.from(table).select(cols.join(","));
+      for (const f of (Array.isArray(a.filters) ? a.filters : []) as { column: string; op: string; value?: string }[]) {
+        if (!ident.test(f.column ?? "")) return { error: `Bad column ${f.column}` };
+        const v = String(f.value ?? "");
+        if (f.op === "eq") q = q.eq(f.column, v);
+        else if (f.op === "ilike") q = q.ilike(f.column, like(v));
+        else if (f.op === "gte") q = q.gte(f.column, v);
+        else if (f.op === "lte") q = q.lte(f.column, v);
+        else if (f.op === "is_null") q = q.is(f.column, null);
+        else if (f.op === "not_null") q = q.not(f.column, "is", null);
+      }
+      if (a.order) {
+        const [col, dir] = String(a.order).trim().split(/\s+/);
+        if (ident.test(col)) q = q.order(col, { ascending: dir?.toLowerCase() !== "desc", nullsFirst: false });
+      }
+      const { data, error } = await q.limit(Math.min(100, Number(a.limit) || 30));
+      if (error) return { error: error.message };
+      // big text columns cut down so the answer fits
+      return (data ?? []).map((row) => Object.fromEntries(Object.entries(row as unknown as Record<string, unknown>).filter(([k]) => !/token|secret|password|hash/i.test(k)).map(([k, v]) => [k, typeof v === "string" && v.length > 600 ? `${v.slice(0, 600)}…` : v])));
+    }
     case "search_email": {
       if (me.role !== "director") return { error: "Only Ronan can search his email." };
       const g = await driveClient(createServiceClient());
@@ -249,6 +350,7 @@ export async function askDashboard(db: SupabaseClient, me: Profile, history: Tur
 Only help with Beamore's work: its projects, clients, clerks, invoices, reports, diary, to-dos, construction and clerk of works knowledge, and writing work emails or documents. If the request is anything else (personal projects, general chat, homework, unrelated coding or writing), or you're unsure, do NOT answer it: call request_permission with a short summary, then tell them you've asked Ronan.`;
   const system = `You answer questions and get work done for the team at Beamore Management Ltd, a UK clerk of works consultancy (construction quality inspections, many on DfE school projects). You are inside their dashboard. Today is ${today}. You're talking to ${me.full_name ?? me.email} (${director ? "the director, Ronan" : "a member of staff"}).
 
+You can see everything about the business: projects, clients, clerks of works (contacts, compliance, holidays, diary, where they work), clerk of works reports (scores, issues, status) and to-dos. Use "reports" and "report_scores" for reports, and "lookup" for anything the other tools don't cover. Private financials (margins, rates, costs, profit) are for Ronan only.${director ? "" : " If asked for those, say they're Ronan's to share."} Report scores are for the office: never put them in anything for a clerk.
 Look things up with the tools before answering; never guess facts. Answer in plain British English, short and direct: lead with the answer, then the key details. Use project names with their numbers (e.g. "Lydiate 1104") and people's names. When it helps, end with a link to the page in the dashboard (the 'link' field, e.g. /projects/abc). If the data doesn't say, say so.
 You can also do things with the action tools (add or tick off to-dos, add project notes, set clerks, mark information received, mark jobs won or lost, save email drafts). Only do what was asked; confirm what you did in one line. Emails are only ever saved as drafts for Ronan to send.${scope}`;
   const messages: Anthropic.MessageParam[] = [
