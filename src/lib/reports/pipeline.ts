@@ -226,10 +226,10 @@ export async function checkOne(admin: SupabaseClient, id: string) {
   const uniform = uniformPhotos(r, await photoStats(r, sharp), await r.zip.file("word/_rels/document.xml.rels")!.async("string"));
   const shapes = uniform.changed ? { stretched: 0, enlarged: 0 } : await fixPhotoShapes(r, await photoStats(r, sharp));
   const shrunk = await shrinkPhotos(r, sharp, await photoStats(r, sharp));
+  // spelling is fixed automatically but kept as tracked changes, so the checker and the clerk can see every mistake,
+  // and each one is counted to see whether a clerk is improving (Ronan, 16 Nov 2026)
   const spelt = trackSpelling(r, ai.spelling);
-  // spelling is fixed straight into the text, not left as tracked changes to accept (Ronan, 15 Nov 2026); the page
-  // lists every correction under "What was changed"
-  acceptOwnRevisions(r);
+  void acceptOwnRevisions;
   const rank = { high: 0, medium: 1, low: 2 } as const;
   // not enough photos or not enough written, against the benchmark clerks' reports (weekly diaries: 35-57 photos,
   // 1,800-5,000 words); monthly reports aren't judged on this
@@ -436,7 +436,8 @@ async function sendIfPdfReady(admin: SupabaseClient, reportId: string) {
     if (rep.checked_file_id && rep.checked_folder_id) {
       try {
         const checked = Buffer.from(await g.download(rep.checked_file_id));
-        await g.replaceContent(rep.drive_file_id, await cleanCopy(checked), DOCX);
+        // comments out, but the tracked spelling corrections stay in so the clerk sees them (Ronan, 16 Nov 2026)
+        await g.replaceContent(rep.drive_file_id, await cleanCopy(checked, { keepChanges: true }), DOCX);
         if (rep.checked_name && rep.checked_name !== rep.file_name) await g.rename(rep.drive_file_id, rep.checked_name).catch(() => undefined);
         await g.binOriginalReport(rep.checked_file_id);
         await admin.from("reports").update({ original_trashed_at: new Date().toISOString(), file_name: rep.checked_name ?? rep.file_name, checked_file_id: null }).eq("id", reportId);

@@ -23,7 +23,8 @@ function clerkNote(r: Record<string, unknown>, sender: string) {
   // what was put right goes back to the clerk (Ronan, 15 Nov 2026), worded gently: "steer them in the right
   // direction rather than saying do this or else"
   const fixed = [
-    f.spelling?.length ? `${f.spelling.length} spelling/grammar correction${f.spelling.length === 1 ? "" : "s"} (e.g. ${f.spelling.slice(0, 3).map((s) => `"${s.find}" → "${s.replace}"`).join(", ")})` : null,
+    // every correction, so the clerk can see each mistake (Ronan, 16 Nov 2026); they're also tracked changes in their file
+    f.spelling?.length ? `${f.spelling.length} spelling/grammar correction${f.spelling.length === 1 ? "" : "s"} (shown as tracked changes in your file): ${f.spelling.slice(0, 25).map((s) => `"${s.find}" → "${s.replace}"`).join(", ")}${f.spelling.length > 25 ? ` and ${f.spelling.length - 25} more` : ""}` : null,
     f.renamed ? `the file name, to match the other reports in the folder (now "${f.renamed}")` : null,
     f.mixed ? `the photos, now all the same size (about ${f.side_cm ?? 6} cm wide)` : null,
     f.stretched ? `${f.stretched} photo${f.stretched === 1 ? "" : "s"} that had stretched out of shape` : null,
@@ -105,13 +106,13 @@ export default async function ReportPage({ params, searchParams }: { params: Pro
           {r.ai_summary && <p>{r.ai_summary}</p>}
           {!!issues.length && <ul className="plain">{issues.map((i, k) => <li key={k} style={{ marginBottom: 6 }}><span className={`pill ${SEV[i.severity]?.[1] ?? "muted"}`}>{SEV[i.severity]?.[0] ?? i.severity}</span> {i.text}</li>)}</ul>}
           {r.checked_at && <p className="small muted">
-            {r.spelling_fixed} spelling fix{r.spelling_fixed === 1 ? "" : "es"} made in the checked copy (listed under What was changed); issues added as comments in the Word file.
+            {r.spelling_fixed} spelling fix{r.spelling_fixed === 1 ? "" : "es"} made as tracked changes in the checked copy (and listed under What was changed); issues added as comments in the Word file.
             {" "}Photos: {photos.count ?? 0}{photos.blurry ? `, ${photos.blurry} low detail` : ""}{photos.smallOnPage ? `, ${photos.smallOnPage} shown small` : ""}{photos.stretched ? `, ${photos.stretched} stretched` : ""}{photos.shrunk ? `; ${photos.shrunk} made smaller` : ""}.
             {" "}File {mb(r.size_before)} → {mb(r.size_after)}. Checked {fdt(r.checked_at)}.</p>}
           {/* open it in Word from Google Drive on your computer: opening it in Google Docs spoils the layout */}
           {r.main_folder && r.checked_name && !r.original_trashed_at && <div className="field"><label className="small muted" htmlFor="wp">The checked copy, to open in Word (on your computer, Google Drive)</label>
             <input id="wp" readOnly value={`G:\\My Drive\\Work\\${r.main_folder}\\${r.project_folder_name}\\${r.folder_name}\\Checked (dashboard)\\${r.checked_name}`} style={{ width: "100%", fontFamily: "monospace", fontSize: 12 }} /></div>}
-          {r.main_folder && <p className="small muted">The clerk&apos;s original is left as it was until the report is sent: <span style={{ fontFamily: "monospace" }}>{r.folder_name}\{r.renamed_from ?? r.file_name}</span>{r.original_trashed_at ? ` (overwritten with the checked version when it was sent, ${fdt(r.original_trashed_at)}; Drive keeps the old version under File information → Manage versions)` : ". When it's sent, the checked version (comments taken out) is written over it."}</p>}
+          {r.main_folder && <p className="small muted">The clerk&apos;s original is left as it was until the report is sent: <span style={{ fontFamily: "monospace" }}>{r.folder_name}\{r.renamed_from ?? r.file_name}</span>{r.original_trashed_at ? ` (overwritten with the checked version when it was sent, ${fdt(r.original_trashed_at)}; Drive keeps the old version under File information → Manage versions)` : ". When it's sent, the checked version (tracked spelling changes kept, comments taken out) is written over it."}</p>}
           {/* Google's viewer spoils a Word file's layout, and a web link can't open a Drive file straight in Word
               (Ronan, 15 Nov 2026): open it from Drive with "Open with → Microsoft Word", or download it */}
           {r.checked_file_id && !r.original_trashed_at && <p>
@@ -119,7 +120,7 @@ export default async function ReportPage({ params, searchParams }: { params: Pro
             <a className="btn small" href={`https://drive.google.com/uc?export=download&id=${r.checked_file_id}`}>Download to open in Word</a>
             <span className="two small muted">To change it: in Drive click <b>Open with → Microsoft Word</b> at the top (not Google Docs), so your changes save back to Drive. The download is for reading: changes to a downloaded copy don&apos;t go back.</span>
           </p>}
-          <p className="small muted">Look through the checked copy (spelling is already fixed; the AI&apos;s points are comments), make any changes, save, then approve and send here. Comments are left out of the PDF and of the clerk&apos;s file.</p>
+          <p className="small muted">Look through the checked copy (spelling is fixed as tracked changes; the AI&apos;s points are comments), make any changes, save, then approve and send here. The PDF has the changes accepted and no comments; the clerk&apos;s file keeps the tracked spelling changes so they can see them.</p>
         </section>
 
         <section className="panel">

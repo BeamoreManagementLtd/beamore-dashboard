@@ -28,4 +28,4 @@ export function rotatePhoto(r: Report, sharp: typeof Sharp, path: string, degree
 export function fixPhotoShapes(r: Report, stats: PhotoStats): Promise<{ stretched: number; enlarged: number }>;
 export function uniformPhotos(r: Report, stats: PhotoStats, rels: string): { side: number | null; changed: number; wasUniform: boolean };
 export function saveReport(r: Report): Promise<Buffer>;
-export function cleanCopy(buf: Buffer): Promise<Buffer>;
+export function cleanCopy(buf: Buffer, opts?: { keepChanges?: boolean }): Promise<Buffer>;

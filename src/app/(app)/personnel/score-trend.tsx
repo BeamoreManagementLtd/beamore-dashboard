@@ -11,7 +11,7 @@ import { STANDARDS, STANDARD_KEYS, standardsShare, type StandardKey, type Standa
  */
 export async function ScoreTrend({ clerkId }: { clerkId: string }) {
   const db = await createClient();
-  const { data } = await db.from("reports").select("id,file_name,visit_date,checked_at,score,fixes")
+  const { data } = await db.from("reports").select("id,file_name,visit_date,checked_at,score,fixes,spelling_fixed")
     .eq("clerk_id", clerkId).not("score", "is", null).order("visit_date", { ascending: true, nullsFirst: false }).limit(200);
   const rows = (data ?? []).map((r) => ({ ...r, when: (r.visit_date ?? r.checked_at?.slice(0, 10) ?? "") as string }))
     .sort((a, b) => a.when.localeCompare(b.when));
@@ -65,6 +65,25 @@ export async function ScoreTrend({ clerkId }: { clerkId: string }) {
           {missed.length ? ` Most often missing: ${missed.slice(0, 3).map(([s, n]) => `${STANDARDS[s].label.toLowerCase()} (${n} of ${last.length})`).join(", ")}.` : " Hitting them all."}
         </p>
       )}
+      {/* spelling: how many mistakes per report, and the ones that keep coming back (Ronan, 16 Nov 2026) */}
+      {(() => {
+        const sp = rows.map((r) => Number(r.spelling_fixed ?? 0));
+        const avg = (a: number[]) => (a.length ? a.reduce((s, x) => s + x, 0) / a.length : 0);
+        const recent = sp.slice(-5), before = sp.slice(-10, -5);
+        const words = new Map<string, number>();
+        for (const r of rows.slice(-15)) for (const s of ((r.fixes as { spelling?: { find: string; replace: string }[] } | null)?.spelling ?? [])) {
+          const k = `${s.find} → ${s.replace}`; words.set(k, (words.get(k) ?? 0) + 1);
+        }
+        const repeats = [...words].filter(([, n]) => n > 1).sort((a, b) => b[1] - a[1]).slice(0, 8);
+        return (
+          <p className="small">
+            Spelling: <b>{avg(recent).toFixed(1)}</b> mistakes per report in the last {recent.length}
+            {before.length ? <> (was {avg(before).toFixed(1)} before{avg(recent) < avg(before) - 0.5 ? <span className="pos">, improving</span> : avg(recent) > avg(before) + 0.5 ? <span className="neg">, getting worse</span> : null})</> : null}
+            ; last report {sp[sp.length - 1]}.
+            {repeats.length ? <> Keeps making: {repeats.map(([k, n]) => `${k} (${n}×)`).join(", ")}.</> : null}
+          </p>
+        );
+      })()}
       <p className="small"><Link href={`/reports/${rows[rows.length - 1].id}`}>Latest checked report →</Link></p>
     </section>
   );

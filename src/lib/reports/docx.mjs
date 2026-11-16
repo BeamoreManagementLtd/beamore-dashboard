@@ -560,13 +560,16 @@ export function acceptOwnRevisions(r) {
   r.paragraphs = r.spans.map((s, i) => ({ i, text: textOf(r.xml.slice(s.start, s.end)) }));
 }
 
-export async function cleanCopy(buf) {
+/**
+ * The file for the PDF (tracked changes accepted, comments out) or, with keepChanges, the file put back in the clerk's
+ * folder after sending: comments out but the tracked spelling corrections left in, so the clerk can see them.
+ */
+export async function cleanCopy(buf, { keepChanges = false } = {}) {
   const zip = await JSZip.loadAsync(buf);
   for (const part of Object.keys(zip.files).filter((n) => /^word\/(document|header\d*|footer\d*)\.xml$/.test(n))) {
     let x = await zip.file(part).async("string");
-    x = x.replace(/<w:del\b[^>]*>[\s\S]*?<\/w:del>/g, "")
-      .replace(/<w:ins\b[^>]*>([\s\S]*?)<\/w:ins>/g, "$1")
-      .replace(/<w:commentRangeStart\b[^>]*\/>|<w:commentRangeEnd\b[^>]*\/>/g, "")
+    if (!keepChanges) x = x.replace(/<w:del\b[^>]*>[\s\S]*?<\/w:del>/g, "").replace(/<w:ins\b[^>]*>([\s\S]*?)<\/w:ins>/g, "$1");
+    x = x.replace(/<w:commentRangeStart\b[^>]*\/>|<w:commentRangeEnd\b[^>]*\/>/g, "")
       .replace(/<w:r\b[^>]*>(?:(?!<\/w:r>)[\s\S])*?<w:commentReference\b[^>]*\/>(?:(?!<\/w:r>)[\s\S])*?<\/w:r>/g, "")
       .replace(/<w:rPrChange\b[\s\S]*?<\/w:rPrChange>|<w:pPrChange\b[\s\S]*?<\/w:pPrChange>/g, "");
     zip.file(part, x, NO_FOLDERS);
