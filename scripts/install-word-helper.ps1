@@ -22,7 +22,7 @@ function Fail($m) { Write-Host ""; Write-Host "STOPPED: $m" -ForegroundColor Red
 if (-not (Test-Path -LiteralPath $Source)) { Fail "word-pdf-helper.ps1 isn't next to this installer. Run it from the 'Dashboard helper' folder in Google Drive." }
 
 Step "1. Checking Word"
-try { $w = New-Object -ComObject Word.Application; $ver = $w.Version; $w.Quit(); [void][Runtime.InteropServices.Marshal]::ReleaseComObject($w) }
+try { $w = New-Object -ComObject Word.Application; $w.DisplayAlerts = 0; $ver = $w.Version; $w.Quit(); [void][Runtime.InteropServices.Marshal]::ReleaseComObject($w) }
 catch { Fail "Word didn't start on this PC. Install Microsoft Word (and sign in to Office), then run this again." }
 Write-Host "Word $ver works."
 
@@ -62,9 +62,23 @@ Write-Host "The dashboard accepted the key ($(@($q.jobs).Count) report(s) waitin
 Step "4. Test PDF in Word"
 $docx = Join-Path $env:TEMP "beamore-helper-test.docx"; $pdf = Join-Path $env:TEMP "beamore-helper-test.pdf"
 Remove-Item -LiteralPath $docx, $pdf -ErrorAction SilentlyContinue
-$w = New-Object -ComObject Word.Application
-try { $d = $w.Documents.Add(); $d.Content.Text = "Beamore Word helper test, $(Get-Date)"; $d.SaveAs2($docx, 16); $d.Close() } finally { $w.Quit(); [void][Runtime.InteropServices.Marshal]::ReleaseComObject($w) }
-& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $Helper -Test $docx -TestOut $pdf | Out-Null
+Write-Host "(Usually 10-20 seconds. Gives up after 2 minutes.)"
+# run apart, with a time limit: a first-run question in Word (privacy, sign-in, licence) sits on a hidden window and
+# would otherwise wait for ever (the server PC, 16 Nov 2026)
+$testScript = Join-Path $env:TEMP "beamore-helper-test.ps1"
+@"
+`$w = New-Object -ComObject Word.Application
+try { `$w.Visible = `$false; `$w.DisplayAlerts = 0; `$d = `$w.Documents.Add(); `$d.Content.Text = 'Beamore Word helper test'; `$d.SaveAs2('$docx', 16); `$d.Close(0) } finally { `$w.Quit() }
+& powershell.exe -NoProfile -ExecutionPolicy Bypass -File '$Helper' -Test '$docx' -TestOut '$pdf' | Out-Null
+"@ | Set-Content -LiteralPath $testScript
+$wordBefore = @(Get-Process WINWORD -ErrorAction SilentlyContinue | ForEach-Object Id)
+$p = Start-Process powershell.exe -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$testScript`"" -WindowStyle Hidden -PassThru
+if (-not $p.WaitForExit(120000)) {
+  $p | Stop-Process -Force -ErrorAction SilentlyContinue
+  Get-Process WINWORD -ErrorAction SilentlyContinue | Where-Object { $wordBefore -notcontains $_.Id } | Stop-Process -Force -ErrorAction SilentlyContinue
+  Fail "Word is waiting for an answer it can't show. Open Word from the Start menu, answer its questions (privacy, sign-in, licence), open a blank document, close Word, then run this again."
+}
+Remove-Item -LiteralPath $testScript -ErrorAction SilentlyContinue
 if (-not (Test-Path -LiteralPath $pdf)) { Fail "Word didn't make the test PDF. Open Word once by hand (to finish any sign-in or first-run questions), then run this again." }
 Write-Host "Test PDF made."
 Remove-Item -LiteralPath $docx, $pdf -ErrorAction SilentlyContinue
