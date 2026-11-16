@@ -2,7 +2,7 @@ import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { driveClient } from "@/lib/google";
 import { setupProjectTracking } from "@/lib/xero-tracking";
-import { INFO_DFE, INFO_STANDARD, INFO_RETIRED } from "@/lib/project-info";
+import { INFO_DFE, INFO_STANDARD, INFO_RETIRED, INFO_MERGED } from "@/lib/project-info";
 
 /**
  * What happens when a project is won (docs/workflows.html, S2/S4/S7):
@@ -79,6 +79,20 @@ export async function matchChecklist(admin: SupabaseClient, projectId: string) {
   const want = !known ? [] : p.is_dfe ? INFO_DFE : INFO_STANDARD, other = !known ? [] : p.is_dfe ? INFO_STANDARD : INFO_DFE;
   const { data: items } = await admin.from("project_info").select("id,item,auto,requested_on,received_on").eq("project_id", projectId);
   if (!items?.length || !items.some((i) => i.auto)) return false; // no automatic checklist to match
+  // old separate items become the one combined item, keeping progress: received if every old one was received, asked
+  // for if any was. Only automatic items; hand-added ones are left alone.
+  let merged = false;
+  for (const [to, from] of Object.entries(INFO_MERGED)) {
+    const old = items.filter((i) => i.auto && from.includes(i.item));
+    if (!old.length) continue;
+    const latest = (k: "requested_on" | "received_on") => old.map((i) => i[k] as string | null).filter(Boolean).sort().pop() ?? null;
+    const received = old.every((i) => i.received_on) ? latest("received_on") : null;
+    if (!items.some((i) => i.item === to)) await admin.from("project_info").insert({ project_id: projectId, item: to, auto: true, requested_on: latest("requested_on"), received_on: received });
+    await admin.from("project_info").delete().in("id", old.map((i) => i.id));
+    await log(admin, projectId, "Checklist", `${old.map((i) => i.item).join(" and ")} are now one item: ${to}${received ? " (received)" : ""}`);
+    merged = true;
+  }
+  if (merged) return matchChecklist(admin, projectId);
   const drop = items.filter((i) => i.auto && !i.received_on && ((!i.requested_on && other.includes(i.item) && !want.includes(i.item)) || INFO_RETIRED.includes(i.item)));
   const add = want.filter((w) => !items.some((i) => i.item.toLowerCase() === w.toLowerCase()));
   if (!drop.length && !add.length) return false;
@@ -90,8 +104,21 @@ export async function matchChecklist(admin: SupabaseClient, projectId: string) {
   return true;
 }
 
-/** S2: a Gmail draft to the client listing what we need. Only ever a draft. */
-export async function draftInfoRequest(admin: SupabaseClient, projectId: string) {
+/** An email the dashboard has written: saved as a Gmail draft, or shown on screen to copy (Ronan, 16 Nov 2026). */
+export type Email = { to: string; cc?: string; subject: string; body: string; threadId?: string; inReplyTo?: string };
+
+export async function saveDraft(admin: SupabaseClient, e: Email) {
+  const g = await driveClient(admin);
+  const headers = [e.to && `To: ${e.to}`, e.cc && `Cc: ${e.cc}`, `Subject: ${e.subject}`, e.inReplyTo && `In-Reply-To: ${e.inReplyTo}`, e.inReplyTo && `References: ${e.inReplyTo}`,
+    "MIME-Version: 1.0", "Content-Type: text/plain; charset=UTF-8"].filter(Boolean);
+  const CRLF = String.fromCharCode(13, 10);
+  const raw = headers.join(CRLF) + CRLF + CRLF + e.body.split(/\r?\n/).join(CRLF);
+  return g.post<{ id: string; message: { threadId: string } }>("https://gmail.googleapis.com/gmail/v1/users/me/drafts",
+    { message: { raw: Buffer.from(raw).toString("base64url"), ...(e.threadId ? { threadId: e.threadId } : {}) } });
+}
+
+/** S2: the email to the client listing what we need (as a reply in their thread when there is one). */
+export async function composeInfoRequest(admin: SupabaseClient, projectId: string): Promise<Email> {
   await matchChecklist(admin, projectId);
   const { data: p } = await admin.from("projects").select("id,name,client_id,is_dfe").eq("id", projectId).single();
   if (!p) throw new Error("project not found");
@@ -116,12 +143,14 @@ export async function draftInfoRequest(admin: SupabaseClient, projectId: string)
   const body = chasing
     ? `Hi\n\nJust following up on the information for ${p.name}. We're still waiting on:\n\n${list}\n\nCould you send these over when you get a moment?\n\nRegards\n\nRonan O'Boyle\nBeamore Management Ltd`
     : `Hi\n\nSo we can get set up for ${p.name}, could you please send us the following:\n\n${list}\n\nRegards\n\nRonan O'Boyle\nBeamore Management Ltd`;
-  const headers = [to && `To: ${to}`, `Subject: ${subject}`, inReplyTo && `In-Reply-To: ${inReplyTo}`, inReplyTo && `References: ${inReplyTo}`,
-    "MIME-Version: 1.0", "Content-Type: text/plain; charset=UTF-8"].filter(Boolean);
-  const raw = `${headers.join("\r\n")}\r\n\r\n${body.replace(/\n/g, "\r\n")}`;
-  const d = await g.post<{ id: string; message: { threadId: string } }>("https://gmail.googleapis.com/gmail/v1/users/me/drafts",
-    { message: { raw: Buffer.from(raw).toString("base64url"), ...(threadId ? { threadId } : {}) } });
-  const msg = `Draft saved in your Gmail Drafts${to ? ` to ${to}` : " (no address found, add one)"}: "${subject}". It is not sent until you press Send`;
+  return { to, subject, body, threadId, inReplyTo };
+}
+
+/** S2: the same email saved as a Gmail draft. Only ever a draft. */
+export async function draftInfoRequest(admin: SupabaseClient, projectId: string) {
+  const e = await composeInfoRequest(admin, projectId);
+  const d = await saveDraft(admin, e);
+  const msg = `Draft saved in your Gmail Drafts${e.to ? ` to ${e.to}` : " (no address found, add one)"}: "${e.subject}". It is not sent until you press Send`;
   await log(admin, projectId, "Info request drafted", `${msg} [${d.message.threadId}]`);
   return msg;
 }
@@ -151,8 +180,8 @@ export async function onWon(admin: SupabaseClient, projectId: string) {
   return out;
 }
 
-/** P4: a Gmail draft following up a cost proposal, as a reply in the thread it went out in. Only ever a draft. */
-export async function draftProposalFollowUp(admin: SupabaseClient, projectId: string) {
+/** P4: the email following up a cost proposal, as a reply in the thread it went out in. */
+export async function composeProposalFollowUp(admin: SupabaseClient, projectId: string): Promise<Email> {
   const { data: p } = await admin.from("projects").select("name,stage_changed_at").eq("id", projectId).single();
   if (!p) throw new Error("project not found");
   const g = await driveClient(admin);
@@ -163,10 +192,14 @@ export async function draftProposalFollowUp(admin: SupabaseClient, projectId: st
   const h = (n: string) => full.payload.headers.find((x) => x.name.toLowerCase() === n.toLowerCase())?.value ?? "";
   const sent = new Date(Number(full.internalDate)).toLocaleDateString("en-GB", { day: "numeric", month: "long" });
   const body = `Hello,\n\nJust following up on our fee proposal for ${p.name}, sent on ${sent}. Please let me know if you have any questions, or if you'd like us to go ahead.\n\nMany thanks,\nRonan\n\nRonan O'Boyle\nBeamore Management Ltd`;
-  const headers = [h("To") && `To: ${h("To")}`, h("Cc") && `Cc: ${h("Cc")}`, `Subject: Re: ${h("Subject").replace(/^re:\s*/i, "")}`,
-    h("Message-ID") && `In-Reply-To: ${h("Message-ID")}`, h("Message-ID") && `References: ${h("Message-ID")}`, "MIME-Version: 1.0", "Content-Type: text/plain; charset=UTF-8"].filter(Boolean);
-  const raw = `${headers.join("\r\n")}\r\n\r\n${body.replace(/\n/g, "\r\n")}`;
-  await g.post("https://gmail.googleapis.com/gmail/v1/users/me/drafts", { message: { raw: Buffer.from(raw).toString("base64url"), threadId: m.threadId } });
+  return { to: h("To"), cc: h("Cc") || undefined, subject: `Re: ${h("Subject").replace(/^re:s*/i, "")}`, body, threadId: m.threadId, inReplyTo: h("Message-ID") || undefined };
+}
+
+/** P4: the same email saved as a Gmail draft. Only ever a draft. */
+export async function draftProposalFollowUp(admin: SupabaseClient, projectId: string) {
+  const e = await composeProposalFollowUp(admin, projectId);
+  await saveDraft(admin, e);
+  const h = (n: string) => (n === "To" ? e.to : "");
   const msg = `Follow-up draft saved in your Gmail Drafts to ${h("To")}. It is not sent until you press Send`;
   await admin.from("project_events").insert({ project_id: projectId, source: "dashboard", kind: "Follow-up drafted", who: "Dashboard", body: msg });
   return msg;

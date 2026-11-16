@@ -91,3 +91,29 @@ export async function sendReportEmail(admin: SupabaseClient, profileId: string, 
   if (!res.ok) throw new Error(`Gmail ${res.status}: ${(await res.text()).slice(0, 200)}`);
   return { id: ((await res.json()) as { id: string }).id, from: email };
 }
+
+/**
+ * Sends one plain email written on the dashboard (an info request, a chaser, a follow-up...) from this team member's
+ * own Gmail, as a reply in the conversation when there is one. Only ever on their click on "Send" after reading it
+ * (Ronan, 16 Nov 2026: "a draft here in the dashboard, and then I can just press send").
+ */
+export async function sendEmail(admin: SupabaseClient, profileId: string, m: { to: string; cc?: string; subject: string; body: string; threadId?: string; inReplyTo?: string }) {
+  const { access, email } = await accessFor(admin, profileId);
+  const CRLF = "\r\n";
+  const mime = [
+    `From: ${email}`, `To: ${m.to}`, ...(m.cc ? [`Cc: ${m.cc}`] : []), `Subject: ${enc(m.subject)}`,
+    ...(m.inReplyTo ? [`In-Reply-To: ${m.inReplyTo}`, `References: ${m.inReplyTo}`] : []),
+    "MIME-Version: 1.0", "Content-Type: text/plain; charset=UTF-8", "Content-Transfer-Encoding: base64", "",
+    Buffer.from(m.body).toString("base64").replace(/(.{76})/g, `$1${CRLF}`), "",
+  ].join(CRLF);
+  const post = (threadId?: string) => fetch("https://gmail.googleapis.com/gmail/v1/users/me/messages/send", {
+    method: "POST", headers: { Authorization: `Bearer ${access}`, "Content-Type": "application/json" }, cache: "no-store",
+    body: JSON.stringify({ raw: Buffer.from(mime).toString("base64url"), ...(threadId ? { threadId } : {}) }),
+  });
+  // the conversation is in Ronan's mailbox; from someone else's Gmail it's still a reply (by its headers), just not
+  // filed in a thread of theirs
+  let res = await post(m.threadId);
+  if (!res.ok && m.threadId && (res.status === 400 || res.status === 404)) res = await post();
+  if (!res.ok) throw new Error(`Gmail ${res.status}: ${(await res.text()).slice(0, 200)}`);
+  return { id: ((await res.json()) as { id: string }).id, from: email };
+}

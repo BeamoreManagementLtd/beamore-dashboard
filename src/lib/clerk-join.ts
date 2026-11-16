@@ -61,16 +61,21 @@ export async function uploadToFolder(admin: SupabaseClient, folderId: string, fi
   return name;
 }
 
-/** A Gmail draft to the clerk with their link. Only ever a draft. */
-export async function draftJoinEmail(admin: SupabaseClient, clerkId: string) {
+/** The email to a new clerk with their questionnaire link. */
+export async function composeJoinEmail(admin: SupabaseClient, clerkId: string) {
   const { data: c } = await admin.from("clerks").select("name,email").eq("id", clerkId).single();
   if (!c) throw new Error("clerk not found");
   const token = await ensureJoinToken(admin, clerkId);
   const first = c.name.split(" ")[0];
   const body = `Hi ${first},\n\nWelcome to Beamore. So we can get you set up, please fill in this short form with your details, insurance, DBS and CSCS card, and let us know what PPE you need:\n\n${joinLink(token)}\n\nYou can upload your certificates on the form. The link is just for you, so please don't share it.\n\nMany thanks,\nRonan\n\nRonan O'Boyle\nBeamore Management Ltd`;
-  const headers = [c.email && `To: ${c.email}`, "Subject: Welcome to Beamore: your details", "MIME-Version: 1.0", "Content-Type: text/plain; charset=UTF-8"].filter(Boolean);
-  const raw = `${headers.join("\r\n")}\r\n\r\n${body.replace(/\n/g, "\r\n")}`;
-  const g = await driveClient(admin);
-  await g.post("https://gmail.googleapis.com/gmail/v1/users/me/drafts", { message: { raw: Buffer.from(raw).toString("base64url") } });
-  return `Draft saved in your Gmail Drafts${c.email ? ` to ${c.email}` : " (no email address on file, add one)"}. It is not sent until you press Send`;
+  return { to: c.email ?? "", subject: "Welcome to Beamore: your details", body };
 }
+
+/** The same email saved as a Gmail draft. Only ever a draft. */
+export async function draftJoinEmail(admin: SupabaseClient, clerkId: string) {
+  const e = await composeJoinEmail(admin, clerkId);
+  const { saveDraft } = await import("@/lib/project-setup");
+  await saveDraft(admin, e);
+  return `Draft saved in your Gmail Drafts${e.to ? ` to ${e.to}` : " (no email address on file, add one)"}. It is not sent until you press Send`;
+}
+

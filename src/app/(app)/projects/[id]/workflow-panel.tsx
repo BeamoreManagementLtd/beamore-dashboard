@@ -1,5 +1,6 @@
 import type { Stage, Status, Step } from "@/lib/workflow";
-import { markStep, setOutcome, setClerk, setPo, closeOutAnswer, setFolderKind, redraftInfoRequest, draftFollowUp, setStartDate, startedOnSite } from "../actions";
+import { markStep, setOutcome, setClerk, setPo, closeOutAnswer, setFolderKind, setStartDate, startedOnSite } from "../actions";
+import { EmailBox } from "../../email/email-box";
 import { FOLDER_KINDS } from "@/lib/folder-kinds";
 
 /** The project's workflow: stages across the top, then the current stage's steps (green done, amber waiting, grey to come). */
@@ -60,19 +61,19 @@ export function WorkflowPanel({ projectId, stages, current, clerks, ticked, stat
     if (st.id === "P4" && st.state !== "done" && stages[0].steps.find((x) => x.id === "P3")?.state === "done")
       return (
         <span className="wf-ctl">
-          <form action={draftFollowUp.bind(null, projectId)}><button className="btn">Draft follow-up</button></form>
+          <EmailBox kind="followup" refId={projectId} label="Write follow-up" />
           <form action={markStep.bind(null, projectId, "P4", true)}><button className="btn">They replied</button></form>
         </span>
       );
     if (st.id === "S5" && st.state !== "done")
       return (
         <span className="wf-ctl">
-          <form action={redraftInfoRequest.bind(null, projectId)}><button className="btn">Draft chaser</button></form>
+          <EmailBox kind="info" refId={projectId} label="Write chaser" />
           <form action={markStep.bind(null, projectId, "S5", true)}><button className="btn">Mark done</button></form>
         </span>
       );
     if (st.id === "S2" && st.state !== "done")
-      return <form action={redraftInfoRequest.bind(null, projectId)} className="wf-ctl"><button className="btn">Draft the email</button></form>;
+      return <span className="wf-ctl"><EmailBox kind="info" refId={projectId} label="Write the email" /></span>;
     if (st.id === "S6" && st.state !== "done")
       return (
         <form action={setPo.bind(null, projectId)} className="wf-ctl wf-inline">

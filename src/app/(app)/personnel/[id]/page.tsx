@@ -4,7 +4,8 @@ import { requireProfile } from "@/lib/auth";
 import { insuranceSummary, type Policy } from "@/lib/portal/data";
 import { createClient } from "@/lib/supabase/server";
 import { fd, fdy, today } from "@/lib/format";
-import { saveCompliance, startOnboarding, tickOnboarding, setActive, makeJoinLink, draftJoin } from "../actions";
+import { saveCompliance, startOnboarding, tickOnboarding, setActive, makeJoinLink } from "../actions";
+import { EmailBox } from "../../email/email-box";
 import { joinLink } from "@/lib/join-link";
 import { buildOnboarding } from "@/lib/onboarding";
 import { ScoreTrend } from "../score-trend";
@@ -156,7 +157,7 @@ export default async function Clerk({ params, searchParams }: { params: Promise<
               {c.join_token
                 ? <div className="row" style={{ marginTop: 8, alignItems: "center" }}>
                     <input readOnly value={joinLink(c.join_token)} aria-label="Questionnaire link" style={{ flex: 1, minWidth: 0 }} />
-                    <form action={draftJoin.bind(null, id)}><button className="btn">Draft email with the link</button></form>
+                    <EmailBox kind="join" refId={id} label="Write email with the link" />
                   </div>
                 : <form action={makeJoinLink.bind(null, id)} style={{ marginTop: 8 }}><button className="btn">Make their link</button></form>}
               {draft && <p className="small" style={{ marginTop: 6 }}>{draft}</p>}

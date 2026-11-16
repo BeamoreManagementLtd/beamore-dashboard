@@ -57,8 +57,8 @@ const TOOLS: Anthropic.Tool[] = [
     input_schema: { type: "object", properties: { number: { type: "integer" }, item: S("part of the item's name"), date: S("YYYY-MM-DD, default today") }, required: ["number", "item"] } },
   { name: "mark_won_or_lost", description: "Mark a priced project as won (starts its set-up: checklist, folder, Xero) or lost.",
     input_schema: { type: "object", properties: { number: { type: "integer" }, outcome: { type: "string", enum: ["won", "lost"] }, reason: S("if lost, why") }, required: ["number", "outcome"] } },
-  { name: "draft_email", description: "Save an email as a DRAFT in Ronan's Gmail (never sent; Ronan sends it). For work emails to clients, clerks or contractors.",
-    input_schema: { type: "object", properties: { to: S("email address(es), comma separated"), subject: S("subject"), body: S("plain text body, signed off as Ronan") }, required: ["to", "subject", "body"] } },
+  { name: "draft_email", description: "Write a work email to a client, clerk or contractor. Normally it's just shown in your answer for them to copy (save_to_gmail false). Set save_to_gmail true only when they ask for it in Gmail Drafts. Never sent.",
+    input_schema: { type: "object", properties: { to: S("email address(es), comma separated"), subject: S("subject"), body: S("plain text body, signed off as Ronan"), save_to_gmail: { type: "boolean", description: "true only if they asked for a Gmail draft" } }, required: ["to", "subject", "body"] } },
   { name: "request_permission", description: "Use this INSTEAD of answering when the request isn't Beamore work (or you're unsure): it asks Ronan to allow it.",
     input_schema: { type: "object", properties: { summary: S("what they want, in a few plain words") }, required: ["summary"] } },
   { name: "search_email", description: "Search Ronan's Gmail (director only). Gmail search syntax works, e.g. 'from:gleeds Beaumont newer_than:60d'.",
@@ -241,6 +241,8 @@ export async function run(db: SupabaseClient, me: Profile, name: string, a: Reco
       return { done: `${p.display_name} marked ${a.outcome}` };
     }
     case "draft_email": {
+      // shown here to copy unless they asked for Gmail Drafts (Ronan, 16 Nov 2026)
+      if (a.save_to_gmail !== true) return { shown: "Not saved or sent. Write it out in full in your answer (To:, Subject:, then the email exactly) so they can copy it." };
       const CRLF = String.fromCharCode(13, 10);
       const raw = [`To: ${a.to}`, `Subject: ${a.subject}`, "MIME-Version: 1.0", "Content-Type: text/plain; charset=UTF-8"].join(CRLF) + CRLF + CRLF + String(a.body).split(/\r?\n/).join(CRLF);
       const g = await driveClient(createServiceClient());
@@ -400,7 +402,7 @@ You can also do things with the action tools (add or tick off to-dos, add projec
       try {
         if (b.name === "request_permission") {
           out = (await requestApproval(db, me, "off_topic", String(input.summary ?? question), question)) ? { done: "Sent to Ronan for permission" } : { error: "Couldn't send the request" };
-        } else if (!director && NEEDS_RONAN.has(b.name)) {
+        } else if (!director && NEEDS_RONAN.has(b.name) && !(b.name === "draft_email" && input.save_to_gmail !== true)) {
           const what = b.name === "draft_email" ? `Email draft to ${input.to}: "${input.subject}"` : `Mark project ${input.number} as ${input.outcome}`;
           out = (await requestApproval(db, me, "action", what, question, { tool: b.name, input })) ? { done: "Sent to Ronan to approve; it will happen when he approves" } : { error: "Couldn't send the request" };
         } else {
