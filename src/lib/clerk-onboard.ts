@@ -8,7 +8,7 @@ import { joinLink } from "@/lib/join-link";
 /**
  * New clerk onboarding, start to finish (Ronan, 15 Nov 2026). From one "Add new clerk" form:
  *  1. their @beamore.co.uk Google account (temporary password, changed at first sign-in; Ronan passes it on himself)
- *  2. their Personnel folder, shared with their new address (Google doesn't email them about it)
+ *  2. their Personnel folder, for the office only: never shared with them (Ronan, 16 Nov 2026)
  *  3. the project folder for the job they're going on, shared the same way
  *  4. the Beamore manual (once Andy's written it and its Drive link is saved), shared read-only
  *  5. portal access (portal.beamore.co.uk) and the onboarding checklist
@@ -63,9 +63,9 @@ export async function onboardNewClerk(admin: SupabaseClient, o: {
   // 2 + 3 + 4. folders and the manual, shared with their new address
   let personnelFolder: string | null = null, projectFolder: string | null = null, projectName: string | null = null, manualLink: string | null = null;
   try {
+    // made for the office, NOT shared with the clerk (Ronan, 16 Nov 2026): their uploads reach it through the portal
     personnelFolder = await clerkFolder(admin, o.clerkId, o.name);
-    if (email) await share(g, personnelFolder, email, "writer");
-    steps.push({ label: `Personnel folder ${email ? "shared with them" : "made"}`, ok: true });
+    steps.push({ label: "Personnel folder made", ok: true, note: "For the office only; not shared with them" });
   } catch (e) { steps.push({ label: "Personnel folder", ok: false, note: e instanceof Error ? e.message.slice(0, 200) : "failed" }); }
   if (o.projectId) {
     const { data: p } = await admin.from("projects").select("display_name,drive_folder_id").eq("id", o.projectId).single();
