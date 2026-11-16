@@ -535,7 +535,7 @@ export const CHECKED_FOLDER = "Checked (dashboard)";
  */
 export async function pagesQueue(admin: SupabaseClient) {
   const { data } = await admin.from("reports").select("id,main_folder,project_folder_name,folder_name,file_name,checked_at,issues,checked_file_id,drive_file_id")
-    .eq("status", "ready").eq("fixes->>pages_state", "waiting").order("checked_at").limit(3);
+    .eq("status", "ready").eq("fixes->>pages_state", "waiting").order("checked_at").limit(8);
   return (data ?? []).filter((r) => r.checked_file_id === r.drive_file_id && r.main_folder).map((r) => ({
     id: r.id, rev: r.checked_at, main_folder: r.main_folder, project_folder: r.project_folder_name, report_folder: r.folder_name, file_name: r.file_name,
     find: ((r.issues ?? []) as Issue[]).map((i, k) => ({ k, near: i.near ?? null })).filter((x) => x.near),
