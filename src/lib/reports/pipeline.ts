@@ -21,6 +21,7 @@ export function qualityScore(issues: { severity: string }[], spelling: number, l
   return Math.max(0, 100 - off);
 }
 import { checkReport, type Issue, type Programme } from "./check";
+import { scoreParts, scoreTotal } from "./score";
 
 /** What a progress vs programme section is missing, against Ronan's method, in words for the checker and the clerk. */
 export function programmeGaps(p: Programme | null | undefined) {
@@ -295,16 +296,22 @@ export async function checkOne(admin: SupabaseClient, id: string) {
   const visitFromName = /(\d{1,2})[.\-_ ](\d{1,2})[.\-_ ](\d{2,4})/.exec(rep.file_name);
   const nameDate = visitFromName ? `${visitFromName[3].length === 2 ? `20${visitFromName[3]}` : visitFromName[3]}-${visitFromName[2].padStart(2, "0")}-${visitFromName[1].padStart(2, "0")}` : null;
   const applied = ai.spelling.filter((s) => !spelt.skipped.includes(s)).map((s) => ({ find: s.find, replace: s.replace }));
+  // the report's mark, from the report as the clerk sent it, before any corrections (Ronan, 16 Nov 2026)
+  const parts = scoreParts({
+    quality: Number.isFinite(ai.quality) ? ai.quality : null,
+    photos: { count: stats.count, expected: monthly ? 0 : rep.kind === "me" ? 20 : 35, mixed: !uniform.wasUniform, stretched: stats.stretched, small: stats.smallOnPage, blurry: stats.blurry, sideways: sideways.length, reused },
+    spelling: ai.spelling.length, words,
+    hs: early ? null : hs, programme: prog ?? null, programmeGaps: progGaps.length, standards: ai.standards ?? null,
+    tracker: trk.tables ? trkProblems.length : null, trackerExpected: !early, renamed: !!renamedTo,
+  });
   await admin.from("reports").update({
     status: "ready", ai_summary: ai.summary, issues, spelling_fixed: spelt.applied,
     photos: { count: stats.count, blurry: stats.blurry, smallOnPage: stats.smallOnPage, stretched: stats.stretched, shrunk: shrunk.changed, rotated: rotated.length, reused, usual, uncaptioned: uncaptioned(r) },
     photo_hashes: hashes, photo_count: stats.count,
     fixes: { spelling: applied, rotated: rotated.length, shrunk: shrunk.changed, stretched: shapes.stretched, enlarged: shapes.enlarged, uniform: uniform.changed, mixed: !uniform.wasUniform, side_cm: uniform.side ? +(uniform.side / 360000).toFixed(1) : null, renamed: renamedTo, words, programme: prog ?? null, standards: ai.standards ?? null, health_safety: hs, tracker: trk,
-      score_by: Number.isFinite(ai.quality) && ai.quality >= 0 && ai.quality <= 100 ? "overall" : "formula" },
+      score_by: "parts", score_parts: parts },
     // lateness is shown on its own on the Reports page
-    // the AI's overall judgement of the report (Ronan, 15 Nov 2026: counting off points per issue left good reports
-    // near 0); the old formula only if it didn't give one
-    score: Number.isFinite(ai.quality) && ai.quality >= 0 && ai.quality <= 100 ? Math.round(ai.quality) : qualityScore(issues, spelt.applied, 0, { renamed: !!renamedTo, mixedPhotos: !uniform.wasUniform, rotated: rotated.length, stretched: stats.stretched, oversized: shrunk.changed > 0 && raw.length > 10_000_000, standardsMissed: Object.values(ai.standards ?? {}).filter((v) => v === false).length }),
+    score: scoreTotal(parts),
     clerk_points: [
       // worded as friendly suggestions, not orders (Ronan, 15 Nov 2026: "steer them in the right direction")
       ...(renamedTo ? [`If you could name the file the same way as the others in the folder, e.g. "${renamedTo.replace(/\.docx?$/i, "")}", it keeps everything easy to find`] : []),
