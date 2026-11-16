@@ -139,7 +139,7 @@ export async function runEmailTodos(admin: SupabaseClient, opts: { hours?: numbe
       const e = emails.find((x) => x.thread === d.thread);
       if (!e || d.action === "none") continue;
       if (d.action === "comment" && d.card && open.some((c) => c.id === d.card)) {
-        await todoistCommands([{ type: "note_add", args: { item_id: d.card, content: `${now}: ${d.summary ?? "New email in this thread"}\nEmail: ${threadLink(d.thread)}` } }]);
+        await todoistCommands([{ type: "note_add", temp_id: `c${commented}-${Date.now()}`, args: { item_id: d.card, content: `${now}: ${d.summary ?? "New email in this thread"}\nEmail: ${threadLink(d.thread)}` } }]);
         commented++;
         continue;
       }
