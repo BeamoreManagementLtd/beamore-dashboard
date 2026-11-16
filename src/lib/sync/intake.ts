@@ -264,7 +264,8 @@ export async function runIntake(admin: SupabaseClient) {
     let priceRequests = 0;
     {
       // must ask for a price: "clerk of works" or "CQM" alone is in half your email (reports, applications, adverts)
-      const asks = await q('-from:me -in:chats newer_than:3d (subject:("fee proposal" OR "fee request" OR "request for fee" OR "fee quote" OR quote OR quotation OR "request for proposal" OR "pricing") OR "please provide a fee" OR "provide a fee" OR "provide a quote" OR "fee proposal for" OR "could you price" OR "can you price" OR "your fee for" OR "send us a fee") -subject:(application OR applied OR CV OR vacancy OR job OR "saved search" OR competency OR invoice OR report)', 25);
+      // tenders too (Ronan, 16 Nov 2026: "Tender Enquiry-T1121-Compton Property-Leo House-Clerk of Works" was missed)
+      const asks = await q('-from:me -in:chats newer_than:3d (subject:("fee proposal" OR "fee request" OR "request for fee" OR "fee quote" OR quote OR quotation OR "request for proposal" OR "pricing" OR tender OR "tender enquiry" OR "invitation to tender" OR ITT OR RFQ OR "request for quotation" OR "fee enquiry" OR "price request") OR "invitation to tender" OR "tender return" OR "please provide a fee" OR "provide a fee" OR "provide a quote" OR "fee proposal for" OR "could you price" OR "can you price" OR "your fee for" OR "send us a fee") -subject:(application OR applied OR CV OR vacancy OR job OR "saved search" OR competency OR invoice OR report)', 25);
       const { data: known } = await admin.from("price_requests").select("message_id,thread_id");
       const seen = new Set((known ?? []).flatMap((k) => [k.message_id, k.thread_id]));
       const { data: contacts } = await admin.from("invoice_contacts").select("client_id,to_emails").not("client_id", "is", null);
@@ -274,15 +275,15 @@ export async function runIntake(admin: SupabaseClient) {
         if (seen.has(m.id) || seen.has(m.threadId)) continue;
         const full = await msg(m.id);
         const subj = header(full, "Subject"), from = header(full, "From");
-        if (/^(automatic reply|out of office|undeliverable|accepted:|declined:)/i.test(subj) || /noreply|no-reply|donotreply|notifications?@|alerts?@|mailer-daemon|beamore\.co\.uk|indeed|findatender|linkedin/i.test(from)) continue;
+        if (/^(automatic reply|out of office|undeliverable|accepted:|declined:)/i.test(subj) || /noreply|no-reply|donotreply|notifications?@|alerts?@|mailer-daemon|beamore\.co\.uk|indeed|findatender|find\.a\.tender|notifications\.service\.gov\.uk|contractsfinder|linkedin/i.test(from)) continue;
         // about a job we already have (report, invoice, chaser) rather than a new one to price
         if (/\b(report|diary|invoice|remittance|payment|timesheet)\b/i.test(subj)) continue;
         if ((projects ?? []).some((p) => p.name.length > 4 && subj.toLowerCase().includes(p.name.toLowerCase()) && !["enquiry", "pricing"].includes(p.stage))) continue;
         const email = (/<([^>]+)>/.exec(from)?.[1] ?? from).trim().toLowerCase();
-        await admin.from("price_requests").insert({ message_id: m.id, thread_id: m.threadId, from_name: who(from), from_email: email, subject: subj.slice(0, 300),
+        const { error: saveErr } = await admin.from("price_requests").insert({ message_id: m.id, thread_id: m.threadId, from_name: who(from), from_email: email, subject: subj.slice(0, 300),
           snippet: (full.snippet ?? "").slice(0, 400), received_at: new Date(Number(full.internalDate)).toISOString(), client_id: domainClient.get(email.split("@")[1] ?? "") ?? null });
         seen.add(m.threadId);
-        priceRequests++;
+        if (!saveErr) priceRequests++;
       }
     }
 
