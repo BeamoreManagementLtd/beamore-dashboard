@@ -36,7 +36,7 @@ export default async function Reports({ searchParams }: { searchParams: Promise<
     db.from("diary_visits").select("project_id,visit_date,projects(name,stage)").eq("side", "charged").gte("visit_date", addDays(t, -14)).lte("visit_date", addDays(t, -2)),
     db.from("reports").select("project_id,uploaded_at").gte("uploaded_at", addDays(t, -16)),
   ]);
-  const { data: helper } = await db.from("sync_files").select("modified_time").eq("key", "word_helper").maybeSingle();
+  const { data: helper } = await db.from("sync_files").select("modified_time,file_id").eq("key", "word_helper").maybeSingle();
   const helperSeen = helper?.modified_time ?? null;
   const helperLate = (open ?? []).some((r) => r.status === "approved") && (!helperSeen || Date.now() - Date.parse(helperSeen) > 10 * 60_000);
   const clerkDays = settings?.clerk_days ?? 1, teamDays = settings?.team_days ?? 1;
@@ -116,7 +116,7 @@ export default async function Reports({ searchParams }: { searchParams: Promise<
       {error && <p className="callout bad">{error}</p>}
       {refreshed && <p className="callout info">Looked just now: {refreshed}.</p>}
       {sent && <p className="callout good">Approved. The office PC makes the PDF in Word, saves it next to the report and it is sent from your email, usually within a few minutes.</p>}
-      {helperLate && <p className="callout warn">The office PC that makes the PDFs in Word hasn’t checked in {helperSeen ? `since ${fdt(helperSeen)}` : "yet"}: approved reports wait until it’s on.</p>}
+      {helperLate && <p className="callout warn">The PC that makes the PDFs in Word{helper?.file_id && helper.file_id !== "pc" ? ` (${helper.file_id})` : ""} hasn’t checked in {helperSeen ? `since ${fdt(helperSeen)}` : "yet"}: approved reports wait until it’s on.</p>}
       {lastRun?.[0] && <p className="small muted">Last looked {fdt(lastRun[0].finished_at)}: {lastRun[0].ok ? lastRun[0].message : <span className="neg">{lastRun[0].message}</span>}. Every 15 minutes. Clerks have {clerkDays} working day{clerkDays === 1 ? "" : "s"} after a visit; the team {teamDays} after upload.</p>}
 
       <div className="tiles">

@@ -1,5 +1,6 @@
 # Beamore report PDFs, made with Word (Ronan, 15 Nov 2026: Google spoils the layout).
-# Runs on the office PC (Word + Google Drive for desktop) every 2 minutes from Task Scheduler:
+# Runs on the Beamore server PC (always on; Word + Google Drive for desktop) every 2 minutes from Task Scheduler, set up
+# by install-word-helper.ps1, and runs this file straight from the Drive folder so changes reach it automatically:
 #   1. asks the dashboard which approved reports are waiting for a PDF
 #   2. opens a COPY of each in Word, accepts any tracked changes left, removes comments, saves it as PDF
 #   3. puts the PDF next to the report in the Google Drive folder (Drive for desktop uploads it)
@@ -10,8 +11,16 @@ param([switch]$Once, [string]$Test, [string]$TestOut)
 
 $ErrorActionPreference = "Stop"
 $Dashboard = "https://dashboard.beamore.co.uk"
+# the shared Work folder through Google Drive for desktop: G: here, but whichever letter Drive has on this PC
 $Root = "G:\My Drive\Work"
+if (-not (Test-Path -LiteralPath $Root)) {
+  $found = Get-PSDrive -PSProvider FileSystem | ForEach-Object { Join-Path $_.Root "My Drive\Work" } | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+  if ($found) { $Root = $found }
+}
 $Log = Join-Path $env:LOCALAPPDATA "Beamore\word-pdf-helper.log"
+# the dashboard key: saved by the installer for this Windows user only (Windows encrypts it), or, on the PC with the
+# dashboard's code, from its .env.local
+$KeyFile = Join-Path $env:LOCALAPPDATA "Beamore\dashboard-key.dat"
 New-Item -ItemType Directory -Force -Path (Split-Path $Log) | Out-Null
 function Write-Log($m) { "$(Get-Date -Format s)  $m" | Add-Content -Path $Log }
 
@@ -83,10 +92,15 @@ function Get-Pages([string]$Docx, $Find) {
 
 if ($Test) { Convert-WithWord $Test $TestOut; "PDF: $TestOut"; exit }
 
-# the dashboard's key (the same one its scheduled jobs use), from the dashboard folder on this PC
-$envFile = Join-Path $PSScriptRoot "..\.env.local"
-$secret = ((Get-Content $envFile | Where-Object { $_ -match '^CRON_SECRET=' }) -replace '^CRON_SECRET=', '').Trim('"')
-$headers = @{ Authorization = "Bearer $secret" }
+# the dashboard's key (the same one its scheduled jobs use)
+if (Test-Path -LiteralPath $KeyFile) {
+  $secret = [Net.NetworkCredential]::new("", (Get-Content -LiteralPath $KeyFile | ConvertTo-SecureString)).Password
+} else {
+  $envFile = Join-Path $PSScriptRoot "..\.env.local"
+  $secret = ((Get-Content $envFile | Where-Object { $_ -match '^CRON_SECRET=' }) -replace '^CRON_SECRET=', '').Trim('"')
+}
+# the PC's name goes with each request, so the dashboard can show which computer is making the PDFs
+$headers = @{ Authorization = "Bearer $secret"; "X-Helper-PC" = $env:COMPUTERNAME }
 
 do {
   try {
