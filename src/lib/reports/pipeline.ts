@@ -331,6 +331,12 @@ export async function checkOne(admin: SupabaseClient, id: string) {
   // only if the clerk hasn't changed it while we were checking
   const now = await g.json<{ headRevisionId: string }>(`files/${rep.drive_file_id}`, { fields: "headRevisionId", supportsAllDrives: "true" });
   if (now.headRevisionId !== meta.headRevisionId) {
+    // another check of the same report (the 15-minute job and a manual run together) has just saved it: that one stands
+    const { data: latest } = await admin.from("reports").select("checked_revision,status").eq("id", id).single();
+    if (latest?.checked_revision === now.headRevisionId) {
+      if (latest.status !== "ready") await admin.from("reports").update({ status: "ready" }).eq("id", id);
+      return;
+    }
     await admin.from("reports").update({ status: "new", modified_at: new Date().toISOString() }).eq("id", id);
     return;
   }
