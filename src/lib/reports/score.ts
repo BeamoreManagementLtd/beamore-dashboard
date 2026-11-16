@@ -23,6 +23,17 @@ type In = {
 };
 
 const r1 = (n: number) => Math.round(Math.max(0, n) * 10) / 10;
+
+// Softened (Ronan, 16 Nov 2026: "a little bit harsh in areas"; one slip in 1,735 words had cost 0.9):
+/** Spelling: up to one mistake per 1,000 words costs nothing; then 1.25 marks per mistake per 1,000 words. */
+export const spellingMark = (mistakes: number, words: number) => r1(10 - 1.25 * Math.max(0, (words ? (mistakes / words) * 1000 : mistakes) - 1));
+/** Progress vs programme: not done 0; done but short of the method, 1 mark off per thing missing, never below 4. */
+export const programmeMark = (verdict: string | undefined, gaps: number) => (!verdict || verdict === "good" || verdict === "not_in_form" ? 10 : verdict === "missing" ? 0 : Math.max(4, 10 - gaps));
+/** Best practices: full marks for six of the eight; each one fewer costs its share. */
+export const standardsMark = (met: number, of: number) => (of ? r1(Math.min(1, met / Math.max(1, of - 2)) * 10) : 10);
+/** Photo shapes: half a mark per stretched photo. Photos that may be sideways are pointed out but cost nothing: that's
+ * the AI's guess from small samples, and it has been wrong (Peter Lord's portrait photos, 15 Nov 2026). */
+export const photoShapeMark = (stretched: number) => Math.max(0, 2 - 0.5 * stretched);
 const list = (a: string[]) => (a.length <= 1 ? a.join("") : `${a.slice(0, -1).join(", ")} and ${a[a.length - 1]}`);
 
 export function scoreParts(x: In): ScorePart[] {
@@ -36,11 +47,11 @@ export function scoreParts(x: In): ScorePart[] {
   const p = x.photos, fresh = Math.max(0, p.count - p.reused);
   const enough = p.expected ? Math.min(1, fresh / p.expected) * 4 : 4;
   const same = p.mixed ? 0 : 2;
-  const shape = Math.max(0, 2 - 0.5 * (p.stretched + p.sideways));
+  const shape = photoShapeMark(p.stretched);
   const clear = Math.max(0, 2 - 0.25 * (p.small + p.blurry));
   const photoNotes = [
     p.expected ? `${p.count} photo${p.count === 1 ? "" : "s"}${p.reused ? ` (${p.reused} reused)` : ""} against ${p.expected} expected` : `${p.count} photos`,
-    p.mixed ? "different sizes" : "", p.stretched ? `${p.stretched} stretched` : "", p.sideways ? `${p.sideways} sideways` : "",
+    p.mixed ? "different sizes" : "", p.stretched ? `${p.stretched} stretched` : "", p.sideways ? `${p.sideways} may be sideways (not marked down)` : "",
     p.small ? `${p.small} too small` : "", p.blurry ? `${p.blurry} low detail` : "",
   ].filter(Boolean);
   const photoTips = [
@@ -52,11 +63,9 @@ export function scoreParts(x: In): ScorePart[] {
   ].filter(Boolean);
   parts.push({ label: "Photos", of: 10, got: r1(enough + same + shape + clear), note: photoNotes.join(", "), improve: photoTips.join(". ") || undefined });
 
-  // spelling: 1.5 marks off per mistake per 1,000 words
-  const per1000 = x.words ? (x.spelling / x.words) * 1000 : x.spelling;
-  const ex = (x.spellingExamples ?? []).slice(0, 4);
-  parts.push({ label: "Spelling and grammar", of: 10, got: r1(10 - 1.5 * per1000), note: `${x.spelling} mistake${x.spelling === 1 ? "" : "s"} in about ${x.words.toLocaleString("en-GB")} words`,
-    improve: x.spelling ? `Run Word's spelling and grammar check before sending${ex.length ? ` (e.g. ${ex.join(", ")})` : ""}` : undefined });
+      const ex = (x.spellingExamples ?? []).slice(0, 4);
+  parts.push({ label: "Spelling and grammar", of: 10, got: spellingMark(x.spelling, x.words), note: `${x.spelling} mistake${x.spelling === 1 ? "" : "s"} in about ${x.words.toLocaleString("en-GB")} words`,
+    improve: spellingMark(x.spelling, x.words) < 10 ? `Run Word's spelling and grammar check before sending${ex.length ? ` (e.g. ${ex.join(", ")})` : ""}` : undefined });
 
   if (!x.hs) parts.push({ label: "Health and safety items", of: 10, got: 10, note: "not judged for this report" });
   else {
@@ -68,13 +77,13 @@ export function scoreParts(x: In): ScorePart[] {
   }
 
   const pv = x.programme?.verdict;
-  const prog = !pv || pv === "good" || pv === "not_in_form" ? 10 : pv === "missing" ? 0 : Math.max(2, 10 - 2 * x.programmeGaps);
+  const prog = programmeMark(pv, x.programmeGaps);
   parts.push({ label: x.programme && !x.programme.dfe ? "Progress summary" : "Progress vs programme", of: 10, got: prog, note: !pv || pv === "not_in_form" ? "not part of this report" : pv === "good" ? "done the Beamore way" : pv === "missing" ? "not done" : `${x.programmeGaps} thing${x.programmeGaps === 1 ? "" : "s"} short of the method`,
     improve: prog < 10 ? ((x.programmeTips ?? []).join("; ") || "Follow the progress vs programme method") : undefined });
 
   const vals = Object.values(x.standards ?? {});
   const missed = x.standardsMissed ?? [];
-  parts.push({ label: "Best practices", of: 10, got: vals.length ? r1((vals.filter(Boolean).length / vals.length) * 10) : 10, note: vals.length ? `${vals.filter(Boolean).length} of ${vals.length}` : "not judged",
+  parts.push({ label: "Best practices", of: 10, got: standardsMark(vals.filter(Boolean).length, vals.length), note: vals.length ? `${vals.filter(Boolean).length} of ${vals.length}` : "not judged",
     improve: missed.length ? `Missing: ${list(missed.map((m) => m.toLowerCase()))}` : undefined });
 
   // tracker 7 (2 off per kind of problem; none at all when one's expected = 0), file name 3
