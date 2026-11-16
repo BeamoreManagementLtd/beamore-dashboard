@@ -104,7 +104,7 @@ export default async function ReportPage({ params, searchParams }: { params: Pro
         <section className="panel">
           <h2>How the score was worked out <span className="small muted">on the report as the clerk sent it, before any corrections</span></h2>
           <table><tbody>{scoreParts.map((s) => (
-            <tr key={s.label}><td>{s.label}</td><td className={`num ${s.got >= s.of * 0.85 ? "pos" : s.got < s.of * 0.6 ? "neg" : ""}`}><b>{s.got}</b> / {s.of}</td><td className="small muted">{s.note}</td></tr>
+            <tr key={s.label}><td>{s.label}</td><td className={`num ${s.got >= s.of * 0.85 ? "pos" : s.got < s.of * 0.6 ? "neg" : ""}`}><b>{s.got}</b> / {s.of}</td><td className="small"><span className="muted">{s.note}</span>{s.improve && s.got < s.of && <span className="two">{s.improve}</span>}</td></tr>
           ))}<tr><td><b>Total</b></td><td className="num"><b>{r.score}</b> / 100</td><td className="small muted">{(r.score / 10).toFixed(1)} out of 10</td></tr></tbody></table>
         </section>
       )}

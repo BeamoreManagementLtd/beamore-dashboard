@@ -22,6 +22,7 @@ export function qualityScore(issues: { severity: string }[], spelling: number, l
 }
 import { checkReport, type Issue, type Programme } from "./check";
 import { scoreParts, scoreTotal } from "./score";
+import { STANDARDS, STANDARD_KEYS } from "./standards";
 
 /** What a progress vs programme section is missing, against Ronan's method, in words for the checker and the clerk. */
 export function programmeGaps(p: Programme | null | undefined) {
@@ -298,11 +299,12 @@ export async function checkOne(admin: SupabaseClient, id: string) {
   const applied = ai.spelling.filter((s) => !spelt.skipped.includes(s)).map((s) => ({ find: s.find, replace: s.replace }));
   // the report's mark, from the report as the clerk sent it, before any corrections (Ronan, 16 Nov 2026)
   const parts = scoreParts({
-    quality: Number.isFinite(ai.quality) ? ai.quality : null,
+    quality: Number.isFinite(ai.quality) ? ai.quality : null, qualityWhy: ai.quality_why || null,
     photos: { count: stats.count, expected: monthly ? 0 : rep.kind === "me" ? 20 : 35, mixed: !uniform.wasUniform, stretched: stats.stretched, small: stats.smallOnPage, blurry: stats.blurry, sideways: sideways.length, reused },
-    spelling: ai.spelling.length, words,
-    hs: early ? null : hs, programme: prog ?? null, programmeGaps: progGaps.length, standards: ai.standards ?? null,
-    tracker: trk.tables ? trkProblems.length : null, trackerExpected: !early, renamed: !!renamedTo,
+    spelling: ai.spelling.length, spellingExamples: ai.spelling.slice(0, 4).map((s) => `"${s.find}" → "${s.replace}"`), words,
+    hs: early ? null : hs, programme: prog ?? null, programmeGaps: progGaps.length, programmeTips: progGaps, standards: ai.standards ?? null,
+    standardsMissed: STANDARD_KEYS.filter((k) => ai.standards?.[k] === false).map((k) => STANDARDS[k].label),
+    tracker: trk.tables ? trkProblems.length : null, trackerProblems: trkProblems, trackerExpected: !early, renamed: !!renamedTo, renamedTo,
   });
   await admin.from("reports").update({
     status: "ready", ai_summary: ai.summary, issues, spelling_fixed: spelt.applied,

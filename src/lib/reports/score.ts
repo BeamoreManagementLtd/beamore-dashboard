@@ -1,33 +1,36 @@
 /**
  * A report's mark out of 100 (Ronan, 16 Nov 2026): judged on the report as the clerk sent it, before any corrections,
- * on everything agreed matters. A perfect report is 100 (10 out of 10); each slip costs marks in its own part.
+ * on everything agreed matters. A perfect report is 100 (10 out of 10); each slip costs marks in its own part, and
+ * every part that lost marks says why and how to improve ("write beside the score why she was marked down").
  *   Quality of the information 40 · Photos 10 · Spelling and grammar 10 · Health and safety items 10 ·
  *   Progress vs programme / summary 10 · Best practices 10 · Issues tracker and file name 10
  */
-export type ScorePart = { label: string; got: number; of: number; note: string };
+export type ScorePart = { label: string; got: number; of: number; note: string; improve?: string };
 
 type In = {
-  /** the AI's judgement of the information: detail, accuracy, follow-up, seen v told (0-100) */
-  quality: number | null;
+  /** the AI's judgement of the information: detail, accuracy, follow-up, seen v told (0-100), and why it lost marks */
+  quality: number | null; qualityWhy?: string | null;
   /** expected: what a good report has (0 = not judged on numbers, e.g. a monthly report) */
   photos: { count: number; expected: number; mixed: boolean; stretched: number; small: number; blurry: number; sideways: number; reused: number };
-  /** spelling and grammar mistakes the check found, and the report's length in words */
-  spelling: number; words: number;
+  /** spelling and grammar mistakes the check found (with a few examples), and the report's length in words */
+  spelling: number; spellingExamples?: string[]; words: number;
   /** the ten H&S items (null: not judged, e.g. the first reports on a job or the CQM monthly report) */
   hs: { label: string; status: string }[] | null;
-  programme: { dfe: boolean; verdict: string } | null; programmeGaps: number;
-  standards: Record<string, boolean> | null;
+  programme: { dfe: boolean; verdict: string } | null; programmeGaps: number; programmeTips?: string[];
+  standards: Record<string, boolean> | null; standardsMissed?: string[];
   /** tracker: kinds of problem found (photos in it, not coloured, closed without date/green/reason); null = no tracker */
-  tracker: number | null; trackerExpected: boolean; renamed: boolean;
+  tracker: number | null; trackerProblems?: string[]; trackerExpected: boolean; renamed: boolean; renamedTo?: string | null;
 };
 
 const r1 = (n: number) => Math.round(Math.max(0, n) * 10) / 10;
+const list = (a: string[]) => (a.length <= 1 ? a.join("") : `${a.slice(0, -1).join(", ")} and ${a[a.length - 1]}`);
 
 export function scoreParts(x: In): ScorePart[] {
   const parts: ScorePart[] = [];
 
   const q = x.quality === null ? 70 : Math.min(100, Math.max(0, x.quality));
-  parts.push({ label: "Quality of the information", of: 40, got: r1((q / 100) * 40), note: x.quality === null ? "not judged; counted as 70%" : `${Math.round(q)}% on detail, accuracy, follow-up and what was seen` });
+  parts.push({ label: "Quality of the information", of: 40, got: r1((q / 100) * 40), note: x.quality === null ? "not judged; counted as 70%" : `${Math.round(q)}% on detail, accuracy, follow-up and what was seen`,
+    improve: q < 100 ? (x.qualityWhy || "Make every observation specific: where (level, room, gridline), what was seen, which trade, and what's in place or needs doing") : undefined });
 
   // photos: enough of them (fresh ones), the same size, none stretched or sideways, big and sharp enough
   const p = x.photos, fresh = Math.max(0, p.count - p.reused);
@@ -40,28 +43,49 @@ export function scoreParts(x: In): ScorePart[] {
     p.mixed ? "different sizes" : "", p.stretched ? `${p.stretched} stretched` : "", p.sideways ? `${p.sideways} sideways` : "",
     p.small ? `${p.small} too small` : "", p.blurry ? `${p.blurry} low detail` : "",
   ].filter(Boolean);
-  parts.push({ label: "Photos", of: 10, got: r1(enough + same + shape + clear), note: photoNotes.join(", ") });
+  const photoTips = [
+    enough < 4 ? (p.reused ? `Take fresh photos each visit (${p.reused} were the same as last time) and aim for at least ${p.expected}` : `Aim for at least ${p.expected} photos covering the areas described`) : "",
+    p.mixed ? "Keep all photos the same size, about 6 cm wide, two to a line" : "",
+    p.stretched ? "Resize photos from a corner so they don't stretch" : "",
+    p.sideways ? "Check photos are the right way up before inserting them" : "",
+    p.small || p.blurry ? "Use photos big and sharp enough to see clearly (about 6 cm wide)" : "",
+  ].filter(Boolean);
+  parts.push({ label: "Photos", of: 10, got: r1(enough + same + shape + clear), note: photoNotes.join(", "), improve: photoTips.join(". ") || undefined });
 
   // spelling: 1.5 marks off per mistake per 1,000 words
   const per1000 = x.words ? (x.spelling / x.words) * 1000 : x.spelling;
-  parts.push({ label: "Spelling and grammar", of: 10, got: r1(10 - 1.5 * per1000), note: `${x.spelling} mistake${x.spelling === 1 ? "" : "s"} in about ${x.words.toLocaleString("en-GB")} words` });
+  const ex = (x.spellingExamples ?? []).slice(0, 4);
+  parts.push({ label: "Spelling and grammar", of: 10, got: r1(10 - 1.5 * per1000), note: `${x.spelling} mistake${x.spelling === 1 ? "" : "s"} in about ${x.words.toLocaleString("en-GB")} words`,
+    improve: x.spelling ? `Run Word's spelling and grammar check before sending${ex.length ? ` (e.g. ${ex.join(", ")})` : ""}` : undefined });
 
   if (!x.hs) parts.push({ label: "Health and safety items", of: 10, got: 10, note: "not judged for this report" });
   else {
-    const n = x.hs.length || 10, ok = x.hs.filter((h) => h.status === "ok").length, thin = x.hs.filter((h) => h.status === "thin").length;
-    parts.push({ label: "Health and safety items", of: 10, got: r1(((ok + thin * 0.5) / n) * 10), note: `${ok} of ${n} filled in properly${thin ? `, ${thin} just "N/A"/"none"` : ""}` });
+    const n = x.hs.length || 10, ok = x.hs.filter((h) => h.status === "ok").length, thin = x.hs.filter((h) => h.status === "thin");
+    const gone = x.hs.filter((h) => h.status === "missing"), empty = x.hs.filter((h) => h.status === "empty");
+    const why = [gone.length ? `${list(gone.map((h) => h.label))} taken out` : "", empty.length ? `${list(empty.map((h) => h.label))} left empty` : "", thin.length ? `${list(thin.map((h) => h.label))} only "N/A" or "none"` : ""].filter(Boolean);
+    parts.push({ label: "Health and safety items", of: 10, got: r1(((ok + thin.length * 0.5) / n) * 10), note: `${ok} of ${n} filled in properly`,
+      improve: why.length ? `${why.join("; ")}. Fill in all ${n} at the start of every report` : undefined });
   }
 
   const pv = x.programme?.verdict;
   const prog = !pv || pv === "good" || pv === "not_in_form" ? 10 : pv === "missing" ? 0 : Math.max(2, 10 - 2 * x.programmeGaps);
-  parts.push({ label: x.programme && !x.programme.dfe ? "Progress summary" : "Progress vs programme", of: 10, got: prog, note: !pv || pv === "not_in_form" ? "not part of this report" : pv === "good" ? "done the Beamore way" : pv === "missing" ? "not done" : `${x.programmeGaps} thing${x.programmeGaps === 1 ? "" : "s"} short of the method` });
+  parts.push({ label: x.programme && !x.programme.dfe ? "Progress summary" : "Progress vs programme", of: 10, got: prog, note: !pv || pv === "not_in_form" ? "not part of this report" : pv === "good" ? "done the Beamore way" : pv === "missing" ? "not done" : `${x.programmeGaps} thing${x.programmeGaps === 1 ? "" : "s"} short of the method`,
+    improve: prog < 10 ? ((x.programmeTips ?? []).join("; ") || "Follow the progress vs programme method") : undefined });
 
   const vals = Object.values(x.standards ?? {});
-  parts.push({ label: "Best practices", of: 10, got: vals.length ? r1((vals.filter(Boolean).length / vals.length) * 10) : 10, note: vals.length ? `${vals.filter(Boolean).length} of ${vals.length}` : "not judged" });
+  const missed = x.standardsMissed ?? [];
+  parts.push({ label: "Best practices", of: 10, got: vals.length ? r1((vals.filter(Boolean).length / vals.length) * 10) : 10, note: vals.length ? `${vals.filter(Boolean).length} of ${vals.length}` : "not judged",
+    improve: missed.length ? `Missing: ${list(missed.map((m) => m.toLowerCase()))}` : undefined });
 
   // tracker 7 (2 off per kind of problem; none at all when one's expected = 0), file name 3
   const trk = x.tracker === null ? (x.trackerExpected ? 0 : 7) : Math.max(0, 7 - 2 * x.tracker);
-  parts.push({ label: "Issues tracker and file name", of: 10, got: r1(trk + (x.renamed ? 0 : 3)), note: [x.tracker === null ? (x.trackerExpected ? "no issues tracker" : "") : x.tracker ? `${x.tracker} kind${x.tracker === 1 ? "" : "s"} of tracker problem` : "tracker done right", x.renamed ? "file name didn't follow the folder's pattern" : "file name right"].filter(Boolean).join("; ") });
+  const trkTips = [
+    x.tracker === null && x.trackerExpected ? "Keep a running issues tracker at the end of every report" : "",
+    ...(x.tracker ? (x.trackerProblems ?? []) : []),
+    x.renamed ? `Name the file the same way as the others in the folder${x.renamedTo ? ` (e.g. "${x.renamedTo.replace(/\.docx?$/i, "")}")` : ""}` : "",
+  ].filter(Boolean);
+  parts.push({ label: "Issues tracker and file name", of: 10, got: r1(trk + (x.renamed ? 0 : 3)), note: [x.tracker === null ? (x.trackerExpected ? "no issues tracker" : "") : x.tracker ? `${x.tracker} kind${x.tracker === 1 ? "" : "s"} of tracker problem` : "tracker done right", x.renamed ? "file name didn't follow the folder's pattern" : "file name right"].filter(Boolean).join("; "),
+    improve: trkTips.length ? trkTips.join("; ") : undefined });
 
   return parts;
 }

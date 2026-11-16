@@ -15,7 +15,7 @@ export type Check = {
   spelling: { p: number; find: string; replace: string }[]; issues: Issue[];
   rotate: { photo: number; degrees: 90 | 180 | 270 }[]; clerk_points: string[];
   /** the AI's overall judgement of the report out of 100 (Ronan, 15 Nov 2026: "take an overall look at the report") */
-  quality: number;
+  quality: number; quality_why?: string;
   programme: Programme;
   /** which of the team's best practices (standards.ts) this report meets */
   standards: StandardsMet;
@@ -34,7 +34,7 @@ export type Programme = {
 
 const str = { type: "string" }, nstr = { type: ["string", "null"] };
 const SCHEMA = {
-  type: "object", additionalProperties: false, required: ["summary", "visit_date", "report_number", "clerk_name", "spelling", "issues", "rotate", "clerk_points", "quality", "programme", "standards"],
+  type: "object", additionalProperties: false, required: ["summary", "visit_date", "report_number", "clerk_name", "spelling", "issues", "rotate", "clerk_points", "quality", "quality_why", "programme", "standards"],
   properties: {
     summary: { type: "string", description: "One or two plain sentences for the checker: is it fit to send, and the main thing to look at" },
     visit_date: { ...nstr, description: "Visit date this report covers, YYYY-MM-DD (the last one if several)" },
@@ -58,7 +58,8 @@ const SCHEMA = {
       items: { type: "object", additionalProperties: false, required: ["photo", "degrees"], properties: { photo: { type: "integer", description: "Photo number as labelled" }, degrees: { type: "integer", enum: [90, 180, 270], description: "Clockwise turn to make it upright" } } },
     },
     clerk_points: { type: "array", items: str, description: "Up to 5 short, friendly, specific points for the clerk to do better next time (not spelling, never naming other people)" },
-    quality: { type: "integer", description: "Overall quality of the report out of 100 (see 4c)" },
+    quality: { type: "integer", description: "Quality of the information out of 100 (see 4c)" },
+    quality_why: { type: "string", description: "One friendly sentence: why the information lost marks and how to improve it (empty if 100). Never name other people" },
     standards: {
       type: "object", additionalProperties: false, required: STANDARD_KEYS, description: "Whether this report meets each of the team's best practices (true = clearly does)",
       properties: Object.fromEntries(STANDARD_KEYS.map((k) => [k, { type: "boolean", description: STANDARDS[k].test }])),
