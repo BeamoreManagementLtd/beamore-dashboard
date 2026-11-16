@@ -9,8 +9,9 @@ import type { Email } from "@/lib/project-setup";
  * from the person's own Gmail, saved in Gmail Drafts, or copied to paste somewhere else. Nothing is sent without
  * that click on Send.
  */
-export type EmailKind = "info" | "followup" | "join";
-export type Composed = Email & { kind: EmailKind; ref: string };
+export type EmailKind = "info" | "followup" | "join" | "other";
+/** outboxId: an email the dashboard wrote by itself, waiting on the "Emails to send" page */
+export type Composed = Email & { kind: EmailKind; ref: string; outboxId?: string };
 export type EmailResult = { ok: boolean; message: string };
 
 export async function composeEmail(kind: EmailKind, ref: string): Promise<Composed | { error: string }> {
@@ -29,9 +30,11 @@ export async function composeEmail(kind: EmailKind, ref: string): Promise<Compos
 const clean = (e: Composed): Composed => ({ ...e, to: e.to.trim(), cc: e.cc?.trim() || undefined, subject: e.subject.trim() });
 const valid = (list: string) => list.split(/[,;]/).map((x) => x.trim()).filter(Boolean).every((x) => /[^@\s<>]+@[^@\s<>]+\.[a-z]{2,}>?$/i.test(x));
 
-async function logIt(e: Composed, what: string, who: string) {
+async function logIt(e: Composed, what: "sent" | "drafted", who: string, by: string) {
   const admin = createServiceClient();
-  if (e.kind === "join") return;
+  if (e.outboxId) await admin.from("email_outbox").update({ status: what, to_email: e.to, cc: e.cc ?? null, subject: e.subject, body: e.body, done_at: new Date().toISOString(), done_by: by }).eq("id", e.outboxId);
+  revalidatePath("/emails");
+  if (e.kind === "join" || e.kind === "other" || !e.ref) return;
   const kind = e.kind === "info" ? (what === "sent" ? "Info requested" : "Info request drafted") : what === "sent" ? "Follow-up sent" : "Follow-up drafted";
   await admin.from("project_events").insert({ project_id: e.ref, source: "team", kind, who, body: `${what === "sent" ? "Sent" : "Saved in Gmail Drafts"} to ${e.to}: "${e.subject}"` });
   if (e.kind === "info" && what === "sent") {
@@ -52,7 +55,7 @@ export async function sendComposed(raw: Composed): Promise<EmailResult> {
   try {
     const { sendEmail } = await import("@/lib/google-user");
     const r = await sendEmail(admin, me.id, e);
-    await logIt(e, "sent", me.full_name?.split(" ")[0] ?? me.email);
+    await logIt(e, "sent", me.full_name?.split(" ")[0] ?? me.email, me.id);
     return { ok: true, message: `Sent from ${r.from} to ${e.to}` };
   } catch (err) {
     const m = err instanceof Error ? err.message : String(err);
@@ -66,9 +69,17 @@ export async function draftComposed(raw: Composed): Promise<EmailResult> {
   try {
     const { saveDraft } = await import("@/lib/project-setup");
     await saveDraft(createServiceClient(), e);
-    await logIt(e, "drafted", me.full_name?.split(" ")[0] ?? me.email);
+    await logIt(e, "drafted", me.full_name?.split(" ")[0] ?? me.email, me.id);
     return { ok: true, message: "Saved in Ronan's Gmail Drafts (not sent)" };
   } catch (err) {
     return { ok: false, message: `Not saved: ${err instanceof Error ? err.message : String(err)}` };
   }
+}
+
+/** An email on the "Emails to send" page that isn't needed: kept, marked so, off the list. */
+export async function dismissOutbox(id: string): Promise<EmailResult> {
+  const me = await requireProfile();
+  const { error } = await createServiceClient().from("email_outbox").update({ status: "dismissed", done_at: new Date().toISOString(), done_by: me.id }).eq("id", id).eq("status", "waiting");
+  revalidatePath("/emails");
+  return error ? { ok: false, message: error.message } : { ok: true, message: "Taken off the list (not sent)" };
 }

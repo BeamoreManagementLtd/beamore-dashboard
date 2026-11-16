@@ -70,9 +70,9 @@ async function draftCorrection(admin: SupabaseClient, u: Row, problems: string[]
   if (!c?.email) return;
   const what = u.kind === "insurance" ? "insurance certificate" : u.kind === "invoice" ? "invoice" : "certificate";
   const body = `Hi ${c.name.split(" ")[0]},\n\nThanks for uploading your ${what} (${u.file_name ?? "your file"}). We checked it and found:\n\n${problems.map((p) => `- ${p}`).join("\n")}\n\nCould you upload a corrected or renewed copy on the portal when you can?\n\nhttps://portal.beamore.co.uk\n\nMany thanks,\nRonan\n\nRonan O'Boyle\nBeamore Management Ltd`;
-  const raw = [`To: ${c.email}`, `Subject: Please update your ${what}`, "MIME-Version: 1.0", "Content-Type: text/plain; charset=UTF-8"].join("\r\n") + "\r\n\r\n" + body.replace(/\n/g, "\r\n");
-  const g = await driveClient(admin);
-  await g.post("https://gmail.googleapis.com/gmail/v1/users/me/drafts", { message: { raw: Buffer.from(raw).toString("base64url") } });
+  // waits on the "Emails to send" page (Ronan, 16 Nov 2026), not in Gmail Drafts
+  const { queueEmail } = await import("@/lib/outbox");
+  await queueEmail(admin, { kind: "portal-correction", to: c.email, subject: `Please update your ${what}`, body, clerkId: u.clerk_id, ref: u.id });
   await admin.from("portal_uploads").update({ correction_drafted_at: new Date().toISOString() }).eq("id", u.id);
 }
 

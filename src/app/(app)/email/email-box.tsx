@@ -1,13 +1,13 @@
 "use client";
 import { useState, useTransition } from "react";
-import { composeEmail, sendComposed, draftComposed, type Composed, type EmailKind, type EmailResult } from "./actions";
+import { composeEmail, sendComposed, draftComposed, dismissOutbox, type Composed, type EmailKind, type EmailResult } from "./actions";
 
 /**
  * A button that writes an email and opens it here on the dashboard (Ronan, 16 Nov 2026): read it, change anything,
  * then Send from your own Gmail, save it in Gmail Drafts, or copy it to paste elsewhere.
  */
-export function EmailBox({ kind, refId, label }: { kind: EmailKind; refId: string; label: string }) {
-  const [email, setEmail] = useState<Composed | null>(null);
+export function EmailBox({ kind, refId, label, initial }: { kind: EmailKind; refId: string; label: string; initial?: Composed }) {
+  const [email, setEmail] = useState<Composed | null>(initial ?? null);
   const [note, setNote] = useState<EmailResult | null>(null);
   const [copied, setCopied] = useState("");
   const [busy, start] = useTransition();
@@ -47,8 +47,10 @@ export function EmailBox({ kind, refId, label }: { kind: EmailKind; refId: strin
         <button className="btn primary" type="button" disabled={busy} onClick={() => act(sendComposed, true)}>{busy ? "Working…" : "Send from my Gmail"}</button>
         <button className="btn" type="button" disabled={busy} onClick={() => act(draftComposed, false)}>Save to Gmail Drafts</button>
         <button className="btn" type="button" onClick={() => copy("Email", email.body)}>Copy the email</button>
-        <button className="btn" type="button" onClick={() => { setEmail(null); setNote(null); }}>Close</button>
-      </div> : <div><button className="btn" type="button" onClick={() => { setEmail(null); setSent(false); }}>Close</button></div>}
+        {email.outboxId
+          ? <button className="btn" type="button" disabled={busy} onClick={() => act((e) => dismissOutbox(e.outboxId!), true)}>Not needed</button>
+          : <button className="btn" type="button" onClick={() => { setEmail(null); setNote(null); }}>Close</button>}
+      </div> : !email.outboxId && <div><button className="btn" type="button" onClick={() => { setEmail(null); setSent(false); }}>Close</button></div>}
       {copied && <p className="small muted" style={{ margin: 0 }}>{copied === "not allowed" ? "Your browser didn't allow copying: select the text and press Ctrl+C" : `${copied} copied`}</p>}
       {note && <p className={`callout ${note.ok ? "good" : "bad"}`} style={{ margin: 0 }}>{note.message}</p>}
     </div>

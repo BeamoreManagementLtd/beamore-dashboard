@@ -3,6 +3,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { driveClient } from "@/lib/google";
 import { setupProjectTracking } from "@/lib/xero-tracking";
 import { INFO_DFE, INFO_STANDARD, INFO_RETIRED, INFO_MERGED } from "@/lib/project-info";
+import { greeting, queueEmail } from "@/lib/outbox";
 
 /**
  * What happens when a project is won (docs/workflows.html, S2/S4/S7):
@@ -141,8 +142,8 @@ export async function composeInfoRequest(admin: SupabaseClient, projectId: strin
   const chasing = (items ?? []).some((i) => i.requested_on);
   // Ronan's wording (16 Nov 2026)
   const body = chasing
-    ? `Hi\n\nJust following up on the information for ${p.name}. We're still waiting on:\n\n${list}\n\nCould you send these over when you get a moment?\n\nRegards\n\nRonan O'Boyle\nBeamore Management Ltd`
-    : `Hi\n\nSo we can get set up for ${p.name}, could you please send us the following:\n\n${list}\n\nRegards\n\nRonan O'Boyle\nBeamore Management Ltd`;
+    ? `${greeting(to)}\n\nJust following up on the information for ${p.name}. We're still waiting on:\n\n${list}\n\nCould you send these over when you get a moment?\n\nRegards\n\nRonan O'Boyle\nBeamore Management Ltd`
+    : `${greeting(to)}\n\nSo we can get set up for ${p.name}, could you please send us the following:\n\n${list}\n\nRegards\n\nRonan O'Boyle\nBeamore Management Ltd`;
   return { to, subject, body, threadId, inReplyTo };
 }
 
@@ -175,7 +176,15 @@ export async function onWon(admin: SupabaseClient, projectId: string) {
     await log(admin, projectId, "Checklist started", `${p.is_dfe ? "DfE" : "Standard"} checklist started when the project was won.${p.is_dfe == null ? " The DfE check hadn't run yet, so this is the standard list; change it if it's a DfE job." : ""}`);
   }
   await attempt("Drive folder", () => ensureProjectFolder(admin, projectId));
-  await attempt("Info request draft", () => draftInfoRequest(admin, projectId));
+  // the email asking for the project information waits on the "Emails to send" page (Ronan, 16 Nov 2026). It never
+  // thanks them for giving us the job: just asks for the information.
+  await attempt("Info request email", async () => {
+    const e = await composeInfoRequest(admin, projectId);
+    await queueEmail(admin, { kind: "info", to: e.to, subject: e.subject, body: e.body, threadId: e.threadId, inReplyTo: e.inReplyTo, projectId, ref: projectId });
+    const msg = `Email asking for the project information written: it's on Emails to send${e.to ? ` (to ${e.to})` : " (no address found yet: add one there)"}`;
+    await log(admin, projectId, "Info request written", msg);
+    return msg;
+  });
   await attempt("Xero tracking", async () => { const r = await setupProjectTracking(admin); if (!r.ok) throw new Error(r.message); return r.message; });
   return out;
 }
