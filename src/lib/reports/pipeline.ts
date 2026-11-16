@@ -24,6 +24,37 @@ import { checkReport, type Issue, type Programme } from "./check";
 import { scoreParts, scoreTotal } from "./score";
 import { STANDARDS, STANDARD_KEYS } from "./standards";
 
+/**
+ * Is this a genuine spelling/grammar slip (safe to correct automatically)? Each word that changes must stay close to
+ * the original (edit distance at most a third of its length, at least 1-2 letters), so typos, doubled words, capitals
+ * and punctuation pass, and swapping one word or name for another doesn't.
+ */
+const GRAMMAR_SWAPS = [["was", "were"], ["is", "are"], ["has", "have"], ["their", "there", "theyre", "they"], ["its", "it"], ["to", "too", "two"], ["then", "than"], ["your", "youre"], ["whose", "whos"], ["affect", "effect"], ["a", "an"], ["this", "these"], ["that", "those"], ["does", "do"], ["did", "done"]].map((g) => new Set(g));
+export function isSpellingSlip(find: string, replace: string) {
+  const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter(Boolean);
+  const a = norm(find), b = norm(replace);
+  if (!a.length || !b.length) return true; // punctuation or spacing only
+  const dist = (x: string, y: string) => {
+    const d = Array.from({ length: x.length + 1 }, (_, i) => [i, ...Array(y.length).fill(0)]);
+    for (let j = 1; j <= y.length; j++) d[0][j] = j;
+    for (let i = 1; i <= x.length; i++) for (let j = 1; j <= y.length; j++) d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + (x[i - 1] === y[j - 1] ? 0 : 1));
+    return d[x.length][y.length];
+  };
+  // doubled or missing small word ("the the", "a"): the words otherwise match
+  const shortA = a.filter((w) => w.length > 3), shortB = b.filter((w) => w.length > 3);
+  if (shortA.join(" ") === shortB.join(" ")) return true;
+  if (Math.abs(a.length - b.length) > 1) return false;
+  const joinedA = a.join(""), joinedB = b.join("");
+  if (joinedA === joinedB) return true; // "car park" / "carpark"
+  for (let i = 0; i < Math.min(a.length, b.length); i++) {
+    if (a[i] === b[i]) continue;
+    if (GRAMMAR_SWAPS.some((g) => g.has(a[i]) && g.has(b[i]))) continue;
+    const allowed = Math.max(2, Math.floor(Math.max(a[i].length, b[i].length) / 3));
+    if (dist(a[i], b[i]) > allowed) return false;
+  }
+  return true;
+}
+
 /** What a progress vs programme section is missing, against Ronan's method, in words for the checker and the clerk. */
 export function programmeGaps(p: Programme | null | undefined) {
   if (!p || p.verdict === "good" || p.verdict === "not_in_form") return [];
@@ -34,7 +65,7 @@ export function programmeGaps(p: Programme | null | undefined) {
   if (p.verdict === "missing") return ["say which programme you're working from, list 8-10 activities (preferably on the critical path) with weeks ahead/behind for each, then at least 5-6 lines on where you think the project is overall"];
   return [
     !p.programme_named ? "say which programme you're measuring against (title and revision/date)" : "",
-    p.items < 8 ? `only ${p.items} activit${p.items === 1 ? "y" : "ies"} listed (aim for 8-10, preferably on the critical path)` : "",
+    p.items < 8 ? (p.items ? `only ${p.items} activit${p.items === 1 ? "y" : "ies"} listed (aim for 8-10, preferably on the critical path)` : "list 8-10 activities from the programme, preferably on the critical path") : "",
     !p.per_item_weeks ? 'say how many weeks ahead or behind each activity is, e.g. "Installation of staircases – 3 weeks behind"' : "",
     !p.critical_path ? "include activities on the critical path" : "",
     !p.narrative ? "add at least 5-6 lines weighing up all the items, the causes, and where you think the project is" : "",
@@ -230,6 +261,9 @@ export async function checkOne(admin: SupabaseClient, id: string) {
   const shrunk = await shrinkPhotos(r, sharp, await photoStats(r, sharp));
   // spelling is fixed automatically but kept as tracked changes, so the checker and the clerk can see every mistake,
   // and each one is counted to see whether a clerk is improving (Ronan, 16 Nov 2026)
+  // only real spelling slips: the AI once "corrected" Swift cladding to Swisspearl cladding (16 Nov 2026), so a fix
+  // must stay close to what was written (a typo, doubled word, capital, punctuation), never a different word
+  ai.spelling = (ai.spelling ?? []).filter((s) => isSpellingSlip(s.find, s.replace));
   const spelt = trackSpelling(r, ai.spelling);
   void acceptOwnRevisions;
   const rank = { high: 0, medium: 1, low: 2 } as const;
