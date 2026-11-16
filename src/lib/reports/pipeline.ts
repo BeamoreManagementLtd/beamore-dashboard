@@ -76,6 +76,7 @@ export function programmeGaps(p: Programme | null | undefined) {
   ].filter(Boolean);
 }
 import { conventionName } from "./naming.mjs";
+import { templateBits, compareTemplate, templateIssues, templatePoint, pickLast, type TemplateCheck } from "@/lib/reports/template";
 
 /**
  * Report checking (Ronan, 15 Nov 2026), replacing the "Ready To Check" and turnaround spreadsheets:
@@ -241,6 +242,21 @@ export async function checkOne(admin: SupabaseClient, id: string) {
     try { thumbs.push(await sharp(await r.zip.file(ph.path)!.async("nodebuffer"), { failOn: "none" }).rotate().resize({ width: 320, height: 320, fit: "inside" }).jpeg({ quality: 55 }).toBuffer()); thumbPaths.push(ph.path); } catch { /* skip */ }
   }
 
+  // was it started from last week's checked report, with the office's changes kept? (Ronan, 16 Nov 2026)
+  let template: TemplateCheck | null = null;
+  if (rep.project_id) {
+    try {
+      const { data: older } = await admin.from("reports").select("id,file_name,folder_name,report_number,drive_file_id,original_revision_id").eq("project_id", rep.project_id).eq("kind", rep.kind).neq("id", id).lt("uploaded_at", rep.uploaded_at).order("uploaded_at", { ascending: false }).limit(8);
+      const [last, before] = pickLast(rep, older ?? []);
+      if (last) {
+        const lastBits = await templateBits(await g.download(last.drive_file_id));
+        const asSent = last.original_revision_id ? await templateBits(await g.downloadRevision(last.drive_file_id, last.original_revision_id)).catch(() => null) : null;
+        const beforeBits = before ? await templateBits(await g.download(before.drive_file_id)).catch(() => null) : null;
+        template = compareTemplate(await templateBits(raw), lastBits, asSent, beforeBits, { id: last.id, number: last.report_number, name: last.file_name });
+      }
+    } catch { template = null; /* a check that can't be done is left out, never holds the report up */ }
+  }
+
   const ai = await checkReport({
     fileName: rep.renamed_from ?? rep.file_name, folder: rep.folder_name ?? "", project: p?.name ?? rep.project_folder_name ?? "", client: (p?.clients as unknown as { name?: string } | null)?.name ?? null,
     projectNumbers: [p?.dfe_project_number, p?.po_number].filter((x): x is string => !!x && /\d/.test(x)),
@@ -329,6 +345,7 @@ export async function checkOne(admin: SupabaseClient, id: string) {
   if (heldBack.length) issues.push({ severity: "low", kind: "other", text: `Suggested wording changes, not made (check and change by hand only if right): ${heldBack.slice(0, 8).map((s) => `"${s.find}" → "${s.replace}"`).join("; ")}`, p: heldBack[0]?.p ?? null });
   // the points are listed on the dashboard with their page number, not put in the Word file as comments (Ronan, 16 Nov
   // 2026): a few words from each place are kept, and the office PC's Word helper looks up the page they fall on
+  if (template) for (const t of templateIssues(template)) issues.push({ ...t, kind: "template", p: null });
   for (const i of issues) i.near = nearText(r, i.p);
   const out = await saveReport(r);
 
@@ -374,7 +391,7 @@ export async function checkOne(admin: SupabaseClient, id: string) {
     photos: { count: stats.count, blurry: stats.blurry, smallOnPage: stats.smallOnPage, stretched: stats.stretched, shrunk: shrunk.changed, rotated: rotated.length, reused, usual, uncaptioned: uncaptioned(r) },
     photo_hashes: hashes, photo_count: stats.count,
     fixes: { spelling: applied, rotated: rotated.length, shrunk: shrunk.changed, stretched: shapes.stretched, enlarged: shapes.enlarged, uniform: uniform.changed, mixed: !uniform.wasUniform, side_cm: uniform.side ? +(uniform.side / 360000).toFixed(1) : null, renamed: nameFixed, words, programme: prog ?? null, standards: ai.standards ?? null, health_safety: hs, tracker: trk,
-      score_by: "parts", score_parts: parts, pages_state: issues.some((i) => i.near) ? "waiting" : "none" },
+      score_by: "parts", score_parts: parts, template, pages_state: issues.some((i) => i.near) ? "waiting" : "none" },
     // lateness is shown on its own on the Reports page
     score: scoreTotal(parts),
     clerk_points: [
@@ -387,6 +404,7 @@ export async function checkOne(admin: SupabaseClient, id: string) {
       ...(!early && (hsGone.length || hsThin.length >= 3) ? [`It would be great to see all ${hs.length} health and safety items at the start of the report filled in, even briefly, rather than taken out or left as "N/A". This time it was ${hs.filter((h) => h.status !== "ok").map((h) => h.label).join(", ")}`] : []),
       ...(trkProblems.length ? [`On the issues tracker: it works best as a simple record of each issue and which report to read about it in (so no photos), with every item red, orange or green. When you close one, add the date, turn it green and add a line in the comments saying why it's closed, e.g. "certificate received 12/11/26" or "remedial work seen complete on 12/11/26", rather than leaving the earlier progress note as the last word`] : []),
       ...(prog && (prog.verdict === "weak" || prog.verdict === "missing") ? [`On the ${prog.dfe ? "progress vs programme section" : "progress summary"}, it would help to ${progGaps.join("; ") || "follow the approach below"}`] : []),
+      ...(template && templatePoint(template) ? [templatePoint(template)!] : []),
       ...(ai.clerk_points ?? []),
     ].slice(0, 8),
     size_before: raw.length, size_after: out.length, checked_revision: after.headRevisionId, checked_at: new Date().toISOString(),

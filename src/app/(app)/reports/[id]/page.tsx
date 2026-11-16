@@ -20,7 +20,7 @@ function clerkNote(r: Record<string, unknown>, sender: string) {
   const clerk = ((r.clerks as { name?: string } | null)?.name ?? (r.clerk_name as string | null) ?? "").split(" ")[0];
   const f = (r.fixes ?? {}) as { spelling?: { find: string; replace: string }[]; rotated?: number; shrunk?: number; stretched?: number; enlarged?: number; uniform?: number; mixed?: boolean; side_cm?: number | null; renamed?: string | null };
   // things raised for the checker that a suggestion below already covers aren't repeated
-  const issues = ((r.issues ?? []) as Issue[]).filter((i) => i.severity !== "low" && i.kind !== "safety" && i.kind !== "programme" && !/^(Health and safety|Issues tracker):/.test(i.text));
+  const issues = ((r.issues ?? []) as Issue[]).filter((i) => i.severity !== "low" && i.kind !== "safety" && i.kind !== "programme" && i.kind !== "template" && !/^(Health and safety|Issues tracker):/.test(i.text));
   // what was put right goes back to the clerk (Ronan, 15 Nov 2026), worded gently: "steer them in the right
   // direction rather than saying do this or else"
   const fixed = [
@@ -125,6 +125,24 @@ export default async function ReportPage({ params, searchParams }: { params: Pro
           {r.status === "ready" && typeof r.score === "number" && !scoreParts.length && (
             <form action={checkAgain.bind(null, id)} className="callout"><span className="small">This report was checked with the old rules. Check it again for the new score (the checked copy is made afresh, so do this before changing it by hand).</span> <button className="btn small">Check again</button></form>
           )}
+          {(() => {
+            // did the clerk use last week's checked report as the template? Green or red so the office sees it at a
+            // glance (Ronan, 16 Nov 2026)
+            const t = (r.fixes as { template?: { started: string; undone: string[]; layout: string[]; formatting: string[]; against: { id: string; number: string | null; name: string } } | null } | null)?.template;
+            if (!t) return null;
+            const ref = <a href={`/reports/${t.against.id}`}>{t.against.number ? `report ${t.against.number}` : "the last report"}</a>;
+            const lost = t.started === "no" || t.started === "older" || t.undone.length > 0;
+            const tone = lost ? "bad" : t.started === "yes" ? "good" : "info";
+            return <div className={`callout ${tone}`} style={{ borderLeft: "6px solid currentColor" }}>
+              <b>{lost
+                ? <>✗ Didn&apos;t use the last report as the template</>
+                : t.started === "yes" ? <>✓ Used the last report as the template</> : <>Template: can&apos;t tell if the last report was used</>}</b>
+              {" "}<span className="small">({t.started === "older" ? <>started from an older copy of {ref}</> : <>compared with {ref}</>}{t.started === "unknown" ? "; the last one wasn't saved by Word" : ""})</span>
+              {!!t.undone.length && <div className="small" style={{ marginTop: 4 }}>The office&apos;s changes that didn&apos;t carry over: {t.undone.join("; ")}</div>}
+              {!!t.layout.length && <div className="small" style={{ marginTop: 4 }}>Layout differences: {t.layout.join("; ")}</div>}
+              {!!t.formatting.length && <div className="small" style={{ marginTop: 4 }}><b>Formatting the last report didn&apos;t have:</b> {t.formatting.join("; ")}</div>}
+            </div>;
+          })()}
           {r.ai_summary && <p>{r.ai_summary}</p>}
           {/* the points to look at, in page order (Ronan, 16 Nov 2026: here with page numbers, not as comments in the
               Word file). Points about the whole report come first. */}
