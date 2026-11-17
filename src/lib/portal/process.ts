@@ -230,6 +230,11 @@ export async function processUpload(admin: SupabaseClient, id: string) {
 
   // 3: AI reads it
   if (u.ai_state === "done" || u.scan_state === "suspicious") return;
+  // a CV doesn't need reading or checking, in any format (Ronan, 17 Nov 2026: Mark Taylor's Word CV "should be fine")
+  if (/^cv$|curriculum vitae/i.test((u.doc_type ?? "").trim())) {
+    await admin.from("portal_uploads").update({ ai_state: "skipped", status: "accepted" }).eq("id", u.id);
+    return;
+  }
   const readable = /^(application\/pdf|image\/(jpeg|png|gif|webp))$/.test(u.mime ?? type);
   if (!readable) { await admin.from("portal_uploads").update({ ai_state: "skipped", status: "needs_beamore", issues: [...u.issues, "Not a PDF or photo, so it couldn't be read automatically. Please look at it in Drive"] }).eq("id", u.id); return; }
   if (!aiConfigured()) { await admin.from("portal_uploads").update({ ai_state: "pending" }).eq("id", u.id); return; }
