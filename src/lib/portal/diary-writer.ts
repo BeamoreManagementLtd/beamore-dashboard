@@ -185,10 +185,13 @@ export async function writeInvoiceToDiary(admin: SupabaseClient, uploadId: strin
       const oc = [1, 2, 3].map((k) => Math.max(...rows) + k).find((r) => /^other costs/i.test(String(cellVal(ws.getCell(r, s)) ?? "").trim()));
       const total = Math.round(expenses.reduce((n, e) => n + Number(e.amount_gbp), 0) * 100) / 100;
       if (!oc) expenseNote = `the invoice has £${total.toFixed(2)} of expenses (${expenses.map((e) => e.text).join(", ")}): this diary has no Other costs line, so add them by hand`;
-      else if (!isBlank(cellVal(ws.getCell(oc, s + 2))) || !isBlank(cellVal(ws.getCell(oc, s + 5)))) expenseNote = `${clerkName}'s Other costs line already has something in it; the invoice's £${total.toFixed(2)} of expenses weren't added`;
+      // the amount goes in the Cost cell next to the label, what it's for in the merged box after it (Ronan, 17 Nov 2026);
+      // older diaries had the amount in the 3rd slot's cost cell (s + 5)
+      else if (!isBlank(cellVal(ws.getCell(oc, s + 2))) || !isBlank(cellVal(ws.getCell(oc, s + 1))) || !isBlank(cellVal(ws.getCell(oc, s + 5)))) expenseNote = `${clerkName}'s Other costs line already has something in it; the invoice's £${total.toFixed(2)} of expenses weren't added`;
       else {
+        const merged = ws.getCell(oc, s + 3).isMerged; // the 2026 / 2027 diaries after the merge: amount next to the label
         extras.push({ sheet, ref: `${colName(s + 2)}${oc}`, text: expenses.map((e) => `${e.text} £${Number(e.amount_gbp).toFixed(2)}`).join("; ").slice(0, 250) });
-        extras.push({ sheet, ref: `${colName(s + 5)}${oc}`, amount: total });
+        extras.push({ sheet, ref: `${colName(merged ? s + 1 : s + 5)}${oc}`, amount: total });
         expenseNote = `£${total.toFixed(2)} of expenses put on the Other costs line`;
       }
     }
