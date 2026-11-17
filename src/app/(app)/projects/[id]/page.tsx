@@ -62,7 +62,8 @@ export default async function Project({ params }: { params: Promise<{ id: string
   // whose inspection schedule shows every day); the figures typed in by hand only when there's no schedule
   const planB = r1((plan ?? []).reduce((s, m) => s + Number(m.building), 0)), planM = r1((plan ?? []).reduce((s, m) => s + Number(m.me), 0));
   const fromPlan = planTotal > 0;
-  const agreedB = fromPlan ? planB : Number(p.agreed_days_building ?? 0), agreedM = fromPlan ? planM : Number(p.agreed_days_me ?? 0);
+  // Ronan: "the agreed number of days are the days on the cost schedules that I send to people" — nothing else
+  const agreedB = planB, agreedM = planM;
   const agreed = r1(agreedB + agreedM) || null;
   // planned up to the end of this month, to compare with what's been charged so far
   const planToDate = r1((plan ?? []).filter((m) => m.month <= monthStart).reduce((s, m) => s + Number(m.building) + Number(m.me), 0));
@@ -105,7 +106,7 @@ export default async function Project({ params }: { params: Promise<{ id: string
 
       <div className="tiles">
         <div className="tile"><span className="label">Agreed days</span><span className="big">{agreed ?? "—"}</span>
-          {agreed ? <span className="sub">{agreedB} bldg · {agreedM} M&amp;E{fromPlan ? " · from the cost schedule" : ""}</span>
+          {agreed ? <span className="sub">{agreedB} bldg · {agreedM} M&amp;E · from the cost schedule</span>
             : agreedWork?.length ? <span className="sub">{agreedWork.map((a) => `${(a.clerks as unknown as { name: string } | null)?.name ?? ""} ${a.days} day${Number(a.days) === 1 ? "" : "s"} a ${a.per}${a.date_to ? ` to ${fd(a.date_to)}` : ""}`).join("; ")} (agreed)</span>
             : <span className="sub">not set: no cost schedule found</span>}</div>
         <div className={`tile ${fromPlan && charged > planToDate + 2 ? "alert" : ""}`}><span className="label">Charged so far (diary)</span><span className="big">{r1(charged)}</span>
@@ -236,8 +237,6 @@ export default async function Project({ params }: { params: Promise<{ id: string
           <div className="field"><label htmlFor="na">Next action</label><input id="na" name="next_action" defaultValue={p.next_action ?? ""} /></div>
           <div className="row">
             <div className="field"><label htmlFor="nd">Next action due</label><input id="nd" name="next_action_due" type="date" defaultValue={p.next_action_due ?? ""} /></div>
-            <div className="field"><label htmlFor="ab">Agreed building days</label><input id="ab" name="agreed_days_building" type="number" step="0.5" defaultValue={p.agreed_days_building ?? ""} /></div>
-            <div className="field"><label htmlFor="am">Agreed M&amp;E days</label><input id="am" name="agreed_days_me" type="number" step="0.5" defaultValue={p.agreed_days_me ?? ""} /></div>
           </div>
           <div><button className="btn primary">Save</button> <span className="small muted">Next actions due in the next 2 weeks appear on the due list.</span></div>
         </form>

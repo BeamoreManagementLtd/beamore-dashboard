@@ -10,11 +10,10 @@ export async function saveProject(id: string, form: FormData) {
   await requireProfile();
   const db = await createClient();
   const stage = s(form, "stage");
-  const days = (k: string) => { const v = s(form, k); return v == null ? null : Number(v); };
+  // agreed days aren't typed in: they're the days on the cost schedule (Ronan, 17 Nov 2026)
   await db.from("projects").update({
     ...(stage && STAGES.includes(stage) ? { stage } : {}),
     next_action: s(form, "next_action"), next_action_due: s(form, "next_action_due"), owner_id: s(form, "owner_id"),
-    agreed_days_building: days("agreed_days_building"), agreed_days_me: days("agreed_days_me"),
     updated_at: new Date().toISOString(),
   }).eq("id", id);
   revalidatePath(`/projects/${id}`);

@@ -17,7 +17,7 @@ export default async function Projects({ searchParams }: { searchParams: Promise
   const { stage = "live" } = await searchParams;
   const db = await createClient();
   const [{ data: rows }, { data: counts }, { data: unmatched }, { data: diaryDays }, { data: unmatchedSites }, { data: allProjects }, { data: clients }, { data: last }] = await Promise.all([
-    db.from("projects").select("id,display_name,stage,agreed_days_building,agreed_days_me,next_action,next_action_due,clients(name)").eq("stage", stage).order("name"),
+    db.from("projects").select("id,display_name,stage,next_action,next_action_due,clients(name)").eq("stage", stage).order("name"),
     db.from("projects").select("stage"),
     db.from("unmatched_invoice_refs").select("reference,last_invoice,client,invoices").order("reference"),
     db.from("project_diary_days").select("*"),
@@ -89,7 +89,7 @@ export default async function Projects({ searchParams }: { searchParams: Promise
             <thead><tr><th>Project</th><th>Client</th><th className="num">Agreed days</th><th className="num">Charged 2026</th><th className="num">{month}: planned / charged</th><th>Next action</th></tr></thead>
             <tbody>
               {rows.map((p) => {
-                const days = Math.round((planDays.get(p.id) || Number(p.agreed_days_building ?? 0) + Number(p.agreed_days_me ?? 0)) * 10) / 10 || null;
+                const days = Math.round((planDays.get(p.id) ?? 0) * 10) / 10 || null; // from the cost schedule only
                 const d = dd.get(p.id);
                 const used = Number(d?.charged_to_date ?? 0);
                 return (
