@@ -86,7 +86,34 @@ export async function readReportInfo(admin: SupabaseClient, projectId: string) {
       from = r.file_name; break;
     } catch { /* try the one before */ }
   }
-  if (!text) return { values: {}, from: null };
+  // no report in the dashboard: the newest report in Drive by the job's name, which may be a PDF only (Royal School 2's
+  // clerk uploads PDFs, so the Word-report scan never sees them; 17 Nov 2026)
+  let pdf: string | null = null;
+  if (!text) {
+    const { data: p } = await admin.from("projects").select("name,diary_aliases").eq("id", projectId).single();
+    const names = [...new Set([p?.name ?? "", ...((p?.diary_aliases as string[] | null) ?? [])].map((n) => n.trim()).filter((n) => n.includes(" ") && n.length > 6))];
+    const g = await driveClient(admin);
+    const since = new Date(Date.now() - 120 * 864e5).toISOString();
+    for (const n of names) {
+      const q = `name contains '${n.replace(/\\/g, "\\\\").replace(/'/g, "\\'")}' and (mimeType='application/pdf' or mimeType='application/vnd.openxmlformats-officedocument.wordprocessingml.document') and trashed=false and createdTime > '${since}'`;
+      const r = await g.json<{ files?: { id: string; name: string; mimeType: string; parents?: string[] }[] }>("files", { q, orderBy: "createdTime desc", pageSize: "20", fields: "files(id,name,mimeType,parents)", includeItemsFromAllDrives: "true", supportsAllDrives: "true" }).catch(() => ({ files: [] }));
+      for (const f of r.files ?? []) {
+        const parent = f.parents?.[0] ? await g.json<{ name?: string }>(`files/${f.parents[0]}`, { fields: "name", supportsAllDrives: "true" }).catch(() => ({ name: "" })) : { name: "" };
+        if (!/^(m&e |mep )?(diar(ies|y)|reports?|site diar(ies|y))\s*$/i.test((parent.name ?? "").trim())) continue; // report folders only, not monthly reports or other papers
+        try {
+          const buf = Buffer.from(await g.download(f.id));
+          if (f.mimeType === "application/pdf") pdf = buf.toString("base64");
+          else {
+            const { readReport } = await import("@/lib/reports/docx.mjs");
+            text = (await readReport(buf)).paragraphs.map((x: { text: string }) => x.text).filter((x: string) => x.trim()).join("\n").slice(0, 8000);
+          }
+          from = f.name.replace(/\s+/g, " "); break;
+        } catch { /* try the next */ }
+      }
+      if (from) break;
+    }
+  }
+  if (!text && !pdf) return { values: {}, from: null };
   const want = items.filter((i) => forClerks(i.item) && !/distribution|CPs|drawings|programme/i.test(i.item));
   if (!want.length) return { values: {}, from };
   const schema = {
@@ -94,11 +121,11 @@ export async function readReportInfo(admin: SupabaseClient, projectId: string) {
     properties: { items: { type: "array", items: { type: "object", additionalProperties: false, required: ["id", "value"], properties: {
       id: { type: "string" }, value: { type: ["string", "null"], description: "Exactly as written in the report: names (with firm, email or phone if given), numbers, address. null if the report doesn't give it or leaves it blank" } } } } },
   };
-  const ask = `This is the start of a clerk of works' latest report for a construction project. Fill in each item from it, exactly as written (the header table usually has the DfE project director, DfE project manager, TA / lead consultant, principal contractor and their project manager, project numbers, site address). Leave value null if the report doesn't say or the box is empty. Don't guess.\n\nItems:\n${want.map((i) => `${i.id}: ${i.item}`).join("\n")}\n\nReport (${from}):\n${text}`;
+  const ask = `This is the start of a clerk of works' latest report for a construction project. Fill in each item from it, exactly as written (the header table usually has the DfE project director, DfE project manager, TA / lead consultant, principal contractor and their project manager, project numbers, site address). Leave value null if the report doesn't say or the box is empty. Don't guess.\n\nItems:\n${want.map((i) => `${i.id}: ${i.item}`).join("\n")}\n\nReport (${from})${pdf ? ": attached" : `:\n${text}`}`;
   const res = await new Anthropic().messages.create({
     model: MODEL, max_tokens: 2000,
     output_config: { effort: "low", format: { type: "json_schema", schema } },
-    messages: [{ role: "user", content: ask }],
+    messages: [{ role: "user", content: pdf ? [{ type: "document", source: { type: "base64", media_type: "application/pdf", data: pdf } }, { type: "text", text: ask }] : ask }],
   } as Anthropic.MessageCreateParamsNonStreaming);
   const t = res.content.find((b) => b.type === "text");
   const out = t && t.type === "text" ? (JSON.parse(t.text) as { items: { id: string; value: string | null }[] }).items : [];
