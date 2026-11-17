@@ -120,7 +120,13 @@ async function applyInsurance(admin: SupabaseClient, u: Row, r: Record<string, u
       if (!was || was < p.expires) await admin.from("clerk_compliance").update({ [col]: p.expires, updated_at: new Date().toISOString() }).eq("clerk_id", u.clerk_id);
     }
   }
-  if (!pols.some((p) => p.type === "PI")) forBeamore.push("No professional indemnity section on this certificate (fine if it's a separate PL/EL certificate)");
+  // no PI on this one: only worth a look if there's no current PI on file from another certificate (Ronan, 17 Nov 2026:
+  // Andrew Hope-Robertson's PL schedule was flagged though his PI certificate was uploaded alongside it)
+  if (!pols.some((p) => p.type === "PI")) {
+    const today = new Date().toISOString().slice(0, 10);
+    const { data: other } = u.clerk_id ? await admin.from("insurance_policies").select("id").eq("clerk_id", u.clerk_id).eq("type", "PI").gte("expires", today).limit(1) : { data: [] };
+    if (!other?.length) forBeamore.push("No professional indemnity section on this certificate (fine if it's a separate PL/EL certificate)");
+  }
   return { problems, forBeamore };
 }
 
