@@ -9,6 +9,7 @@ import { FindClerk } from "./find-clerk";
 import { EmailLists } from "./email-lists";
 import { guessFolderKind } from "@/lib/folder-kinds";
 import { saveProject, addAlias, setDfe, startInfoChecklist, addInfoItem, requestOutstanding, setInfoReceived, removeInfoItem, addProjectEvent } from "../actions";
+const r1 = (n: number) => Math.round(n * 10) / 10;
 
 export const dynamic = "force-dynamic";
 
@@ -57,7 +58,15 @@ export default async function Project({ params }: { params: Promise<{ id: string
   const sorted = [...rows].sort(([a], [b]) => a.localeCompare(b));
   const charged = [...rows.values()].reduce((s, x) => s + x.b + x.me, 0);
   const planTotal = (plan ?? []).reduce((s, m) => s + Number(m.building) + Number(m.me), 0);
-  const agreed = (Number(p.agreed_days_building ?? 0) + Number(p.agreed_days_me ?? 0)) || null;
+  // agreed days come from the cost schedule when there is one (Ronan, 17 Nov 2026: the box said "not set" on jobs
+  // whose inspection schedule shows every day); the figures typed in by hand only when there's no schedule
+  const planB = r1((plan ?? []).reduce((s, m) => s + Number(m.building), 0)), planM = r1((plan ?? []).reduce((s, m) => s + Number(m.me), 0));
+  const fromPlan = planTotal > 0;
+  const agreedB = fromPlan ? planB : Number(p.agreed_days_building ?? 0), agreedM = fromPlan ? planM : Number(p.agreed_days_me ?? 0);
+  const agreed = r1(agreedB + agreedM) || null;
+  // planned up to the end of this month, to compare with what's been charged so far
+  const planToDate = r1((plan ?? []).filter((m) => m.month <= monthStart).reduce((s, m) => s + Number(m.building) + Number(m.me), 0));
+  const { data: agreedWork } = await db.from("workload_agreed").select("days,per,date_from,date_to,clerks(name)").eq("project_id", id);
   const thisMonth = rows.get(monthStart);
   const clerks = new Map<string, { planned: number; charged: number }>();
   for (const v of onSite ?? []) {
@@ -96,9 +105,12 @@ export default async function Project({ params }: { params: Promise<{ id: string
 
       <div className="tiles">
         <div className="tile"><span className="label">Agreed days</span><span className="big">{agreed ?? "—"}</span>
-          {agreed ? <span className="sub">{p.agreed_days_building ?? 0} bldg · {p.agreed_days_me ?? 0} M&amp;E</span> : <span className="sub">not set</span>}</div>
-        <div className={`tile ${agreed && charged > agreed ? "alert" : ""}`}><span className="label">Charged (2026 diary)</span><span className="big">{charged}</span>
-          {agreed ? <span className="sub">{charged > agreed ? `${charged - agreed} over` : `${agreed - charged} left`}</span> : null}</div>
+          {agreed ? <span className="sub">{agreedB} bldg · {agreedM} M&amp;E{fromPlan ? " · from the cost schedule" : ""}</span>
+            : agreedWork?.length ? <span className="sub">{agreedWork.map((a) => `${(a.clerks as unknown as { name: string } | null)?.name ?? ""} ${a.days} day${Number(a.days) === 1 ? "" : "s"} a ${a.per}${a.date_to ? ` to ${fd(a.date_to)}` : ""}`).join("; ")} (agreed)</span>
+            : <span className="sub">not set: no cost schedule found</span>}</div>
+        <div className={`tile ${fromPlan && charged > planToDate + 2 ? "alert" : ""}`}><span className="label">Charged so far (diary)</span><span className="big">{r1(charged)}</span>
+          {fromPlan ? <span className="sub">{planToDate} planned to the end of this month · {charged > planToDate ? `${r1(charged - planToDate)} ahead of the plan` : charged < planToDate ? `${r1(planToDate - charged)} behind the plan` : "on plan"} · {r1(Math.max(0, planTotal - charged))} left</span>
+            : agreed ? <span className="sub">{charged > agreed ? `${r1(charged - agreed)} over` : `${r1(agreed - charged)} left`}</span> : null}</div>
         <div className="tile"><span className="label">This month: planned / charged</span><span className="big">{thisMonth?.planned ?? 0} / {(thisMonth?.b ?? 0) + (thisMonth?.me ?? 0)}</span></div>
         <div className={`tile ${owed ? "alert" : ""}`}><span className="label">Outstanding invoices</span><span className="big">{gbp(owed)}</span><span className="sub">{invoices?.length ?? 0} invoice{invoices?.length === 1 ? "" : "s"}</span></div>
       </div>

@@ -26,6 +26,13 @@ export default async function Projects({ searchParams }: { searchParams: Promise
     db.from("clients").select("id,name").order("name"),
     db.from("projects").select("number").order("number", { ascending: false }).limit(1),
   ]);
+  // agreed days from each job's cost schedule (the hand-typed figure only when there isn't one)
+  const planDays = new Map<string, number>();
+  const ids = (rows ?? []).map((p) => p.id as string);
+  for (let i = 0; i < ids.length; i += 15) {
+    const { data: pm } = await db.from("project_planned_months").select("project_id,building,me").in("project_id", ids.slice(i, i + 15));
+    for (const r of pm ?? []) planDays.set(r.project_id, (planDays.get(r.project_id) ?? 0) + Number(r.building) + Number(r.me));
+  }
   const n = (s: string) => (counts ?? []).filter((c) => c.stage === s).length;
   const dd = new Map((diaryDays ?? []).map((d) => [d.project_id as string, d]));
   const month = new Date().toLocaleDateString("en-GB", { month: "long" });
@@ -82,7 +89,7 @@ export default async function Projects({ searchParams }: { searchParams: Promise
             <thead><tr><th>Project</th><th>Client</th><th className="num">Agreed days</th><th className="num">Charged 2026</th><th className="num">{month}: planned / charged</th><th>Next action</th></tr></thead>
             <tbody>
               {rows.map((p) => {
-                const days = (Number(p.agreed_days_building ?? 0) + Number(p.agreed_days_me ?? 0)) || null;
+                const days = Math.round((planDays.get(p.id) || Number(p.agreed_days_building ?? 0) + Number(p.agreed_days_me ?? 0)) * 10) / 10 || null;
                 const d = dd.get(p.id);
                 const used = Number(d?.charged_to_date ?? 0);
                 return (
