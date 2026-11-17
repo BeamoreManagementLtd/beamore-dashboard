@@ -24,7 +24,7 @@ export async function POST(req: Request) {
   const f = (r.fixes ?? {}) as { spelling?: { find: string; replace: string }[]; uniform?: number; stretched?: number; shrunk?: number; renamed?: string | null; score_parts?: Part[] };
   const p = r.projects as unknown as { name?: string; display_name?: string } | null;
   const first = ((r.clerks as unknown as { name?: string } | null)?.name ?? "there").split(" ")[0];
-  const job = p?.display_name ?? p?.name ?? "your job";
+  const job = p?.name ?? p?.display_name ?? "your job"; // the plain job name, without Beamore's job number
   const name = r.file_name.replace(/\.docx?$/i, "");
   const fixed = [
     f.spelling?.length ? `${f.spelling.length} spelling or typing slip${f.spelling.length === 1 ? "" : "s"} corrected (tracked changes in the Word file), e.g. ${f.spelling.slice(0, 3).map((s) => `"${s.find}" → "${s.replace}"`).join(", ")}` : "",

@@ -25,7 +25,7 @@ export async function notifyAiFeedback(admin: SupabaseClient) {
     if (told.has(r.id)) continue;
     const c = on.find((x) => x.id === r.clerk_id)!;
     const p = r.projects as unknown as { name?: string; display_name?: string } | null;
-    const job = p?.display_name ?? p?.name ?? "your job";
+    const job = p?.name ?? p?.display_name ?? "your job"; // the plain job name, without Beamore's job number
     const subject = `AI feedback on your ${job} report`;
     const body = [
       `Hi ${c.name.split(" ")[0]}`,
