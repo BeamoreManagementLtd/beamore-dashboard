@@ -30,7 +30,7 @@ export function WorkflowPanel({ projectId, stages, current, clerks, ticked, stat
             <option value="" disabled>{st.state === "done" ? "Change…" : "Choose clerk…"}</option>
             {clerks.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
             <option value="finding">We need to find one</option>
-            {me && <option value="none">No M&amp;E on this job</option>}
+            <option value="none">{me ? "No M&E on this job" : "No building clerk: M&E only"}</option>
           </select>
           <button className="btn">Save</button>
           {st.state !== "done" && <a className="small" href={`/personnel?project=${projectId}&role=${me ? "me" : "building"}#new`}>New to Beamore?</a>}

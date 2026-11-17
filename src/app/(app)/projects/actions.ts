@@ -179,9 +179,13 @@ async function giveFolder(projectId: string, clerkId: string) {
  * Only from arranging: a job already waiting, live or on hold keeps its stage.
  */
 export async function clerkAllocatedStage(db: Awaited<ReturnType<typeof createClient>>, projectId: string) {
+  // the building clerk in place, or an M&E-only job (no building clerk) with its M&E clerk in place
+  const { data: p } = await db.from("projects").select("stage,clerk_id,clerk_status,clerk_me_id").eq("id", projectId).single();
+  const ready = !!p?.clerk_id || (p?.clerk_status === "none" && !!p?.clerk_me_id);
+  if (!p || p.stage !== "won_arranging" || !ready) { revalidatePath("/projects"); return; }
   const { data } = await db.from("projects").update({ stage: "won_preparing", stage_changed_at: new Date().toISOString() })
-    .eq("id", projectId).eq("stage", "won_arranging").not("clerk_id", "is", null).select("id");
-  if (data?.length) await db.from("project_events").insert({ project_id: projectId, source: "dashboard", kind: "Stage", who: "Dashboard", body: "Building clerk allocated: moved to Waiting to start" });
+    .eq("id", projectId).eq("stage", "won_arranging").select("id");
+  if (data?.length) await db.from("project_events").insert({ project_id: projectId, source: "dashboard", kind: "Stage", who: "Dashboard", body: `${p.clerk_id ? "Building clerk" : "M&E clerk (M&E-only job)"} allocated: moved to Waiting to start` });
   revalidatePath("/projects");
 }
 
@@ -198,6 +202,11 @@ export async function setClerk(projectId: string, form: FormData) {
   } else if (v === "none" && me) {
     await workflowLog(projectId, label, "No M&E clerk on this job");
     await db.from("projects").update({ clerk_me_status: "none", clerk_me_id: null, clerk_me_source: "manual" }).eq("id", projectId);
+  } else if (v === "none") {
+    // an M&E-only job (Airbus Bristol): no building clerk; the M&E clerk being in place moves it to Waiting to start
+    await workflowLog(projectId, label, "No building clerk: M&E only");
+    await db.from("projects").update({ clerk_status: "none", clerk_id: null, clerk_source: "manual" }).eq("id", projectId);
+    await clerkAllocatedStage(db, projectId);
   } else if (v) {
     const { data: c } = await db.from("clerks").select("name").eq("id", v).maybeSingle();
     await workflowLog(projectId, label, `${c?.name ?? "Clerk"} allocated${me ? " (M&E)" : ""}`);

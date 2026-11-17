@@ -74,7 +74,8 @@ export function buildWorkflow(p: WorkflowProject, f: Facts): Workflow {
   const setup: Step[] = [
     s("S1", `${p.is_dfe ? "DfE" : "Standard"} checklist`, info.length > 0, `${info.length} items`, { how: "auto", manual: true }),
     s("S2", "Information requested from client", info.some((i) => i.requested_on), `requested ${fmt(info.find((i) => i.requested_on)?.requested_on)}`, { manual: true, how: "task" }),
-    s("S3", "Building clerk of works", !!p.clerk_id || (f.visits?.charged_visits ?? 0) > 0, f.clerkName ?? (clerkNames.join(", ") || undefined), { how: "button" }),
+    s("S3", "Building clerk of works", !!p.clerk_id || p.clerk_status === "none" || (f.visits?.charged_visits ?? 0) > 0,
+      p.clerk_status === "none" && !p.clerk_id ? "None: M&E only" : f.clerkName ?? (clerkNames.join(", ") || undefined), { how: "button" }),
     ...(meNeeded ? [s("S3M", "M&E clerk of works", !!p.clerk_me_id, f.clerkMeName ?? undefined, { how: "button" })] : []),
     s("S4", "Google Drive folder", !!p.drive_folder_id, "created", { manual: true, how: "auto" }),
     s("S5", "Information received", info.length > 0 && infoIn === info.length, info.length ? `${infoIn} of ${info.length} received` : undefined, { manual: true, how: "auto" }),
