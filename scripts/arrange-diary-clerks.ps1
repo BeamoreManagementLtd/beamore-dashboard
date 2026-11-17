@@ -16,6 +16,9 @@ try {
   $xl.Calculation = -4135  # manual while moving things
   foreach ($m in $Months) {
     $ws = $wb.Worksheets.Item($m)
+    # rows per clerk from the sheet itself: 36, or 37 once the "Other costs" line is in (Ronan, 17 Nov 2026)
+    $H = 36
+    for ($r = 4; $r -le 60; $r++) { $v = ([string]$ws.Cells($r, 1).Value2).Trim(); if ($v -and ($v -split "`n")[0].Trim() -ne 'Ronan') { $H = $r - 3; break } }
     function Names { $n = @(); $i = 0; while ($true) { $v = [string]$ws.Cells(3 + $H * $i, 1).Value2; if (-not $v.Trim()) { break }; $n += ($v -split "`n")[0].Trim(); $i++ }; return ,$n }
     function Top([int]$i) { return 2 + $H * $i }
     $names = Names
@@ -50,8 +53,9 @@ try {
     # the new clerks' costs in the profit totals (Total Subcontractors, and incl VAT)
     foreach ($c in $added) {
       $s = (Top ([array]::IndexOf($names, $c))) + 1
-      $ws.Range('X501').Formula = $ws.Range('X501').Formula.TrimEnd(')') + ",S$($s + 31))"
-      $ws.Range('X510').Formula = $ws.Range('X510').Formula.TrimEnd(')') + ",S$($s + 33))"
+      # the block's sum row and its total incl VAT (two rows lower when there's an Other costs line, which sits above them)
+      $ws.Range('X501').Formula = $ws.Range('X501').Formula.TrimEnd(')') + ",S$($s + $H - 5))"
+      $ws.Range('X510').Formula = $ws.Range('X510').Formula.TrimEnd(')') + ",S$($s + $H - 3))"
     }
     # estimated profit from the grey (planned) side, beside the actual profit
     $ws.Range('W500:Y502').Copy() | Out-Null; $ws.Range('W504:Y506').PasteSpecial(-4122) | Out-Null
