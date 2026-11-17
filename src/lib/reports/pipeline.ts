@@ -210,6 +210,14 @@ export async function scanReports(admin: SupabaseClient) {
     await admin.from("reports").update({ status: "done", pdf_file_id: pdf.id, done_at: pdf.createdTime, updated_at: started }).eq("id", hit.id).neq("status", "sent");
     done++;
   }
+  // a job's checker given by email (Judy, before she'd signed in, 17 Nov 2026): their login once they have one
+  const { data: byEmail } = await admin.from("projects").select("id,report_checker_email").not("report_checker_email", "is", null).is("report_checker_id", null);
+  for (const p of byEmail ?? []) {
+    const s = (staff ?? []).find((x) => (x.email ?? "").toLowerCase() === String(p.report_checker_email).toLowerCase());
+    if (!s) continue;
+    await admin.from("projects").update({ report_checker_id: s.id }).eq("id", p.id);
+    const pr = (projects ?? []).find((x) => x.id === p.id); if (pr) pr.report_checker_id = s.id;
+  }
   // reports nobody's checking yet: the project's checker, or the old spreadsheet's choice once that person has a login
   for (const r of (await admin.from("reports").select("id,project_id").is("checker_id", null).in("status", ["new", "checking", "ready", "failed"])).data ?? []) {
     const p = (projects ?? []).find((x) => x.id === r.project_id);
