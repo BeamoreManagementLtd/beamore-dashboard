@@ -363,14 +363,14 @@ export async function checkOne(admin: SupabaseClient, id: string) {
   ].filter(Boolean);
   if (trkProblems.length) extra.push({ severity: "medium", kind: "other", text: `Issues tracker: ${trkProblems.join("; ")}`, p: null });
   // a monthly report's tracker brought up to date with the last weekly diary of the month (Ronan, 17 Nov 2026)
-  let monthlyTracker: { against: string; month: string; missing: string[]; behind: string[]; text: string | null } | null = null;
+  let monthlyTracker: { against: string; month: string; missing: string[]; behind: string[]; text: string | null; details: { no: string; item: string; why: "missing" | "behind"; closed: string }[] } | null = null;
   if (monthly) {
     try {
       const last = await lastDiaryOfMonth(admin, { id, project_id: rep.project_id, kind: rep.kind, file_name: rep.renamed_from ?? rep.file_name, uploaded_at: rep.uploaded_at });
       if (last) {
         const gap = compareTrackers(trackerItems(r), trackerItems(await readReport(Buffer.from(await g.download(last.drive_file_id)))), r.paragraphs.map((x) => x.text));
         const text = trackerGapText(gap, last.file_name);
-        monthlyTracker = { against: last.file_name, month: last.month, missing: gap.missing, behind: gap.behind, text };
+        monthlyTracker = { against: last.file_name, month: last.month, missing: gap.missing, behind: gap.behind, text, details: gap.details };
         if (text) extra.push({ severity: "medium", kind: "other", text, p: null });
       }
     } catch { /* a check that can't be done is left out, never holds the report up */ }
@@ -455,6 +455,7 @@ export async function checkOne(admin: SupabaseClient, id: string) {
     text_snapshot: r.paragraphs.map((x) => x.text).filter((x) => x.trim()).join("\n").slice(0, 20000),
     modified_at: new Date().toISOString(), updated_at: new Date().toISOString(),
   }).eq("id", id);
+  if (monthlyTracker?.text) await askToUpdateMonthlyTracker(admin, { id, clerk_id: rep.clerk_id, file_name: rep.file_name }, monthlyTracker).catch(() => undefined);
   if (ai.date_on_report === "none" || ai.date_on_report === "week_commencing")
     await askForVisitDates(admin, { id, clerk_id: rep.clerk_id, file_name: rep.file_name }, ai.date_on_report).catch(() => undefined);
 }
@@ -479,6 +480,38 @@ async function askForVisitDates(admin: SupabaseClient, rep: { id: string; clerk_
   await (await driveClient(admin)).sendAutomatic({ to: c.email, subject, body });
   const { queueEmail } = await import("@/lib/outbox");
   await queueEmail(admin, { kind: "report-visit-dates", to: c.email, subject, body, clerkId: rep.clerk_id, ref: rep.id, status: "sent", note: "Sent automatically" });
+}
+
+/**
+ * A monthly report whose issues tracker hasn't been brought up to date with the last weekly diary of the month (Ronan,
+ * 17 Nov 2026: "write an email from my email address and just send it straight out ... if you need to query anything
+ * with them, just do it"). Sent straight away from Ronan's Gmail, once per monthly report, gentle like all feedback to
+ * the clerks, naming the items. Kept on "Emails to send" as a record.
+ */
+export async function askToUpdateMonthlyTracker(admin: SupabaseClient, rep: { id: string; clerk_id: string | null; file_name: string },
+  t: { against: string; details: { no: string; item: string; why: "missing" | "behind"; closed: string }[] }) {
+  if (!rep.clerk_id || !t.details.length) return false;
+  const { data: c } = await admin.from("clerks").select("name,email,active").eq("id", rep.clerk_id).single();
+  if (!c?.email || !c.active) return false;
+  const { data: before } = await admin.from("email_outbox").select("id").eq("kind", "monthly-tracker").eq("ref", rep.id).limit(1);
+  if (before?.length) return false;
+  const short = (s: string) => (s.length > 90 ? `${s.slice(0, 87).replace(/\s+\S*$/, "")}...` : s);
+  const missing = t.details.filter((d) => d.why === "missing"), behind = t.details.filter((d) => d.why === "behind");
+  const lines = (a: typeof missing, f: (d: (typeof missing)[number]) => string) => `${a.slice(0, 12).map(f).join("\n")}${a.length > 12 ? `\n- and ${a.length - 12} more` : ""}`;
+  const name = rep.file_name.replace(/\.docx?$/i, ""), diary = t.against.replace(/\.docx?$/i, "");
+  const body = [
+    `Hi ${c.name.split(" ")[0]}`,
+    `Thanks for your monthly report (${name}). I was comparing its issues tracker with the one in your last diary of the month (${diary}), and they don't quite match yet.`,
+    ...(missing.length ? [`These open items in the diary aren't in the monthly report:\n${lines(missing, (d) => `- ${d.no}: ${short(d.item)}`)}`] : []),
+    ...(behind.length ? [`These are closed in the diary but still show as open in the monthly report:\n${lines(behind, (d) => `- ${d.no}: ${short(d.item)}${d.closed ? ` (closed ${d.closed})` : ""}`)}`] : []),
+    `Could you bring the monthly report's tracker up to date with the diary and send me the updated version? If I've got any of this wrong, or there's a reason they differ, just let me know.`,
+    `Many thanks\n\nRonan O'Boyle\nBeamore Management Ltd`,
+  ].join("\n\n");
+  const subject = `Issues tracker in your monthly report: ${name}`;
+  await (await driveClient(admin)).sendAutomatic({ to: c.email, subject, body });
+  const { queueEmail } = await import("@/lib/outbox");
+  await queueEmail(admin, { kind: "monthly-tracker", to: c.email, subject, body, clerkId: rep.clerk_id, ref: rep.id, status: "sent", note: "Sent automatically" });
+  return true;
 }
 
 const fill = (t: string, v: Record<string, string>) => t.replace(/\{(\w+)\}/g, (m, k) => v[k] ?? m);

@@ -53,7 +53,7 @@ const alike = (a: string, b: string) => {
 };
 const num = (s: string) => /\d+/.exec(s)?.[0] ?? s.trim().toLowerCase();
 
-export type TrackerGap = { missing: string[]; behind: string[]; weeklyItems: number; monthlyItems: number; monthlyHasTracker: boolean };
+export type TrackerGap = { missing: string[]; behind: string[]; weeklyItems: number; monthlyItems: number; monthlyHasTracker: boolean; details: { no: string; item: string; why: "missing" | "behind"; closed: string }[] };
 
 /**
  * What in the last weekly diary's tracker isn't in the monthly report's: open items left out, and items closed (or
@@ -65,18 +65,18 @@ export function compareTrackers(monthly: TrackerItem[], weekly: TrackerItem[], m
   const inText = (item: string) => monthlyText.some((p) => p.length > 20 && alike(item, p));
   const real = (i: TrackerItem) => (i.item.match(/[a-z]{3,}/gi) ?? []).length >= 2 && !/^no (new )?(issues|items)\b/i.test(i.item);
   monthly = monthly.filter(real); weekly = weekly.filter(real);
-  const out: TrackerGap = { missing: [], behind: [], weeklyItems: weekly.length, monthlyItems: monthly.length, monthlyHasTracker: monthly.length > 0 };
+  const out: TrackerGap = { missing: [], behind: [], weeklyItems: weekly.length, monthlyItems: monthly.length, monthlyHasTracker: monthly.length > 0, details: [] };
   const used = new Set<number>();
   for (const w of weekly) {
     const open = !w.closed && w.colour !== "green";
     // the same item: same number and much the same words, else the same words under another number
     let k = monthly.findIndex((m, i) => !used.has(i) && num(m.no) === num(w.no) && alike(m.item, w.item));
     if (k < 0) k = monthly.findIndex((m, i) => !used.has(i) && alike(m.item, w.item));
-    if (k < 0) { if (open && !inText(w.item) && !out.missing.includes(w.no)) out.missing.push(w.no); continue; }
+    if (k < 0) { if (open && !inText(w.item) && !out.missing.includes(w.no)) { out.missing.push(w.no); out.details.push({ no: w.no, item: w.item, why: "missing", closed: "" }); } continue; }
     used.add(k);
     const m = monthly[k];
     // only where the monthly's tracker says what's open and closed
-    if (m.hasStatus && ((w.closed && !m.closed) || (w.colour === "green" && m.colour && m.colour !== "green"))) out.behind.push(w.no);
+    if (m.hasStatus && ((w.closed && !m.closed) || (w.colour === "green" && m.colour && m.colour !== "green"))) { out.behind.push(w.no); out.details.push({ no: w.no, item: w.item, why: "behind", closed: w.closedText }); }
   }
   return out;
 }
