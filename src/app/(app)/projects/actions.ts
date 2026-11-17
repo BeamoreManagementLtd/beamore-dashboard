@@ -319,6 +319,38 @@ export async function createFromRequest(requestId: string, form: FormData) {
  * Starting it as won runs the usual won set-up (folders, checklist, clerk to-dos).
  */
 export type NewProjectResult = { message?: string; id?: string };
+/**
+ * Set or change a project's client (Ronan, 17 Nov 2026: Anglo PTK 1324 had none and there was nowhere to add it).
+ * Pick an existing client, or type a new one's name (matched to an existing name or alias first, so no duplicates).
+ */
+export async function setProjectClient(projectId: string, clientId: string | null, newName: string) {
+  const me = await requireProfile();
+  const db = await createClient();
+  let id = clientId;
+  const typed = newName.replace(/\s+/g, " ").trim();
+  if (!id && typed) {
+    const { data: all } = await db.from("clients").select("id,name,aliases");
+    const hit = (all ?? []).find((c) => c.name.toLowerCase() === typed.toLowerCase() || (c.aliases ?? []).some((a: string) => a.toLowerCase() === typed.toLowerCase()));
+    if (hit) id = hit.id;
+    else {
+      const { data: c, error } = await db.from("clients").insert({ name: typed }).select("id").single();
+      if (error) return { ok: false, message: `Couldn't add the client: ${error.message}` };
+      id = c.id;
+    }
+  }
+  if (!id) return { ok: false, message: "Choose the client, or type a new client's name" };
+  const { data: before } = await db.from("projects").select("clients(name)").eq("id", projectId).single();
+  const { data: after } = await db.from("clients").select("name").eq("id", id).single();
+  const { error } = await db.from("projects").update({ client_id: id, updated_at: new Date().toISOString() }).eq("id", projectId);
+  if (error) return { ok: false, message: error.message };
+  const was = (before?.clients as unknown as { name: string } | null)?.name;
+  await db.from("project_events").insert({ project_id: projectId, source: "team", kind: "Note", who: me.full_name ?? me.email,
+    body: `Client ${was ? `changed from ${was} to` : "set to"} ${after?.name}`, created_by: me.id });
+  revalidatePath(`/projects/${projectId}`);
+  revalidatePath("/projects");
+  return { ok: true, message: `Client set to ${after?.name}` };
+}
+
 const NEW_STAGES = ["enquiry", "pricing", "sent", "won_arranging", "live"];
 export async function createProject(_: NewProjectResult | null, form: FormData): Promise<NewProjectResult> {
   const me = await requireProfile();

@@ -7,6 +7,7 @@ import { loadWorkflow } from "@/lib/workflow";
 import { WorkflowPanel } from "./workflow-panel";
 import { FindClerk } from "./find-clerk";
 import { EmailLists } from "./email-lists";
+import { ClientPicker } from "./client-picker";
 import { guessFolderKind } from "@/lib/folder-kinds";
 import { saveProject, addAlias, setDfe, startInfoChecklist, addInfoItem, requestOutstanding, setInfoReceived, removeInfoItem, addProjectEvent } from "../actions";
 const r1 = (n: number) => Math.round(n * 10) / 10;
@@ -67,6 +68,7 @@ export default async function Project({ params }: { params: Promise<{ id: string
   const agreed = r1(agreedB + agreedM) || null;
   // planned up to the end of this month, to compare with what's been charged so far
   const planToDate = r1((plan ?? []).filter((m) => m.month <= monthStart).reduce((s, m) => s + Number(m.building) + Number(m.me), 0));
+  const { data: allClients } = await db.from("clients").select("id,name").order("name");
   const { data: agreedWork } = await db.from("workload_agreed").select("days,per,date_from,date_to,clerks(name)").eq("project_id", id);
   const thisMonth = rows.get(monthStart);
   const clerks = new Map<string, { planned: number; charged: number }>();
@@ -96,7 +98,7 @@ export default async function Project({ params }: { params: Promise<{ id: string
       <div className="head">
         <div>
           <h1>{p.display_name}</h1>
-          <p>{(p.clients as unknown as { name: string } | null)?.name ?? "No client yet"}{p.proposal_folder ? ` · ${p.proposal_folder}` : ""}{" "}
+          <p><ClientPicker projectId={p.id} current={p.client_id ? { id: p.client_id, name: (p.clients as unknown as { name: string } | null)?.name ?? "" } : null} clients={allClients ?? []} />{p.proposal_folder ? ` · ${p.proposal_folder}` : ""}{" "}
             {p.is_dfe === true && <span className="pill warn" title={p.dfe_evidence ?? ""}>DfE project</span>}
             {p.is_dfe === false && <span className="pill neutral" title={p.dfe_evidence ?? ""}>Not DfE</span>}</p>
           {p.is_dfe != null && <div className="small muted">{p.is_dfe ? `Why DfE: ${p.dfe_evidence}` : p.dfe_evidence} · <form action={setDfe.bind(null, p.id, !p.is_dfe)} style={{ display: "inline" }}><button className="linklike" type="submit">{p.is_dfe ? "Not DfE?" : "Actually DfE?"}</button></form></div>}
