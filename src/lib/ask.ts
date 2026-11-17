@@ -219,6 +219,7 @@ export async function run(db: SupabaseClient, me: Profile, name: string, a: Reco
       if (c?.length !== 1) return { error: c?.length ? "More than one clerk matches" : "No clerk with that name", matches: c?.map((x) => x.name) };
       await db.from("projects").update({ [f.id]: c[0].id, [f.status]: "have", [f.source]: "manual" }).eq("id", p.id);
       await db.from("project_events").insert({ project_id: p.id, source: "team", kind: isMe ? "M&E clerk of works" : "Clerk of works", who: first(me), body: `${isMe ? "M&E clerk" : "Clerk"}: ${c[0].name} (via Ask)`, created_by: me.id });
+      await (await import("@/app/(app)/projects/actions")).clerkAllocatedStage(db, p.id);
       return { done: `${p.display_name}: ${isMe ? "M&E" : "building"} clerk is ${c[0].name}` };
     }
     case "info_received": {

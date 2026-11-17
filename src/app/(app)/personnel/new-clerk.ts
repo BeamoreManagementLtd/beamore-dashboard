@@ -31,6 +31,7 @@ export async function addAndOnboardClerk(_prev: NewClerkResult | null, form: For
   if (project) {
     await db.from("projects").update(role === "me" ? { clerk_me_id: clerk.id, clerk_me_status: "have", clerk_me_source: "manual" } : { clerk_id: clerk.id, clerk_status: "have", clerk_source: "manual" }).eq("id", project);
     await db.from("project_events").insert({ project_id: project, source: "team", kind: role === "me" ? "M&E clerk of works" : "Clerk of works", who: (me.full_name ?? me.email).split(" ")[0], body: `${name} appointed (new to Beamore, onboarding started)` });
+    await (await import("../projects/actions")).clerkAllocatedStage(db, project);
   }
   try {
     const { steps, password, passwordSent } = await onboardNewClerk(createServiceClient(), { clerkId: clerk.id, name, personalEmail: personal, beamoreEmail: beamore, phone: val(form, "phone"), projectId: project, createAccount, sendWelcome, addedBy: me.email });

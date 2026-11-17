@@ -77,6 +77,7 @@ export async function addNewClerk(form: FormData) {
     const me = s(form, "role") === "me";
     await db.from("projects").update(me ? { clerk_me_id: clerk.id, clerk_me_status: "have", clerk_me_source: "manual" } : { clerk_id: clerk.id, clerk_status: "have", clerk_source: "manual" }).eq("id", project);
     await db.from("project_events").insert({ project_id: project, source: "team", kind: "Clerk of works", body: `${name} appointed (new to Beamore, onboarding started)` });
+    await (await import("../projects/actions")).clerkAllocatedStage(db, project);
     revalidatePath(`/projects/${project}`);
   }
   revalidatePath("/personnel");

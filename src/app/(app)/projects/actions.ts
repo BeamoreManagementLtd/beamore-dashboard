@@ -173,6 +173,17 @@ async function giveFolder(projectId: string, clerkId: string) {
   });
 }
 
+/**
+ * A clerk of works allocated to a won job moves it from "Won – arranging clerk" to "Waiting to start" (Ronan,
+ * 17 Nov 2026). Only from arranging: a job already waiting, live or on hold keeps its stage.
+ */
+export async function clerkAllocatedStage(db: Awaited<ReturnType<typeof createClient>>, projectId: string) {
+  const { data } = await db.from("projects").update({ stage: "won_preparing", stage_changed_at: new Date().toISOString() })
+    .eq("id", projectId).eq("stage", "won_arranging").select("id");
+  if (data?.length) await db.from("project_events").insert({ project_id: projectId, source: "dashboard", kind: "Stage", who: "Dashboard", body: "Clerk allocated: moved to Waiting to start" });
+  revalidatePath("/projects");
+}
+
 /** S3 / S3M: pick the building or M&E clerk, say we need to find one, or (M&E) that the job has none. */
 export async function setClerk(projectId: string, form: FormData) {
   const v = String(form.get("clerk") ?? "");
@@ -190,6 +201,7 @@ export async function setClerk(projectId: string, form: FormData) {
     const { data: c } = await db.from("clerks").select("name").eq("id", v).maybeSingle();
     await workflowLog(projectId, label, `${c?.name ?? "Clerk"} allocated${me ? " (M&E)" : ""}`);
     await db.from("projects").update({ [f.status]: "have", [f.id]: v, [f.source]: "manual" }).eq("id", projectId);
+    await clerkAllocatedStage(db, projectId);
     await giveFolder(projectId, v);
   }
   revalidatePath(`/projects/${projectId}`);
@@ -283,6 +295,7 @@ export async function appointCandidate(projectId: string, candidateId: string) {
   if (c.clerk_id) {
     await workflowLog(projectId, me ? "M&E clerk of works" : "Clerk of works", `${c.name} appointed${me ? " (M&E)" : ""}`);
     await db.from("projects").update(me ? { clerk_me_id: c.clerk_id, clerk_me_status: "have", clerk_me_source: "manual" } : { clerk_id: c.clerk_id, clerk_status: "have", clerk_source: "manual" }).eq("id", projectId);
+    await clerkAllocatedStage(db, projectId);
     await giveFolder(projectId, c.clerk_id);
     revalidatePath(`/projects/${projectId}`);
     return;
