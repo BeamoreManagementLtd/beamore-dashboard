@@ -43,7 +43,7 @@ export async function syncProjectDetails(admin: SupabaseClient) {
     let meFound = 0;
     const { data: projects } = await admin.from("projects").select("id,name,display_name,diary_aliases,drive_folder_id,details,clerk_me_id,clerk_me_source,clerk_me_status")
       .in("stage", ["won_arranging", "won_preparing", "live", "on_hold"]);
-    const { data: infoRows } = await admin.from("project_info").select("id,project_id,item,received_on,note").in("project_id", (projects ?? []).map((p) => p.id));
+    const { data: infoRows } = await admin.from("project_info").select("id,project_id,item,received_on,note,value,value_from").in("project_id", (projects ?? []).map((p) => p.id));
     let linked = 0, read = 0, unchanged = 0, ticked = 0;
     for (const p of projects ?? []) {
       let folderId = p.drive_folder_id as string | null;
@@ -106,7 +106,9 @@ export async function syncProjectDetails(admin: SupabaseClient) {
         if (unknown(v)) continue;
         for (const i of (infoRows ?? []).filter((x) => x.project_id === p.id && re.test(x.item))) {
           if (i.received_on && i.note && !/^(Assumed|From the CoW diary)/.test(i.note)) continue; // someone entered it by hand
-          await admin.from("project_info").update({ received_on: i.received_on ?? today, note: `${src}: ${v}`.slice(0, 500) }).eq("id", i.id);
+          // the answer itself too (for the clerks' project details), unless the team has typed or checked one
+          await admin.from("project_info").update({ received_on: i.received_on ?? today, note: `${src}: ${v}`.slice(0, 500),
+            ...(!i.value || i.value_from === "diary" ? { value: v, value_from: "diary", value_at: new Date().toISOString() } : {}) }).eq("id", i.id);
           ticked++;
         }
       }

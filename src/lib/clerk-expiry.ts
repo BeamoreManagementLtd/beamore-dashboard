@@ -74,9 +74,7 @@ export async function runRenewals(admin: SupabaseClient, opts: { dryRun?: boolea
       out.plan.push(`${c.name}: ${due.map((d) => `${d.type} ${d.expires} (${d.when})`).join(", ")}`);
       if (!opts.dryRun) {
         g ??= await driveClient(admin);
-        const CRLF = "\r\n";
-        const mime = [`To: ${c.email}`, `Subject: ${subject}`, "MIME-Version: 1.0", "Content-Type: text/plain; charset=UTF-8", "Content-Transfer-Encoding: base64", "", Buffer.from(body).toString("base64").replace(/(.{76})/g, `$1${CRLF}`)].join(CRLF);
-        await g.post("https://gmail.googleapis.com/gmail/v1/users/me/messages/send", { raw: Buffer.from(mime).toString("base64url") });
+        await g.sendAutomatic({ to: c.email, subject, body });
         for (const d of due) chased[`${d.field}@${d.expires}`] = today;
         await admin.from("clerk_compliance").update({ expiry_chased: chased }).eq("clerk_id", r.clerk_id);
         await queueEmail(admin, { kind: "insurance-renewal", to: c.email, subject, body, clerkId: r.clerk_id, ref: `${r.clerk_id}:${today}`, status: "sent", note: "Sent automatically" }).catch(() => undefined);

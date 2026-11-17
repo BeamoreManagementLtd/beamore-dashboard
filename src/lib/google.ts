@@ -106,6 +106,18 @@ export async function driveClient(admin: SupabaseClient) {
       if (!res.ok) throw new Error(`Gmail ${res.status}: ${(await res.text()).slice(0, 200)}`);
       return res.json() as Promise<{ id: string }>;
     },
+    /**
+     * The emails Ronan has asked to go straight out from his Gmail, not as drafts: insurance renewal reminders
+     * (16 Nov 2026), a clerk's report with no visit date, and the project details to a job's clerks (17 Nov 2026).
+     * Plain text. Callers keep a copy on "Emails to send". Nothing else may use this.
+     */
+    sendAutomatic: async (m: { to: string; subject: string; body: string; cc?: string }) => {
+      const CRLF = "\r\n";
+      const mime = [`To: ${m.to}`, ...(m.cc ? [`Cc: ${m.cc}`] : []), `Subject: ${m.subject}`, "MIME-Version: 1.0", "Content-Type: text/plain; charset=UTF-8", "Content-Transfer-Encoding: base64", "", Buffer.from(m.body).toString("base64").replace(/(.{76})/g, `$1${CRLF}`)].join(CRLF);
+      const res = await fetch("https://gmail.googleapis.com/gmail/v1/users/me/messages/send", { method: "POST", headers: { Authorization: `Bearer ${access}`, "Content-Type": "application/json" }, body: JSON.stringify({ raw: Buffer.from(mime).toString("base64url") }), cache: "no-store" });
+      if (!res.ok) throw new Error(`Gmail ${res.status}: ${(await res.text()).slice(0, 200)}`);
+      return res.json() as Promise<{ id: string }>;
+    },
     /** Gmail API (users/me), e.g. gmail("threads", { q }) */
     gmail: async <T>(path: string, params: Record<string, string | string[]>) => {
       const q = new URLSearchParams();

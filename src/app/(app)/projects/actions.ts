@@ -171,6 +171,11 @@ async function giveFolder(projectId: string, clerkId: string) {
   await shareFolderWithClerk(admin, projectId, clerkId).catch(async (e) => {
     await admin.from("project_events").insert({ project_id: projectId, source: "dashboard", who: "Dashboard", kind: "Drive folder", body: `Couldn't share the project folder with the clerk: ${e instanceof Error ? e.message.slice(0, 200) : "failed"}` });
   });
+  // and the project details the client has given, if there are any yet (a new clerk on the job gets them straight away)
+  const { shareWithClerks } = await import("@/lib/project-facts");
+  await shareWithClerks(admin, projectId).catch(async (e) => {
+    await admin.from("project_events").insert({ project_id: projectId, source: "dashboard", who: "Dashboard", kind: "Set-up problem", body: `Project details not sent to the clerk: ${e instanceof Error ? e.message.slice(0, 200) : "failed"}` });
+  });
 }
 
 /**
@@ -471,4 +476,45 @@ export async function startedOnSite(projectId: string) {
   revalidatePath(`/projects/${projectId}`);
   revalidatePath("/workflows");
   revalidatePath("/due");
+}
+
+// ---- the client's answers, shared with the job's clerks (Ronan, 17 Nov 2026)
+/** Reads the client's recent emails about the job and suggests an answer for each checklist item (nothing is saved). */
+export async function readInfoFromEmail(projectId: string) {
+  await requireProfile();
+  const { createServiceClient } = await import("@/lib/supabase/server");
+  const { readClientInfo } = await import("@/lib/project-facts");
+  try {
+    const r = await readClientInfo(createServiceClient(), projectId);
+    const n = Object.keys(r.values).length;
+    return { ok: true, values: r.values, message: !r.emails ? "No emails from the client about this job in the last nine months" : n ? `Filled in ${n} from ${r.emails} email${r.emails === 1 ? "" : "s"}: check them, then save` : `Read ${r.emails} email${r.emails === 1 ? "" : "s"}; none of the items were in them` };
+  } catch (e) { return { ok: false, values: {} as Record<string, string>, message: e instanceof Error ? e.message : "Couldn't read the emails" }; }
+}
+
+/**
+ * Saves the answers (an item with an answer counts as received) and shares the details with the job's clerks: an email
+ * straight from Ronan's Gmail to any clerk who hasn't had them (or when they've changed), the "Your jobs" page on the
+ * clerk portal, and the "Project information" Google Doc in the project folder. Nothing financial goes to the clerks.
+ */
+export async function saveInfoAnswers(projectId: string, answers: { id: string; value: string; from: string }[]) {
+  const me = await requireProfile();
+  const { createServiceClient } = await import("@/lib/supabase/server");
+  const admin = createServiceClient();
+  const today = new Date().toISOString().slice(0, 10);
+  const { data: rows } = await admin.from("project_info").select("id,value,received_on").eq("project_id", projectId);
+  let changed = 0;
+  for (const a of answers) {
+    const row = (rows ?? []).find((r) => r.id === a.id);
+    if (!row) continue;
+    const v = a.value.trim() || null;
+    if ((row.value ?? null) === v) continue;
+    await admin.from("project_info").update({ value: v, value_from: v ? a.from : null, value_at: new Date().toISOString(), ...(v && !row.received_on ? { received_on: today } : {}) }).eq("id", a.id);
+    changed++;
+  }
+  if (changed) await admin.from("project_events").insert({ project_id: projectId, source: "team", kind: "Info received", who: me.full_name ?? me.email, body: `${changed} item${changed === 1 ? "" : "s"} of project information saved` });
+  const { shareWithClerks } = await import("@/lib/project-facts");
+  let shared = "";
+  try { shared = await shareWithClerks(admin, projectId); } catch (e) { shared = `Not shared with the clerk: ${e instanceof Error ? e.message : "failed"}`; }
+  revalidatePath(`/projects/${projectId}`);
+  return { ok: true, message: `${changed ? `Saved ${changed}` : "Nothing changed"}. ${shared}` };
 }

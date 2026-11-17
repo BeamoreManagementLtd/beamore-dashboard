@@ -445,10 +445,7 @@ async function askForVisitDates(admin: SupabaseClient, rep: { id: string; clerk_
   const name = rep.file_name.replace(/\.docx?$/i, "");
   const body = `Hi ${first}\n\nThanks for your report (${name}). ${how === "week_commencing" ? "I noticed it gives the week (\"week commencing\") rather than the day you were on site." : "I couldn't see the date of the visit written in it."}\n\nCould you make sure each report has the date of each visit on it, near the top? If you were on site twice, please put both dates (for example 10/11/26 and 13/11/26), rather than week commencing.\n\nIt helps us match each report to the visit and keep on top of when reports go out.\n\nMany thanks\n\nRonan O'Boyle\nBeamore Management Ltd`;
   const subject = "The visit date on your reports";
-  const g = await driveClient(admin);
-  const CRLF = "\r\n";
-  const mime = [`To: ${c.email}`, `Subject: ${subject}`, "MIME-Version: 1.0", "Content-Type: text/plain; charset=UTF-8", "Content-Transfer-Encoding: base64", "", Buffer.from(body).toString("base64").replace(/(.{76})/g, `$1${CRLF}`)].join(CRLF);
-  await g.post("https://gmail.googleapis.com/gmail/v1/users/me/messages/send", { raw: Buffer.from(mime).toString("base64url") });
+  await (await driveClient(admin)).sendAutomatic({ to: c.email, subject, body });
   const { queueEmail } = await import("@/lib/outbox");
   await queueEmail(admin, { kind: "report-visit-dates", to: c.email, subject, body, clerkId: rep.clerk_id, ref: rep.id, status: "sent", note: "Sent automatically" });
 }

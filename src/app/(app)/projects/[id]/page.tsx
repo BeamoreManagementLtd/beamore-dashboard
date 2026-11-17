@@ -8,6 +8,7 @@ import { WorkflowPanel } from "./workflow-panel";
 import { FindClerk } from "./find-clerk";
 import { EmailLists } from "./email-lists";
 import { ClientPicker } from "./client-picker";
+import { InfoAnswers } from "./info-answers";
 import { guessFolderKind } from "@/lib/folder-kinds";
 import { saveProject, addAlias, setDfe, startInfoChecklist, addInfoItem, requestOutstanding, setInfoReceived, removeInfoItem, addProjectEvent } from "../actions";
 const r1 = (n: number) => Math.round(n * 10) / 10;
@@ -32,7 +33,7 @@ export default async function Project({ params }: { params: Promise<{ id: string
     db.from("project_planned_months").select("month,building,me").eq("project_id", p.id).order("month"),
     db.from("xero_draft_invoices").select("number,issued,subtotal,contact").eq("project_id", p.id).order("issued")]);
   const [{ data: info }, { data: pevents }] = await Promise.all([
-    db.from("project_info").select("id,item,requested_on,received_on,hint,hint_thread,auto").eq("project_id", id).order("created_at"),
+    db.from("project_info").select("id,item,requested_on,received_on,hint,hint_thread,auto,value,value_from").eq("project_id", id).order("created_at"),
     db.from("project_events").select("id,happened_at,source,kind,who,body").eq("project_id", id).order("happened_at", { ascending: false }).limit(40),
   ]);
   const [months, { data: invoices }, { data: onSite }, { data: queue }, { data: log }, { data: contacts }, { data: staff }, { data: fin }] = await Promise.all([
@@ -181,6 +182,8 @@ export default async function Project({ params }: { params: Promise<{ id: string
               <button className="btn">Add</button>
             </form>
           )}
+          {!!items.length && <InfoAnswers projectId={id} items={items.map((i) => ({ id: i.id, item: i.item, value: (i as { value?: string | null }).value ?? null, value_from: (i as { value_from?: string | null }).value_from ?? null }))}
+            clerks={[...new Set([p.clerk_id, p.clerk_me_id].filter(Boolean))].map((cid) => (clerkList ?? []).find((c) => c.id === cid)?.name).filter(Boolean) as string[]} />}
         </section>
         <section className="panel">
           <h2>Project log</h2>
