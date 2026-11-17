@@ -7,7 +7,8 @@ import { STANDARDS, STANDARD_KEYS, standardsShare, type StandardKey, type Standa
 /**
  * A clerk's report scores over time, on their page in the office dashboard only (Ronan, 15 Nov 2026: "keep that within
  * their area of the dashboard that we can have a look at, maybe not for them to look at... Maybe even graph it").
- * The clerk portal never shows this.
+ * The clerk portal doesn't show this one: a clerk who switches on AI feedback sees their own scores graphed on
+ * "Your reports" (Ronan, 17 Nov 2026), without the averages and best-practice notes here.
  */
 export async function ScoreTrend({ clerkId }: { clerkId: string }) {
   const db = await createClient();
@@ -36,7 +37,7 @@ export async function ScoreTrend({ clerkId }: { clerkId: string }) {
 
   return (
     <section className="panel">
-      <h2>Report scores <span className="small muted">office only: clerks don&apos;t see this</span></h2>
+      <h2>Report scores <span className="small muted">office view: clerks who switch on AI feedback see their own scores</span></h2>
       <p>
         Latest <b>{roundScore(scores[scores.length - 1])}/100</b> · average of the last {Math.min(5, scores.length)} <b>{roundScore(scores.slice(-5).reduce((s, v) => s + v, 0) / Math.min(5, scores.length))}/100</b>
         {" · "}<span className={t.dir === "down" ? "neg" : t.dir === "up" ? "pos" : "muted"}>{TREND_LABEL[t.dir]}{t.recent !== null && t.before !== null && t.dir !== "steady" ? ` (${roundScore(t.before)} → ${roundScore(t.recent)})` : ""}</span>

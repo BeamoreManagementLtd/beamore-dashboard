@@ -118,6 +118,22 @@ export async function driveClient(admin: SupabaseClient) {
       if (!res.ok) throw new Error(`Gmail ${res.status}: ${(await res.text()).slice(0, 200)}`);
       return res.json() as Promise<{ id: string }>;
     },
+    /**
+     * The same, but from another address Ronan's Gmail can send as (Ronan, 17 Nov 2026: AI feedback emails to clerks
+     * come from ai@beamore.co.uk). Returns null, sending nothing, when Gmail isn't set up to send as that address:
+     * it never falls back to sending as Ronan.
+     */
+    sendAutomaticAs: async (from: { email: string; name: string }, m: { to: string; subject: string; body: string }) => {
+      const sa = await fetch("https://gmail.googleapis.com/gmail/v1/users/me/settings/sendAs", { headers: { Authorization: `Bearer ${access}` }, cache: "no-store" });
+      const list = sa.ok ? ((await sa.json()) as { sendAs?: { sendAsEmail: string; verificationStatus?: string }[] }).sendAs ?? [] : [];
+      const alias = list.find((s) => s.sendAsEmail.toLowerCase() === from.email.toLowerCase() && (!s.verificationStatus || s.verificationStatus === "accepted"));
+      if (!alias) return null;
+      const CRLF = "\r\n";
+      const mime = [`From: ${from.name} <${alias.sendAsEmail}>`, `To: ${m.to}`, `Subject: ${m.subject}`, "MIME-Version: 1.0", "Content-Type: text/plain; charset=UTF-8", "Content-Transfer-Encoding: base64", "", Buffer.from(m.body).toString("base64").replace(/(.{76})/g, `$1${CRLF}`)].join(CRLF);
+      const res = await fetch("https://gmail.googleapis.com/gmail/v1/users/me/messages/send", { method: "POST", headers: { Authorization: `Bearer ${access}`, "Content-Type": "application/json" }, body: JSON.stringify({ raw: Buffer.from(mime).toString("base64url") }), cache: "no-store" });
+      if (!res.ok) throw new Error(`Gmail ${res.status}: ${(await res.text()).slice(0, 200)}`);
+      return res.json() as Promise<{ id: string }>;
+    },
     /** Gmail API (users/me), e.g. gmail("threads", { q }) */
     gmail: async <T>(path: string, params: Record<string, string | string[]>) => {
       const q = new URLSearchParams();

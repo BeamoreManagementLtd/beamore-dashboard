@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { createServiceClient } from "@/lib/supabase/server";
 import { requirePortalUser } from "@/lib/portal/auth";
 import { myUploads, myPolicies, insuranceSummary, fmtDate, clerkStatus } from "@/lib/portal/data";
+import { AiNote, AiSwitch } from "./reports/feedback";
 
 export default async function PortalHome() {
   const me = await requirePortalUser();
@@ -22,6 +23,7 @@ export default async function PortalHome() {
     db.from("clerk_compliance").select("cscs_expiry,chartership_body,chartership_renewal").eq("clerk_id", me.clerk.id).maybeSingle(),
   ]);
   const { data: done } = await db.from("clerk_compliance").select("details_completed_at").eq("clerk_id", me.clerk.id).maybeSingle();
+  const { data: aiOn } = await db.from("clerks").select("ai_feedback").eq("id", me.clerk.id).single();
   if (!done?.details_completed_at && !me.viewingAs) redirect("/portal/details");
   const ins = insuranceSummary(policies);
   const lastMonth = new Date(new Date().getFullYear(), new Date().getMonth() - 1, 15).toISOString().slice(0, 7);
@@ -63,6 +65,14 @@ export default async function PortalHome() {
           <span className="muted small">{comp?.cscs_expiry ? `CSCS card expires ${fmtDate(comp.cscs_expiry)}` : "CSCS card, MCIOB, MICWCI and others"}</span>
           <span className="pcard-go">Upload certificate →</span>
         </Link>
+      </section>
+
+      <section className="card">
+        <h2>AI feedback on your reports</h2>
+        <p style={{ margin: "4px 0 0" }}>If you&apos;d like to, you can see how each of your reports was checked: what was tidied up for you, any suggestions, and how each part scored.</p>
+        <AiNote />
+        <AiSwitch on={!!aiOn?.ai_feedback} viewingAs={me.viewingAs} />
+        {aiOn?.ai_feedback && <p className="small" style={{ marginBottom: 0 }}><Link href="/portal/reports">Go to Your reports →</Link></p>}
       </section>
 
       <section className="card">
