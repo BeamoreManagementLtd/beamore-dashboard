@@ -85,7 +85,9 @@ export default async function Clerk({ params, searchParams }: { params: Promise<
               <li key={u.id}>
                 {fdy(u.received_at)} · {u.kind === "insurance" ? "Insurance" : u.kind === "invoice" ? "Invoice" : u.doc_type ?? "Certificate"} ·{" "}
                 {u.drive_file_id ? <a href={`https://drive.google.com/file/d/${u.drive_file_id}/view`} target="_blank" rel="noreferrer">{u.file_name ?? "open"}</a> : (u.file_name ?? "being filed")}
-                {u.issues?.length ? <span className="neg"> · {u.issues.join(". ")}</span> : null}
+                {/* an accepted upload's old notes aren't problems any more (Andrew Hope-Robertson's PL policy still said
+                    "no PI" after his separate PI certificate was accepted, 17 Nov 2026) */}
+                {u.issues?.length && u.status !== "accepted" ? <span className="neg"> · {u.issues.join(". ")}</span> : null}
               </li>
             ))}
           </ul>
