@@ -22,6 +22,8 @@ function monthOf(v) {
   const s = text(v).trim().toLowerCase();
   let m = /^(\d{4})-(\d{2})/.exec(s);
   if (m) return `${m[1]}-${m[2]}-01`;
+  m = /^(\d{1,2})[./](\d{1,2})[./](\d{4})$/.exec(s); // week commencing "15.09.2025" (Journeys): its month
+  if (m && Number(m[2]) >= 1 && Number(m[2]) <= 12) return `${m[3]}-${m[2].padStart(2, "0")}-01`;
   m = /^([a-z]{3})[a-z]*[\s\-']+(\d{2,4})$/.exec(s); // "Jun-26", "June 2026"
   if (m && MONTHS.includes(m[1])) { const y = m[2].length === 2 ? 2000 + Number(m[2]) : Number(m[2]); return `${y}-${String(MONTHS.indexOf(m[1]) + 1).padStart(2, "0")}-01`; }
   return null;
@@ -105,8 +107,10 @@ function parseLooseSheet(wb) {
           continue;
         }
         gap = 0;
-        if (out.has(month)) break;
-        const row = { month, building: 0, me: 0, building_witness: 0, me_witness: 0, other: 0 };
+        // weekly rows add up into their month; an earlier month again means the next block of options has begun
+        const lastMonth = [...out.keys()].pop();
+        if (lastMonth && month < lastMonth) break;
+        const row = out.get(month) ?? { month, building: 0, me: 0, building_witness: 0, me_witness: 0, other: 0 };
         for (const { c, kind, witness, f } of cols) {
           const d = num(ws.getCell(rr, c).value) * f;
           row[kind] += d;
