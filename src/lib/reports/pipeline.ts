@@ -8,6 +8,7 @@ import { sendReportEmail } from "@/lib/google-user";
 import { readReport, photoStats, shrinkPhotos, trackSpelling, saveReport, setLabelValue, nearText, photoHashes, reusedCount, uncaptioned, unticked, rotatePhoto, fixPhotoShapes, uniformPhotos, healthSafety, issuesTracker, trackerItems, cleanCopy, acceptOwnRevisions, withoutOwnMarks } from "./docx.mjs";
 import { isMonthly, lastDiaryOfMonth, compareTrackers, trackerGapText } from "./monthly";
 import { recordReportFiles } from "./tracker";
+import { clerkForName } from "./clerk-name";
 
 /** 0-100: how much the report needed fixing (must-checks count most). Lateness is shown separately. */
 /**
@@ -465,6 +466,8 @@ export async function checkOne(admin: SupabaseClient, id: string) {
     ...(ai.visit_date && /^\d{4}-\d{2}-\d{2}$/.test(ai.visit_date) && rep.visit_date_source !== "manual" ? { visit_date: ai.visit_date, visit_date_source: "report" }
       : !rep.visit_date && nameDate && !Number.isNaN(Date.parse(nameDate)) ? { visit_date: nameDate, visit_date_source: "name" } : {}),
     report_number: ai.report_number, clerk_name: ai.clerk_name,
+    // no clerk from the job: the one named in the report ("Antony Larkins" is Tony Larkins), so it's counted and linked
+    ...(!rep.clerk_id && ai.clerk_name ? await (async () => { const { data: all } = await admin.from("clerks").select("id,name"); const c = clerkForName(ai.clerk_name, all ?? []); return c ? { clerk_id: c.id } : {}; })() : {}),
     text_snapshot: r.paragraphs.map((x) => x.text).filter((x) => x.trim()).join("\n").slice(0, 20000),
     modified_at: new Date().toISOString(), updated_at: new Date().toISOString(),
   }).eq("id", id);
