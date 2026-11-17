@@ -19,6 +19,9 @@ const API = "https://api.todoist.com/api/v1/sync";
 const PROJECT = process.env.TODOIST_PROJECT ?? "Work list";
 const TEAM = "Beamore"; // shared lists: Judy's list, Anel's list, From the dashboard
 const DUE = "From the dashboard";
+/** Things either Ronan or Judy can do (Ronan, 17 Nov 2026): chasing unpaid invoices and Xero invoicing. */
+const SHARED = "Ronan or Judy";
+const SHARED_KINDS = new Set(["Chasing", "Xero"]);
 const EXCLUDED = new Set(["personal"]); // columns never shown on the dashboard
 const LIST_PEOPLE = (process.env.TODOIST_LIST_PEOPLE ?? "Judy,Anel").split(",").map((s) => s.trim().toLowerCase());
 const SITE = "https://dashboard.beamore.co.uk";
@@ -142,16 +145,21 @@ export async function syncTodoist(admin: SupabaseClient) {
     const p = listPeople.find((o) => firstOf(x.name) === o.first.toLowerCase());
     if (p) { personSec.set(x.id, p); if (!sectionFor.has(p.email)) sectionFor.set(p.email, x.id); }
   }
+  // the shared column: things either Ronan or Judy can pick up (Ronan, 17 Nov 2026)
+  let sharedSec: string | null = allSecs.find((x) => x.name === SHARED && x.project_id === teamId)?.id ?? null;
   const make: Cmd[] = [];
   if (!dueSec) make.push({ type: "section_add", temp_id: "d", args: { name: DUE, project_id: teamId } });
+  if (!sharedSec) make.push({ type: "section_add", temp_id: "rj", args: { name: SHARED, project_id: teamId } });
   const missing = listPeople.filter((p) => !sectionFor.has(p.email));
   missing.forEach((p, n) => make.push({ type: "section_add", temp_id: `s${n}`, args: { name: `${p.first}'s list`, project_id: teamId } }));
   if (make.length) {
     const m = await send(make);
     dueSec = dueSec ?? m.d ?? null;
+    sharedSec = sharedSec ?? m.rj ?? null;
     missing.forEach((p, n) => { if (m[`s${n}`]) { sectionFor.set(p.email, m[`s${n}`]); personSec.set(m[`s${n}`], p); } });
   }
   if (dueSec && !known.has(dueSec)) known.set(dueSec, { id: dueSec, name: DUE, project_id: teamId! });
+  if (sharedSec && !known.has(sharedSec)) known.set(sharedSec, { id: sharedSec, name: SHARED, project_id: teamId! });
   for (const [email, id] of sectionFor) if (!known.has(id)) known.set(id, { id, name: `${listPeople.find((p) => p.email === email)?.first}'s list`, project_id: teamId! });
   const secName = new Map([...known.values()].map((x) => [x.id, x.name]));
   const excluded = (sectionId: string | null) => !!sectionId && EXCLUDED.has((secName.get(sectionId) ?? "").trim().toLowerCase());
@@ -171,7 +179,10 @@ export async function syncTodoist(admin: SupabaseClient) {
   const { data: linked } = await admin.from("tasks").select("id,todoist_id,title,due,done_at,owner_id,owner_name,kind").not("todoist_id", "is", null);
   const byTid = new Map((linked ?? []).map((t) => [t.todoist_id as string, t]));
   let added = 0, ticked = 0;
-  for (const i of items.filter((x) => x.section_id !== dueSec)) {
+  // the dashboard's own due-list cards (in "From the dashboard" or the "Ronan or Judy" column) aren't hand-made to-dos
+  const dueCards = new Set(((await admin.from("todoist_due_items").select("todoist_id")).data ?? []).map((m) => m.todoist_id as string));
+  const isDue = (x: { id: string; section_id: string | null }) => x.section_id === dueSec || dueCards.has(x.id);
+  for (const i of items.filter((x) => !isDue(x))) {
     const t = byTid.get(i.id);
     if (excluded(i.section_id)) { // moved into Personal: off the dashboard
       if (t && !t.done_at) await admin.from("tasks").update({ done_at: new Date().toISOString() }).eq("id", t.id);
@@ -192,7 +203,7 @@ export async function syncTodoist(admin: SupabaseClient) {
         await admin.from("tasks").update({ title: i.content.slice(0, 300), due, owner_id: o.owner_id, owner_name: o.owner_name, kind }).eq("id", t.id);
     }
   }
-  for (const i of items.filter((x) => x.section_id === dueSec && finished(x)))
+  for (const i of items.filter((x) => isDue(x) && finished(x)))
     await admin.from("todoist_due_items").update({ ticked_in_todoist_at: new Date().toISOString() }).eq("todoist_id", i.id).is("ticked_in_todoist_at", null);
 
   // ---- dashboard -> Todoist: tasks for Ronan, Judy and Anel
@@ -236,12 +247,15 @@ export async function syncTodoist(admin: SupabaseClient) {
   const nowKeys = new Set(due.map((d) => d.key));
   const newDue = due.filter((d) => !have.has(d.key));
   newDue.forEach((d, n) => cmds.push({ type: "item_add", temp_id: `d${n}`, args: {
-    content: d.title, project_id: teamId, section_id: dueSec,
+    content: d.title, project_id: teamId, section_id: (SHARED_KINDS.has(d.kind) && sharedSec) || dueSec,
     description: [d.detail, d.link ? `${SITE}${d.link}` : null].filter(Boolean).join("\n"), ...(d.due ? { due: { date: d.due } } : {}),
   } }));
   for (const d of due) {
     const m = have.get(d.key);
     if (m && !m.ticked_in_todoist_at && m.title !== d.title) cmds.push({ type: "item_update", args: { id: m.todoist_id, content: d.title } });
+    // cards already in "From the dashboard" that belong in the shared column move across once
+    if (m && !m.ticked_in_todoist_at && sharedSec && SHARED_KINDS.has(d.kind) && items.some((i) => i.id === m.todoist_id && i.section_id === dueSec))
+      cmds.push({ type: "item_move", args: { id: m.todoist_id, section_id: sharedSec } });
   }
   const dealtWith = (mirrored ?? []).filter((m) => !nowKeys.has(m.due_key));
   for (const m of dealtWith) if (!m.ticked_in_todoist_at) cmds.push({ type: "item_complete", args: { id: m.todoist_id } });
