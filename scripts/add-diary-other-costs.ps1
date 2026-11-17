@@ -8,9 +8,10 @@
 #    every reference adjusts itself
 # The dashboard ignores this row as a visit (it's after day 31) and fills it from the expenses on a clerk's invoice.
 # Usage: powershell -File scripts/add-diary-other-costs.ps1 -In "Diary 2027 v2.xlsx" -Out "Diary 2027 v3.xlsx"
-param([Parameter(Mandatory)][string]$In, [Parameter(Mandatory)][string]$Out)
+param([Parameter(Mandatory)][string]$In, [Parameter(Mandatory)][string]$Out, [string[]]$Only = @())
 $ErrorActionPreference = 'Stop'
 $Months = @('January','February','March','April','May','June','July','August','September','October','November','December')
+if ($Only.Count) { $Months = @($Months | Where-Object { $Only -contains $_ }) }  # e.g. -Only November,December (Diary 2026, 17 Nov 2026)
 $Label = 'Other costs (what for:)'
 $xl = New-Object -ComObject Excel.Application
 $xl.Visible = $false; $xl.DisplayAlerts = $false; $xl.ScreenUpdating = $false
@@ -40,7 +41,7 @@ try {
   }
   $xl.Calculation = -4105
   $xl.CalculateFull()
-  $wb.Worksheets.Item('January').Activate(); $wb.Worksheets.Item('January').Range('A1').Select() | Out-Null
+  $wb.Worksheets.Item($Months[0]).Activate(); $wb.Worksheets.Item($Months[0]).Range('A1').Select() | Out-Null
   $wb.SaveAs($Out, 51)
   $wb.Close($false)
   "saved $Out"

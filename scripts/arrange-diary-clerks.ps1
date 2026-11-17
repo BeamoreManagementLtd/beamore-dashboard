@@ -4,9 +4,10 @@
 #  - a block for each new clerk (a copy of an ordinary clerk's block), added to the Total Subcontractors sums
 #  - estimated profit from the grey (planned) side, beside the actual profit
 # Usage: powershell -File scripts/arrange-diary-clerks.ps1 -In "Diary 2027 built.xlsx" -Out "Diary 2027.xlsx" -NewClerks 'Ben Lacey','Paul Hankin'
-param([Parameter(Mandatory)][string]$In, [Parameter(Mandatory)][string]$Out, [string[]]$NewClerks = @())
+param([Parameter(Mandatory)][string]$In, [Parameter(Mandatory)][string]$Out, [string[]]$NewClerks = @(), [string[]]$Only = @())
 $ErrorActionPreference = 'Stop'
 $Months = @('January','February','March','April','May','June','July','August','September','October','November','December')
+if ($Only.Count) { $Months = @($Months | Where-Object { $Only -contains $_ }) }  # e.g. -Only November,December (Diary 2026, 17 Nov 2026)
 $H = 36  # rows per clerk: the header row, 31 days, sum, VAT, total, blank
 $xl = New-Object -ComObject Excel.Application
 $xl.Visible = $false; $xl.DisplayAlerts = $false; $xl.ScreenUpdating = $false
@@ -29,6 +30,8 @@ try {
       $ws.Range("A$(Top $o):T$((Top $o) + $H - 1)").Insert(-4121) | Out-Null
       $s = (Top $o) + 1
       $ws.Cells($s, 1).Value2 = $c; $ws.Cells($s, 11).Value2 = $c
+      # the copied block's typed-in entries (sites and comments, both sides) are the other clerk's: cleared
+      foreach ($col in @('C','E','G','I','M','O','Q','S')) { $ws.Range("$col$($s):$col$($s + 30)").ClearContents() | Out-Null }
       $added += $c
       $names = Names
     }
@@ -63,7 +66,7 @@ try {
   }
   $xl.Calculation = -4105
   $xl.CalculateFull()
-  $wb.Worksheets.Item('January').Activate(); $wb.Worksheets.Item('January').Range('A1').Select() | Out-Null
+  $wb.Worksheets.Item($Months[0]).Activate(); $wb.Worksheets.Item($Months[0]).Range('A1').Select() | Out-Null
   $wb.SaveAs($Out, 51)
   $wb.Close($false)
   "saved $Out"

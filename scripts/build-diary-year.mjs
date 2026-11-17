@@ -102,14 +102,22 @@ function buildMonth(m) {
   return x;
 }
 
-for (let m = 0; m < 12; m++) zip.file(pathOf(MONTHS[m]), buildMonth(m));
+// ONLY (6th argument, e.g. "December"): rebuild just those months in the same year's file (Ronan, 17 Nov 2026: December
+// 2026 had no grey side); every other tab is left exactly as it is
+const ONLY = process.argv[6] ? process.argv[6].split(",").map((s) => s.trim()) : null;
+for (let m = 0; m < 12; m++) {
+  if (ONLY && !ONLY.includes(MONTHS[m])) continue;
+  let x = buildMonth(m);
+  if (ONLY) x = x.replace(/\s+tabSelected="1"/, "");
+  zip.file(pathOf(MONTHS[m]), x);
+}
 // the other tabs aren't the selected one either
-for (const name of [...wbXml.matchAll(/<sheet\b[^>]*name="([^"]+)"/g)].map((x) => x[1]).filter((n) => !MONTHS.includes(n))) {
+if (!ONLY) for (const name of [...wbXml.matchAll(/<sheet\b[^>]*name="([^"]+)"/g)].map((x) => x[1]).filter((n) => !MONTHS.includes(n))) {
   const p = pathOf(name);
   zip.file(p, (await zip.file(p).async("string")).replace(/\s+tabSelected="1"/, ""));
 }
 // workbook opens on January; Excel rebuilds the calculation chain and recalculates everything on opening
-let wb2 = wbXml.replace(/firstSheet="\d+"/, 'firstSheet="0"').replace(/activeTab="\d+"/, 'activeTab="0"')
+let wb2 = (ONLY ? wbXml : wbXml.replace(/firstSheet="\d+"/, 'firstSheet="0"').replace(/activeTab="\d+"/, 'activeTab="0"'))
   .replace(/<calcPr\b([^>]*?)\/>/, (_, a) => `<calcPr${a.replace(/\s+fullCalcOnLoad="[^"]*"/, "")} fullCalcOnLoad="1"/>`);
 zip.file("xl/workbook.xml", wb2);
 if (zip.file("xl/calcChain.xml")) {
