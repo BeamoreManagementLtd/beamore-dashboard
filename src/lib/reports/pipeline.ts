@@ -261,7 +261,11 @@ export async function checkOne(admin: SupabaseClient, id: string) {
   const stats = await photoStats(r, sharp);
 
   // what the check needs to know about the job
-  const { data: p } = rep.project_id ? await admin.from("projects").select("id,name,dfe_project_number,po_number,clerk_id,clerk_me_id,clients(name)").eq("id", rep.project_id).single() : { data: null };
+  const { data: p } = rep.project_id ? await admin.from("projects").select("id,name,dfe_project_number,po_number,clerk_id,clerk_me_id,details,clients(name)").eq("id", rep.project_id).single() : { data: null };
+  // the client the report names may be the end client, not ours (Pepys Court: Diamond and Co are our client, Encore
+  // Estates the end user, Ronan 17 Nov 2026): either is right, so neither is raised as a mix-up
+  const ourClient = (p?.clients as unknown as { name?: string } | null)?.name ?? null;
+  const endClient = ((p?.details ?? {}) as { end_client?: string }).end_client ?? null;
   const clerkIds = [p?.clerk_id, p?.clerk_me_id].filter(Boolean) as string[];
   const { data: clerks } = clerkIds.length ? await admin.from("clerks").select("id,name").in("id", clerkIds) : { data: [] };
   const since = new Date(Date.now() - 21 * 864e5).toISOString().slice(0, 10);
@@ -297,7 +301,8 @@ export async function checkOne(admin: SupabaseClient, id: string) {
   }
 
   const ai = await checkReport({
-    fileName: rep.renamed_from ?? rep.file_name, folder: rep.folder_name ?? "", project: p?.name ?? rep.project_folder_name ?? "", client: (p?.clients as unknown as { name?: string } | null)?.name ?? null,
+    fileName: rep.renamed_from ?? rep.file_name, folder: rep.folder_name ?? "", project: p?.name ?? rep.project_folder_name ?? "",
+    client: ourClient && endClient ? `${ourClient} (Beamore's client), working for the end client ${endClient}: the report may name either as the client, and both are correct, so don't raise it` : ourClient,
     projectNumbers: [p?.dfe_project_number, p?.po_number].filter((x): x is string => !!x && /\d/.test(x)),
     // the diary's dates are only estimates for costing, so reports aren't checked against them (Ronan, 15 Nov 2026)
     expectedClerks: (clerks ?? []).map((c) => c.name), diaryVisits: [],
