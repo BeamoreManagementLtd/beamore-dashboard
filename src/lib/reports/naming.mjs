@@ -13,6 +13,8 @@ const base = (n) => n.replace(/\.(docx?|pdf)$/i, "").replace(/\s*\(\d+\)\s*$/, "
 function findDate(s) {
   const tries = [
     { re: /(?<!\d)(\d{1,2})([.\-_ ])(\d{1,2})\2(\d{4}|\d{2})(?!\d)/, kind: "dmy" },
+    // "30- 09- 2026" (Preece House's building reports, which the renamer couldn't read, 17 Nov 2026)
+    { re: /(?<!\d)(\d{1,2})([.\-_] )(\d{1,2})\2(\d{4}|\d{2})(?!\d)/, kind: "dmy" },
     { re: /(?<!\d)(\d{4})-(\d{2})-(\d{2})(?!\d)/, kind: "iso" },
     { re: /(?<!\d)(\d{1,2})(st|nd|rd|th)?\s+(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|sept|oct|nov|dec)\w*\s+(\d{4})/i, kind: "long" },
     { re: /(?<!\d)(\d{2})(\d{2})(\d{2})(?!\d)/, kind: "compact" },
@@ -72,8 +74,12 @@ export function conventionName(current, siblings, visitDate, number) {
   // the pattern most of the last five share, and at least two of them
   const recent = sib.slice(0, 5), counts = new Map();
   for (const p of recent) counts.set(p.skeleton, (counts.get(p.skeleton) ?? 0) + 1);
-  const [skel, n] = [...counts].sort((a, b) => b[1] - a[1])[0];
-  if (n < 2 || n < Math.ceil(recent.length / 2)) return null;
+  let [skel, n] = [...counts].sort((a, b) => b[1] - a[1])[0];
+  // a folder with two series (Preece House: M&E reports named one way, building reports another): a name already in the
+  // style of one of them stays in that style
+  const mine = parse(current)?.skeleton;
+  if (mine && mine !== skel && sib.filter((p) => p.skeleton === mine).length >= 2) { skel = mine; n = 2; }
+  else if (n < 2 || n < Math.ceil(recent.length / 2)) return null;
   const same = sib.filter((p) => p.skeleton === skel);
   const latest = same[0];
   // the report number: the number in the pattern that goes up from one report to the next
@@ -85,8 +91,15 @@ export function conventionName(current, siblings, visitDate, number) {
   if (pos === null) return null;
   const date = visitDate && /^\d{4}-\d{2}-\d{2}$/.test(visitDate) ? visitDate : parse(current)?.date.iso;
   if (!date) return null;
-  const highest = Math.max(...same.map((p) => +p.parts[pos].num));
-  const want = number && /^\d{1,4}$/.test(String(number)) && +number > 0 && +number <= highest + 5 ? +number : highest + 1;
+  // the series counts every numbered report in the folder, whatever style it's named in, when the number leads the name
+  // (Preece House: M&E reports up to 68 named one way, building reports 69-73 another, so 74 came out as 69, 17 Nov 2026)
+  const leads = latest.nums[0] === pos && latest.parts.slice(0, pos).every((p) => p.text !== undefined && !p.text.trim());
+  const leading = (s) => +(/^\s*0*(\d{1,4})(?!\d)/.exec(base(s))?.[1] ?? 0);
+  const highest = Math.max(...same.map((p) => +p.parts[pos].num), ...(leads ? siblings.map(leading) : []));
+  const own = number && /^\d{1,4}$/.test(String(number).replace(/^0+/, "") || "0") ? +number : 0;
+  // the number written in the report and the one the clerk gave the file agree: that's the number, never changed
+  const agreed = own > 0 && leads && leading(current) === own;
+  const want = agreed ? own : own > 0 && own <= highest + 5 ? own : highest + 1;
   const width = latest.parts[pos].num.length, padded = latest.parts[pos].num.startsWith("0") || same.some((p) => p.parts[pos].num.startsWith("0"));
   const out = latest.parts.map((p, k) => (p.date ? writeDate(date, p.fmt) : k === pos ? (padded ? String(want).padStart(width, "0") : String(want)) : p.num ?? p.text)).join("");
   return `${out}${ext}` === current ? null : `${out}${ext}`;
