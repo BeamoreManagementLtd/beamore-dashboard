@@ -424,6 +424,33 @@ export async function checkOne(admin: SupabaseClient, id: string) {
     text_snapshot: r.paragraphs.map((x) => x.text).filter((x) => x.trim()).join("\n").slice(0, 20000),
     modified_at: new Date().toISOString(), updated_at: new Date().toISOString(),
   }).eq("id", id);
+  if (ai.date_on_report === "none" || ai.date_on_report === "week_commencing")
+    await askForVisitDates(admin, { id, clerk_id: rep.clerk_id, file_name: rep.file_name }, ai.date_on_report).catch(() => undefined);
+}
+
+/**
+ * A report with no visit date written in it, or only "week commencing" (Ronan, 17 Nov 2026): email the clerk straight
+ * away (from Ronan's Gmail, not a draft) asking for the date of each visit. Once per report, and no more than one a
+ * week to the same clerk. Gentle, like all feedback to the clerks. Kept on "Emails to send" as a record.
+ */
+async function askForVisitDates(admin: SupabaseClient, rep: { id: string; clerk_id: string | null; file_name: string }, how: "none" | "week_commencing") {
+  if (!rep.clerk_id) return;
+  const { data: c } = await admin.from("clerks").select("name,email,active").eq("id", rep.clerk_id).single();
+  if (!c?.email || !c.active) return;
+  const weekAgo = new Date(Date.now() - 7 * 864e5).toISOString();
+  const { data: before } = await admin.from("email_outbox").select("id,ref,created_at").eq("kind", "report-visit-dates")
+    .or(`ref.eq.${rep.id},and(clerk_id.eq.${rep.clerk_id},created_at.gte.${weekAgo})`).limit(1);
+  if (before?.length) return;
+  const first = c.name.split(" ")[0];
+  const name = rep.file_name.replace(/\.docx?$/i, "");
+  const body = `Hi ${first}\n\nThanks for your report (${name}). ${how === "week_commencing" ? "I noticed it gives the week (\"week commencing\") rather than the day you were on site." : "I couldn't see the date of the visit written in it."}\n\nCould you make sure each report has the date of each visit on it, near the top? If you were on site twice, please put both dates (for example 10/11/26 and 13/11/26), rather than week commencing.\n\nIt helps us match each report to the visit and keep on top of when reports go out.\n\nMany thanks\n\nRonan O'Boyle\nBeamore Management Ltd`;
+  const subject = "The visit date on your reports";
+  const g = await driveClient(admin);
+  const CRLF = "\r\n";
+  const mime = [`To: ${c.email}`, `Subject: ${subject}`, "MIME-Version: 1.0", "Content-Type: text/plain; charset=UTF-8", "Content-Transfer-Encoding: base64", "", Buffer.from(body).toString("base64").replace(/(.{76})/g, `$1${CRLF}`)].join(CRLF);
+  await g.post("https://gmail.googleapis.com/gmail/v1/users/me/messages/send", { raw: Buffer.from(mime).toString("base64url") });
+  const { queueEmail } = await import("@/lib/outbox");
+  await queueEmail(admin, { kind: "report-visit-dates", to: c.email, subject, body, clerkId: rep.clerk_id, ref: rep.id, status: "sent", note: "Sent automatically" });
 }
 
 const fill = (t: string, v: Record<string, string>) => t.replace(/\{(\w+)\}/g, (m, k) => v[k] ?? m);

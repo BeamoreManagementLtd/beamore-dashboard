@@ -13,6 +13,8 @@ export const REPORT_MODEL = "claude-sonnet-5-5";
 export type Issue = { severity: "high" | "medium" | "low"; kind: string; text: string; p: number | null; near?: string | null; page?: number | null };
 export type Check = {
   summary: string; visit_date: string | null; report_number: string | null; clerk_name: string | null;
+  /** how the visit date is written in the report itself (not its file name) — Ronan wants each visit's date */
+  date_on_report?: "visit_dates" | "week_commencing" | "month_only" | "none";
   spelling: { p: number; find: string; replace: string }[]; issues: Issue[];
   rotate: { photo: number; degrees: 90 | 180 | 270 }[]; clerk_points: string[];
   /** the AI's overall judgement of the report out of 100 (Ronan, 15 Nov 2026: "take an overall look at the report") */
@@ -35,10 +37,11 @@ export type Programme = {
 
 const str = { type: "string" }, nstr = { type: ["string", "null"] };
 const SCHEMA = {
-  type: "object", additionalProperties: false, required: ["summary", "visit_date", "report_number", "clerk_name", "spelling", "issues", "rotate", "clerk_points", "quality", "quality_why", "programme", "standards"],
+  type: "object", additionalProperties: false, required: ["summary", "visit_date", "date_on_report", "report_number", "clerk_name", "spelling", "issues", "rotate", "clerk_points", "quality", "quality_why", "programme", "standards"],
   properties: {
     summary: { type: "string", description: "One or two plain sentences for the checker: is it fit to send, and the main thing to look at" },
     visit_date: { ...nstr, description: "Visit date this report covers, YYYY-MM-DD (the last one if several)" },
+    date_on_report: { type: "string", enum: ["visit_dates", "week_commencing", "month_only", "none"], description: "How the visit date is written in the report's own text (ignore the file name): visit_dates = the actual date of each visit is written; week_commencing = only a week (\"w/c 09/11/26\", \"week commencing\", \"week ending\") rather than the day(s) visited; month_only = a monthly report giving only the month; none = no visit date written in the report at all" },
     report_number: { ...nstr, description: "The report/diary number as written, e.g. 34 or R17" },
     clerk_name: { ...nstr, description: "The clerk of works named in the report" },
     spelling: {
