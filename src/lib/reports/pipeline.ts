@@ -168,7 +168,9 @@ export async function scanReports(admin: SupabaseClient) {
     const p = byFolder.get(inner.id)
       ?? (projects ?? []).find((x) => x.id === match.fromReference(outer ? `${outer.name} ${phase}` : inner.name))
       ?? (outer ? (projects ?? []).find((x) => x.id === match.fromReference(`${outer.name} ${inner.name}`)) : undefined);
-    const kind = /m&e|mep/i.test(rf.name) ? "me" : "building";
+    // M&E by its folder, or by its name when a job keeps all reports in one folder (Preece House "74 - M&E Clerk of Works
+    // Report" was credited to the building clerk, 17 Nov 2026)
+    const kind = /m&e|mep/i.test(rf.name) || /\bm&e\b|\bmep\b|^\s*me\s?\d/i.test(f.name) ? "me" : "building";
     const { data: existing } = await admin.from("reports").select("id,status,checked_at").eq("drive_file_id", f.id).maybeSingle();
     if (existing) {
       // the clerk changed their original after it was checked: say so (the checked copy may be out of date)
@@ -514,6 +516,8 @@ export async function checkOne(admin: SupabaseClient, id: string) {
       : !rep.visit_date && nameDate && !Number.isNaN(Date.parse(nameDate)) ? { visit_date: nameDate, visit_date_source: "name" } : {}),
     report_number: ai.report_number, clerk_name: ai.clerk_name,
     // no clerk from the job: the one named in the report ("Antony Larkins" is Tony Larkins), so it's counted and linked
+    // the report names the job's other clerk (its M&E clerk, say): credited to them
+    ...(rep.clerk_id && ai.clerk_name && p ? await (async () => { const ids = [p.clerk_id, p.clerk_me_id].filter((x): x is string => !!x && x !== rep.clerk_id); if (!ids.length) return {}; const { data: others } = await admin.from("clerks").select("id,name").in("id", ids); const c = clerkForName(ai.clerk_name, others ?? []); return c ? { clerk_id: c.id, kind: c.id === p.clerk_me_id ? "me" : "building" } : {}; })() : {}),
     ...(!rep.clerk_id && ai.clerk_name ? await (async () => { const { data: all } = await admin.from("clerks").select("id,name"); const c = clerkForName(ai.clerk_name, all ?? []); return c ? { clerk_id: c.id } : {}; })() : {}),
     text_snapshot: r.paragraphs.map((x) => x.text).filter((x) => x.trim()).join("\n").slice(0, 20000),
     modified_at: new Date().toISOString(), updated_at: new Date().toISOString(),
