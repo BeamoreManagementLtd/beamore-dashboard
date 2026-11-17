@@ -89,16 +89,16 @@ export function WorkloadView({ w, lastRead }: { w: Workload; lastRead: string | 
               <span className="small muted">{list.filter((c) => c.id).length} clerks{none ? ` · ${n1(none.planned[1] ?? 0)} days next month with no clerk yet` : ""}</span>
             </div>
             <div style={{ overflowX: "auto" }}>
-              <table style={{ tableLayout: "fixed", minWidth: 760, fontSize: 12.5 }}>
-                <thead><tr><th style={{ width: 190, textAlign: "left" }}></th>{months.map((m, i) => <th key={m} style={{ textAlign: "center", fontWeight: 500, color: "var(--muted)" }}>{mlabel(m, i)}</th>)}</tr>
-                  <tr><td className="muted small">Working days</td>{w.working.map((d, i) => <td key={i} className="muted small" style={{ textAlign: "center" }}>{d}</td>)}</tr></thead>
+              <table style={{ tableLayout: "fixed", minWidth: 190 + months.length * 40, fontSize: 12.5 }}>
+                <thead><tr><th style={{ width: 190, textAlign: "left", position: "sticky", left: 0, zIndex: 1, background: "var(--surface)" }}></th>{months.map((m, i) => <th key={m} style={{ textAlign: "center", fontWeight: 500, color: "var(--muted)" }}>{mlabel(m, i)}</th>)}</tr>
+                  <tr><td className="muted small" style={{ position: "sticky", left: 0, zIndex: 1, background: "var(--surface)" }}>Working days</td>{w.working.map((d, i) => <td key={i} className="muted small" style={{ textAlign: "center" }}>{d}</td>)}</tr></thead>
                 <tbody>
                   {list.map((c) => {
                     const isOpen = open[k] === (c.id ?? "none");
                     return (
                       <Fragment key={c.id ?? "none"}>
                         <tr id={`${k}-${c.id}`}>
-                          <td style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                          <td style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", position: "sticky", left: 0, zIndex: 1, background: "var(--surface)" }}>
                             <button type="button" onClick={() => setOpen({ ...open, [k]: isOpen ? null : (c.id ?? "none") })} style={{ background: "none", border: 0, padding: 0, cursor: "pointer", color: c.id ? "var(--ink)" : "var(--muted)", fontStyle: c.id ? "normal" : "italic", font: "inherit", fontWeight: c.id ? 600 : 400 }}>
                               {isOpen ? "▾" : "▸"} {c.name}
                             </button>
@@ -139,7 +139,7 @@ function Detail({ c, k, w }: { c: WClerk; k: Kind; w: Workload }) {
   const colour = new Map(projects.map((p, i) => [p.id, COL[i % COL.length]]));
 
   // chart: stacked bars by project (proposals out paler), days available (dashed), already in the diary (dots)
-  const W = 760, H = 210, L = 30, B = 22, bw = (W - L) / months.length;
+  const W = Math.max(760, 30 + months.length * 36), H = 210, L = 30, B = 22, bw = (W - L) / months.length;
   const tot = months.map((_, i) => c.planned[i] + c.possible[i]);
   const max = Math.max(5, ...tot, ...(c.avail ?? []), ...c.diary) * 1.12;
   const y = (v: number) => H - B - (v / max) * (H - B - 8);
@@ -170,7 +170,7 @@ function Detail({ c, k, w }: { c: WClerk; k: Kind; w: Workload }) {
         {c.avail && <span><svg width="18" height="8"><line x1="0" x2="18" y1="4" y2="4" stroke="var(--ink)" strokeWidth="1.5" strokeDasharray="4 3" /></svg> Days available</span>}
         {c.diary.some((d) => d > 0) && <span><svg width="10" height="10"><circle cx="5" cy="5" r="4" fill="var(--brand)" /></svg> Already in the diary</span>}
       </div>
-      <svg viewBox={`0 0 ${W} ${H}`} width="100%" role="img" aria-label={`${c.name}: days booked per month by project`}>
+      <div><svg viewBox={`0 0 ${W} ${H}`} width={W} style={{ maxWidth: "none" }} role="img" aria-label={`${c.name}: days booked per month by project`}>
         {Array.from({ length: Math.floor(max / step) + 1 }, (_, t) => t * step).map((t) => (
           <g key={t}><line x1={L} x2={W} y1={y(t)} y2={y(t)} stroke="var(--line)" /><text x={L - 6} y={y(t) + 4} textAnchor="end" fontSize="11" fill="var(--muted)">{t}</text></g>
         ))}
@@ -189,14 +189,14 @@ function Detail({ c, k, w }: { c: WClerk; k: Kind; w: Workload }) {
         })}
         {c.avail && <path d={c.avail.map((v, i) => `${i ? "L" : "M"}${L + i * bw + 3},${y(v)}L${L + (i + 1) * bw - 3},${y(v)}`).join("")} fill="none" stroke="var(--ink)" strokeWidth="1.5" strokeDasharray="4 3" />}
         {c.diary.map((v, i) => v > 0 && <circle key={i} cx={L + i * bw + bw / 2} cy={y(v)} r="4.5" fill="var(--brand)" stroke="var(--surface-2)" strokeWidth="2"><title>{`Already in the diary for ${mlong(months[i])}: ${n1(v)} days`}</title></circle>)}
-      </svg>
+      </svg></div>
 
-      <div style={{ overflowX: "auto" }}>
-        <table style={{ tableLayout: "fixed", minWidth: 760, fontSize: 12 }}>
+      <div>
+        <table style={{ tableLayout: "fixed", minWidth: 190 + months.length * 40, fontSize: 12 }}>
           <tbody>
             {projects.map((p) => (
               <tr key={p.id}>
-                <td style={{ width: 190, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={p.name}>
+                <td style={{ width: 190, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", position: "sticky", left: 0, zIndex: 1, background: "var(--surface-2)" }} title={p.name}>
                   <Sw c={colour.get(p.id)!} b={colour.get(p.id)!} /> <Link href={`/projects/${p.id}`}>{p.name}</Link>
                   {p.possible && <span className="muted"> · proposal</span>}{p.stage === "on_hold" && <span className="muted"> · on hold</span>}
                 </td>

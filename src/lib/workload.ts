@@ -43,11 +43,37 @@ export function workingDays(month: string, h: Set<string>) {
   return n;
 }
 
+/**
+ * England & Wales bank holidays worked out for a year (gov.uk only lists about a year ahead): New Year, Good Friday,
+ * Easter Monday, first and last Monday of May, last Monday of August, Christmas and Boxing Day, moved off weekends.
+ * One-off extra days (coronations and the like) can't be known in advance.
+ */
+export function englandBankHolidays(y: number) {
+  const D = (m: number, d: number) => new Date(Date.UTC(y, m, d));
+  const add = (d: Date, n: number) => new Date(d.getTime() + n * 86400000);
+  const out: Date[] = [];
+  const ny = D(0, 1); out.push(ny.getUTCDay() === 6 ? add(ny, 2) : ny.getUTCDay() === 0 ? add(ny, 1) : ny);
+  // Easter Sunday (anonymous Gregorian algorithm)
+  const a = y % 19, b = Math.floor(y / 100), c = y % 100, d = Math.floor(b / 4), e = b % 4, f = Math.floor((b + 8) / 25), g = Math.floor((b - f + 1) / 3);
+  const h = (19 * a + b - d - g + 15) % 30, i = Math.floor(c / 4), k = c % 4, l = (32 + 2 * e + 2 * i - h - k) % 7, m = Math.floor((a + 11 * h + 22 * l) / 451);
+  const easter = D(Math.floor((h + l - 7 * m + 114) / 31) - 1, ((h + l - 7 * m + 114) % 31) + 1);
+  out.push(add(easter, -2), add(easter, 1));
+  const firstMon = (mo: number) => { const x = D(mo, 1); return add(x, (8 - x.getUTCDay()) % 7); };
+  const lastMon = (mo: number) => { const x = D(mo + 1, 0); return add(x, -((x.getUTCDay() + 6) % 7)); };
+  out.push(firstMon(4), lastMon(4), lastMon(7));
+  const xmas = D(11, 25), dow = xmas.getUTCDay();
+  if (dow === 5) out.push(xmas, add(xmas, 3)); else if (dow === 6) out.push(add(xmas, 2), add(xmas, 3)); else if (dow === 0) out.push(add(xmas, 1), add(xmas, 2)); else out.push(xmas, add(xmas, 1));
+  return out.map(iso);
+}
+
 export async function loadWorkload(db: SupabaseClient, start: string, n = 13): Promise<Workload> {
   const months = monthList(start, n);
   const end = monthList(months[n - 1], 2)[1];
   const idx = (m: string) => months.indexOf(`${m.slice(0, 7)}-01`);
-  const h = await loadHolidays();
+  const h = new Set(await loadHolidays());
+  // years past the end of the gov.uk list: worked out
+  for (const y of new Set(months.map((x) => Number(x.slice(0, 4)))))
+    if (![...h].some((d) => d.startsWith(`${y}-`))) englandBankHolidays(y).forEach((d) => h.add(d));
   const working = months.map((m) => workingDays(m, h));
 
   const [{ data: projects }, { data: absences }, { data: diary }] = await Promise.all([
