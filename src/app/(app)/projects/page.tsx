@@ -29,8 +29,8 @@ export default async function Projects({ searchParams }: { searchParams: Promise
   // agreed days from each job's cost schedule (the hand-typed figure only when there isn't one)
   const planDays = new Map<string, number>();
   const ids = (rows ?? []).map((p) => p.id as string);
-  for (let i = 0; i < ids.length; i += 15) {
-    const { data: pm } = await db.from("project_planned_months").select("project_id,building,me").in("project_id", ids.slice(i, i + 15));
+  for (let i = 0; i < ids.length; i += 10) {
+    const { data: pm } = await db.from("project_planned_months").select("project_id,building,me").in("project_id", ids.slice(i, i + 10));
     for (const r of pm ?? []) planDays.set(r.project_id, (planDays.get(r.project_id) ?? 0) + Number(r.building) + Number(r.me));
   }
   const n = (s: string) => (counts ?? []).filter((c) => c.stage === s).length;

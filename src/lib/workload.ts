@@ -123,8 +123,9 @@ export async function loadWorkload(db: SupabaseClient, start: string, n = 13): P
   const ids = ps.map((p) => p.id);
   const plans: { project_id: string; month: string; building: number; me: number; building_witness: number; me_witness: number }[] = [];
   const edits: { project_id: string; month: string; kind: Kind; days: number }[] = [];
-  for (let i = 0; i < ids.length; i += 150) {
-    const chunk = ids.slice(i, i + 150);
+  // 20 jobs at a time: a request returns at most 1000 rows, and a job has up to ~26 months in view
+  for (let i = 0; i < ids.length; i += 20) {
+    const chunk = ids.slice(i, i + 20);
     const [{ data: pm }, { data: ov }] = await Promise.all([
       db.from("project_planned_months").select("project_id,month,building,me,building_witness,me_witness").in("project_id", chunk).gte("month", months[0]).lt("month", end),
       db.from("workload_overrides").select("project_id,month,kind,days").in("project_id", chunk).gte("month", months[0]).lt("month", end),
