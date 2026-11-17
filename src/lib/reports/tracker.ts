@@ -133,11 +133,19 @@ export async function buildTracker(db: SupabaseClient, today: string, h: Set<str
   const thisWeek = mondayOf(today);
   const cols = Array.from({ length: weeks }, (_, k) => plus(thisWeek, -7 * (weeks - 1 - k)));
   const from = cols[0], to = plus(thisWeek, 6);
-  const [{ data: projects }, { data: files }, { data: clerks }] = await Promise.all([
+  const [{ data: projects }, { data: clerks }] = await Promise.all([
     db.from("projects").select("id,name,display_name,stage,reporting_frequency,clerk_id,clerk_me_id,reports_elsewhere").in("stage", ["live", "won_preparing", "on_hold"]),
-    db.from("report_files").select("drive_file_id,name,file_type,project_id,kind,monthly,week,report_date,created_time,folder_id").gte("created_time", plus(from, -100)),
     db.from("clerks").select("id,name"),
   ]);
+  // every file since a little before the first week, a page at a time (a select stops at 1,000 rows)
+  type F = { drive_file_id: string; name: string; file_type: string; project_id: string | null; kind: string; monthly: boolean; week: string; report_date: string; created_time: string; folder_id: string };
+  const files: F[] = [];
+  for (let page = 0; ; page++) {
+    const { data } = await db.from("report_files").select("drive_file_id,name,file_type,project_id,kind,monthly,week,report_date,created_time,folder_id")
+      .not("project_id", "is", null).gte("created_time", plus(from, -100)).order("drive_file_id").range(page * 1000, page * 1000 + 999);
+    files.push(...((data ?? []) as F[]));
+    if (!data || data.length < 1000) break;
+  }
   const ps = projects ?? [];
   const pids = ps.map((p) => p.id);
   // diary visits in the period, building and M&E, both sides (chunked: a select stops at 1,000 rows)
@@ -178,7 +186,8 @@ export async function buildTracker(db: SupabaseClient, today: string, h: Set<str
           const sent = inWeek.some((f) => f.file_type === "pdf" || pdfs.has(`${f.folder_id}|${base(f.name)}`));
           return { state: sent ? "sent" : "in", files: got };
         }
-        if (p.reports_elsewhere) return { state: "none", files: [], label: p.reports_elsewhere };
+        // building reports kept elsewhere (FieldView): M&E reports for the same job may still be in Drive (Framwellgate)
+        if (p.reports_elsewhere && kind === "building") return { state: "none", files: [], label: p.reports_elsewhere };
         if (p.stage === "on_hold") return { state: "hold", files: [] };
         const weekVisits = v.filter((x) => x.visit_date >= w && x.visit_date <= plus(w, 6)).map((x) => x.visit_date).sort();
         // the diary for that month says nothing about this job: fall back on its reporting frequency (weekly only)
@@ -195,7 +204,7 @@ export async function buildTracker(db: SupabaseClient, today: string, h: Set<str
       const firstSeen = [...mine.map((f) => f.week as string), ...v.map((x) => mondayOf(x.visit_date))].sort()[0];
       if (firstSeen) cols.forEach((w, k) => { if (w < firstSeen && cells[k].state === "missing") cells[k] = { state: "none", files: [] }; });
       else cells.forEach((c, k) => { if (c.state === "missing") cells[k] = { state: "none", files: [] }; });
-      rows.push({ key: `${p.id}:${kind}`, projectId: p.id, name: kind === "me" ? `${name} M&E` : name, kind, clerk: clerkId ? clerkName.get(clerkId) ?? null : null, clerkId, elsewhere: p.reports_elsewhere ?? null, frequency: p.reporting_frequency ?? null, cells });
+      rows.push({ key: `${p.id}:${kind}`, projectId: p.id, name: kind === "me" ? `${name} M&E` : name, kind, clerk: clerkId ? clerkName.get(clerkId) ?? null : null, clerkId, elsewhere: kind === "building" ? p.reports_elsewhere ?? null : null, frequency: p.reporting_frequency ?? null, cells });
     }
     // monthly reports: a job that's had one in the last few months is expected to send one for each month, within the
     // first week of the next; shown in the week it came in (or was due)

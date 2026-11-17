@@ -34,7 +34,15 @@ function findDate(s) {
 }
 /** The date written in a report's file name, as YYYY-MM-DD, or null (for the report tracker). */
 export function dateInName(name) {
-  return findDate(base(name))?.iso ?? null;
+  // the last visit when a name gives a range ("93 Hewett Academy 02 10 26.-05 10 26 - 08 10 26"): the latest date in it
+  let rest = base(name), latest = null;
+  for (let k = 0; k < 6; k++) {
+    const d = findDate(rest);
+    if (!d) break;
+    if (!latest || d.iso > latest) latest = d.iso;
+    rest = rest.slice(0, d.at) + " ".repeat(d.len) + rest.slice(d.at + d.len);
+  }
+  return latest;
 }
 const ord = (d) => (d % 10 === 1 && d !== 11 ? "st" : d % 10 === 2 && d !== 12 ? "nd" : d % 10 === 3 && d !== 13 ? "rd" : "th");
 function writeDate(iso, f) {
