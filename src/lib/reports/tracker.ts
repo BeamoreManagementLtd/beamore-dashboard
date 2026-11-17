@@ -51,6 +51,46 @@ export function folderPlacer(g: Drive, projects: { id: string; name: string; dia
   };
 }
 
+/**
+ * Chasing missing reports (Ronan, 17 Nov 2026): once a report is missing, the clerk gets one friendly email from Ronan's
+ * Gmail listing what's missing (each missing report is only ever mentioned once). Only from the last three weeks, only
+ * when chasing is switched on (report_settings.chase_missing). Each one is kept on "Emails to send" as a record.
+ */
+export async function chaseMissing(admin: SupabaseClient, today: string, h: Set<string>) {
+  const { data: s } = await admin.from("report_settings").select("chase_missing,clerk_days").eq("id", 1).single();
+  if (!s?.chase_missing) return 0;
+  const tr = await buildTracker(admin, today, h, 4, s.clerk_days ?? 2);
+  const { data: done } = await admin.from("email_outbox").select("ref").eq("kind", "report-missing");
+  const already = new Set((done ?? []).map((d) => d.ref));
+  const byClerk = new Map<string, { ref: string; text: string; projectId: string }[]>();
+  for (const m of tr.missing) {
+    const ref = `${m.r.key}:${m.week}`;
+    if (already.has(ref) || !m.r.clerkId || m.week < plus(today, -21)) continue;
+    const what = m.r.kind === "monthly" ? `the monthly report for ${m.r.name.replace(/ monthly$/, "")}` : `${m.r.name}, week of ${new Date(`${m.week}T00:00:00Z`).toLocaleDateString("en-GB", { day: "numeric", month: "long", timeZone: "UTC" })}`;
+    byClerk.set(m.r.clerkId, [...(byClerk.get(m.r.clerkId) ?? []), { ref, text: what, projectId: m.r.projectId }]);
+  }
+  const { driveClient } = await import("@/lib/google");
+  const { queueEmail } = await import("@/lib/outbox");
+  const g = await driveClient(admin);
+  let sent = 0;
+  for (const [clerkId, items] of byClerk) {
+    const { data: c } = await admin.from("clerks").select("name,email,active").eq("id", clerkId).single();
+    if (!c?.email || !c.active) continue;
+    const one = items.length === 1;
+    const body = [
+      `Hi ${c.name.split(" ")[0]}`,
+      `I can't see ${one ? "a report" : "these reports"} in the project folder${one ? "" : "s"} yet:\n${items.map((i) => `- ${i.text}`).join("\n")}`,
+      `Could you upload ${one ? "it" : "them"} when you get a chance? If ${one ? "it's" : "they're"} already somewhere else, or there wasn't a visit that week, just let me know and I'll update our records.`,
+      `Many thanks\n\nRonan O'Boyle\nBeamore Management Ltd`,
+    ].join("\n\n");
+    const subject = one ? `Report not uploaded yet: ${items[0].text}` : `${items.length} reports not uploaded yet`;
+    await g.sendAutomatic({ to: c.email, subject, body });
+    for (const i of items) await queueEmail(admin, { kind: "report-missing", to: c.email, subject, body, clerkId, projectId: i.projectId, ref: i.ref, status: "sent", note: "Sent automatically" });
+    sent++;
+  }
+  return sent;
+}
+
 /** Records report files (Word or PDF) that have landed in report folders. Returns how many were new. */
 export async function recordReportFiles(admin: SupabaseClient, g: Drive, files: DriveFile[]) {
   if (!files.length) return 0;

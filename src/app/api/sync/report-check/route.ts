@@ -1,6 +1,8 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createServiceClient } from "@/lib/supabase/server";
 import { scanReports, checkWaiting } from "@/lib/reports/pipeline";
+import { chaseMissing } from "@/lib/reports/tracker";
+import { loadHolidays } from "@/lib/reports/days";
 
 export const maxDuration = 300;
 export const dynamic = "force-dynamic";
@@ -15,7 +17,11 @@ export async function GET(request: NextRequest) {
   try {
     const scan = await scanReports(admin);
     const check = await checkWaiting(admin, 200_000);
-    const message = `${scan.found} new reports, ${scan.done} now have a PDF; ${check.checked} checked${check.failed ? `, ${check.failed} failed` : ""}`;
+    // missing reports chased by email (only if switched on), on weekdays between 9 and 5 UK time
+    const uk = new Date().toLocaleString("en-GB", { timeZone: "Europe/London", hour: "numeric", hour12: false, weekday: "short" });
+    const working = !/Sat|Sun/.test(uk) && +(/\d+/.exec(uk)?.[0] ?? 0) >= 9 && +(/\d+/.exec(uk)?.[0] ?? 0) < 17;
+    const chased = working ? await chaseMissing(admin, new Date().toISOString().slice(0, 10), await loadHolidays()).catch(() => 0) : 0;
+    const message = `${scan.found} new reports, ${scan.done} now have a PDF; ${check.checked} checked${check.failed ? `, ${check.failed} failed` : ""}${chased ? `; ${chased} clerk${chased === 1 ? "" : "s"} chased for missing reports` : ""}`;
     await admin.from("sync_runs").update({ finished_at: new Date().toISOString(), ok: !check.failed, message }).eq("id", run?.id);
     return NextResponse.json({ scan, check });
   } catch (e) {

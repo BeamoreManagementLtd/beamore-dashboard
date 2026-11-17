@@ -127,7 +127,7 @@ export default async function Reports({ searchParams }: { searchParams: Promise<
     <>
       <div className="head">
         <div><h1>Reports</h1><p>Every Word report clerks upload is checked by AI (spelling fixed as tracked changes, photos made smaller, issues noted), then checked and sent from here.</p></div>
-        <div className="row"><form action={refreshReports}><button className="btn">Look for new reports now</button></form><Link className="btn" href="/reports/settings">Standard email &amp; settings</Link></div>
+        <div className="row"><Link className="btn primary" href="/reports/tracker">Report tracker</Link><form action={refreshReports}><button className="btn">Look for new reports now</button></form><Link className="btn" href="/reports/settings">Standard email &amp; settings</Link></div>
       </div>
       {error && <p className="callout bad">{error}</p>}
       {refreshed && <p className="callout info">Looked just now: {refreshed}.</p>}
