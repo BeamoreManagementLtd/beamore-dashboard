@@ -32,6 +32,10 @@ function findDate(s) {
   }
   return null;
 }
+/** The date written in a report's file name, as YYYY-MM-DD, or null (for the report tracker). */
+export function dateInName(name) {
+  return findDate(base(name))?.iso ?? null;
+}
 const ord = (d) => (d % 10 === 1 && d !== 11 ? "st" : d % 10 === 2 && d !== 12 ? "nd" : d % 10 === 3 && d !== 13 ? "rd" : "th");
 function writeDate(iso, f) {
   const [y, m, d] = iso.split("-").map(Number);

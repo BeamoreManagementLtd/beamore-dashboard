@@ -7,6 +7,7 @@ import { projectMatcher } from "@/lib/project-match";
 import { sendReportEmail } from "@/lib/google-user";
 import { readReport, photoStats, shrinkPhotos, trackSpelling, saveReport, setLabelValue, nearText, photoHashes, reusedCount, uncaptioned, unticked, rotatePhoto, fixPhotoShapes, uniformPhotos, healthSafety, issuesTracker, trackerItems, cleanCopy, acceptOwnRevisions, withoutOwnMarks } from "./docx.mjs";
 import { isMonthly, lastDiaryOfMonth, compareTrackers, trackerGapText } from "./monthly";
+import { recordReportFiles } from "./tracker";
 
 /** 0-100: how much the report needed fixing (must-checks count most). Lateness is shown separately. */
 /**
@@ -125,6 +126,9 @@ export async function scanReports(admin: SupabaseClient) {
     listAll(g, `(mimeType='${DOCX}' or mimeType='application/msword') and trashed=false and (modifiedTime > '${since}' or createdTime > '${since}')`),
     listAll(g, `mimeType='application/pdf' and trashed=false and modifiedTime > '${pdfSince}'`),
   ]);
+
+  // every report file that's arrived, Word or PDF, for the report tracker (some clerks upload PDFs only)
+  await recordReportFiles(admin, g, [...docs, ...pdfs.filter((p) => p.createdTime >= since)]).catch(() => 0);
 
   // folders: report folder → project folder → Schools/Others
   const folders = new Map<string, Folder | null>();
