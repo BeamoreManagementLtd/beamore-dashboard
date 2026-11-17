@@ -9,7 +9,8 @@ import { feedbackEmail, type FeedbackReport } from "./feedback-email";
  * (it never goes from Ronan's own address instead).
  */
 export async function notifyAiFeedback(admin: SupabaseClient) {
-  const { data: clerks } = await admin.from("clerks").select("id,name,email,active").eq("ai_feedback", true);
+  // only clerks who chose the emails as well as the feedback (Ronan, 17 Nov 2026: the emails are their own option)
+  const { data: clerks } = await admin.from("clerks").select("id,name,email,active").eq("ai_feedback", true).eq("ai_feedback_email", true);
   const on = (clerks ?? []).filter((c) => c.email && c.active);
   if (!on.length) return { sent: 0, waiting: false };
   const { data: reps } = await admin.from("reports").select("id,clerk_id,file_name,score,clerk_points,fixes,projects(name,display_name)")

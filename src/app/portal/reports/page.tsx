@@ -15,7 +15,7 @@ export default async function YourReports() {
   const me = await requirePortalUser();
   if (!me.clerk) return <section className="card"><h1>Your reports</h1><p className="muted">Clerks see their reports here.</p></section>;
   const db = createServiceClient();
-  const { data: c } = await db.from("clerks").select("ai_feedback").eq("id", me.clerk.id).single();
+  const { data: c } = await db.from("clerks").select("ai_feedback,ai_feedback_email").eq("id", me.clerk.id).single();
   const on = !!c?.ai_feedback;
   const { data: reps } = on
     ? await db.from("reports").select("id,file_name,visit_date,uploaded_at,status,report_number,score,projects(name,display_name)")
@@ -26,7 +26,7 @@ export default async function YourReports() {
       <section className="card">
         <h1>Your reports</h1>
         <AiNote />
-        <AiSwitch on={on} viewingAs={me.viewingAs} />
+        <AiSwitch on={on} email={!!c?.ai_feedback_email} viewingAs={me.viewingAs} />
       </section>
       {on && (
         <ScoreGraph rows={(reps ?? []).filter((r) => r.score !== null && r.score !== undefined)
