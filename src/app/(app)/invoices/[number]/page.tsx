@@ -62,8 +62,12 @@ export default async function InvoiceLog({ params, searchParams }: { params: Pro
   const nextChase = (last: string, typed: string | null) => { const w = new Date(Date.parse(last) + 7 * 864e5).toISOString().slice(0, 10); return typed && typed > w ? typed : w; };
   const lastOut = all.find((e) => e.kind === "Email sent" || (e.source === "team" && e.kind !== "Note"));
   const t = today();
+  // replied since they wrote: it's their move, whatever the stored status says (the next email sync updates it too)
+  const repliedSince = !!lastOut && !!lastIn && lastOut.happened_at > lastIn.happened_at;
   const banner =
-    cs?.status === "our_move" && lastIn?.kind === "Email bounced"
+    cs?.status === "our_move" && repliedSince
+      ? { tone: "info", title: "Waiting on them.", text: `You replied on ${fd(lastOut!.happened_at)}; next chase ${fd(nextChase(lastOut!.happened_at, cs.next_action_due))} (weekly).` }
+    : cs?.status === "our_move" && lastIn?.kind === "Email bounced"
       ? { tone: "bad", title: "Ball is in our court.", text: `Our email bounced on ${fd(lastIn.happened_at)}: resend it to the right person.` }
     : cs?.status === "our_move"
       ? { tone: "bad", title: "Ball is in our court.", text: lastIn ? `${lastIn.who ?? "The client"} emailed on ${fd(lastIn.happened_at)} and nobody has replied yet.` : "We owe the client a reply." }

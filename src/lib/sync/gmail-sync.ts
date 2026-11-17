@@ -81,6 +81,15 @@ export async function syncGmail(admin: SupabaseClient) {
             moved++;
           }
         }
+        // and back: we've replied since they wrote (Ronan, 17 Nov 2026: WSP-141 still said "ball in our court" after his reply)
+        if (lastOut && lastOut > lastIn) {
+          const { data: cs } = await admin.from("chase_state").select("status,updated_at").eq("invoice_id", inv.id).maybeSingle();
+          if (cs?.status === "our_move") {
+            await admin.from("chase_state").update({ status: "waiting", with_whom: "Client", updated_at: new Date().toISOString() }).eq("invoice_id", inv.id);
+            await admin.from("chase_events").insert({ invoice_id: inv.id, happened_at: new Date().toISOString(), source: "gmail", kind: "Status changed", who: "Dashboard", body: "We replied: waiting on them" });
+            moved++;
+          }
+        }
       }));
     }
     const msg = `${searched} outstanding invoices searched in Gmail, ${added} new emails added to timelines, ${moved} moved to "We owe a reply"`;
