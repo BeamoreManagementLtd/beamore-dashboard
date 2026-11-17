@@ -137,7 +137,26 @@ export async function composeInfoRequest(admin: SupabaseClient, projectId: strin
     const theirs = [...t.messages].reverse().find((m) => !/beamore\.co\.uk/i.test(h(m, "From")));
     if (theirs) { to = h(theirs, "Reply-To") || h(theirs, "From"); threadId = reply.note; inReplyTo = h(theirs, "Message-ID"); subject = `Re: ${h(theirs, "Subject").replace(/^re:\s*/i, "")}`; }
   }
-  if (!to) to = ((contacts?.[0]?.to_emails as string[] | undefined) ?? []).join(", ");
+  // otherwise (Ronan, 17 Nov 2026: info requests were going to accounts payable): the report list, then the last person
+  // outside Beamore who emailed about the job (replying in that thread), never an invoicing / accounts address
+  const AP = /invoic|payable|purchase\s*ledger|ledger|accounts|finance|credit\s*control/i;
+  if (!to) {
+    const { data: rl } = await admin.from("projects").select("report_to").eq("id", projectId).single();
+    to = String(rl?.report_to ?? "").split(/[;,]\s*/).filter((e) => e.includes("@") && !AP.test(e)).join(", ");
+  }
+  if (!to) {
+    const found = await g.gmail<{ messages?: { id: string; threadId: string }[] }>("messages", { q: `"${p.name}" newer_than:1y`, maxResults: "15" }).catch(() => ({ messages: [] as { id: string; threadId: string }[] }));
+    for (const m of found.messages ?? []) {
+      const msg = await g.gmail<{ threadId: string; payload: { headers: { name: string; value: string }[] } }>(`messages/${m.id}`, { format: "metadata", metadataHeaders: ["From", "Reply-To", "Message-ID", "Subject"] }).catch(() => null);
+      if (!msg) continue;
+      const h = (n: string) => msg.payload.headers.find((x) => x.name.toLowerCase() === n.toLowerCase())?.value ?? "";
+      const from = h("Reply-To") || h("From");
+      if (/beamore\.co\.uk/i.test(from) || AP.test(from) || /automatic reply|out of office|undeliverable/i.test(h("Subject")) || /no-?reply/i.test(from)) continue;
+      to = from; threadId = msg.threadId; inReplyTo = h("Message-ID"); subject = `Re: ${h("Subject").replace(/^re:\s*/i, "")}`;
+      break;
+    }
+  }
+  void contacts; // the invoice contacts are for invoices only
   const list = (items ?? []).map((i) => `- ${i.item}`).join("\n") || "- (add the items needed)";
   const chasing = (items ?? []).some((i) => i.requested_on);
   // Ronan's wording (16 Nov 2026)
