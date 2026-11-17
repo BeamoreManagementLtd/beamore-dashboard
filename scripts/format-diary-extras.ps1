@@ -45,9 +45,12 @@ try {
       $ws.Range("AA$($r):AA$end").ClearContents() | Out-Null
       $ws.Range("AA$r").Value2 = 'Comments'
       $ws.Range("AA$($r + 1):AA$($gross - 1)").HorizontalAlignment = -4131; $ws.Range("AA$($r + 1):AA$($gross - 1)").NumberFormat = '@'
+      # its own right-hand line, and the closing line above Gross like the other columns
+      $ws.Range("AA$($r):AA$($gross - 1)").Borders.Item(10).LineStyle = 1; $ws.Range("AA$($r):AA$($gross - 1)").Borders.Item(10).Weight = 2
+      $ws.Range("AA$($gross - 1)").Borders.Item(9).LineStyle = 1; $ws.Range("AA$($gross - 1)").Borders.Item(9).Weight = $ws.Range("Z$($gross - 1)").Borders.Item(9).Weight
       # beside Gross / Vat / Total: no lines and no fill (the left edge is the Totals column's own line, left as it is)
       $g = $ws.Range("AA$($gross):AA$end")
-      foreach ($e in 8, 9, 10, 11, 12) { $g.Borders.Item($e).LineStyle = -4142 }
+      foreach ($e in 9, 10, 11, 12) { $g.Borders.Item($e).LineStyle = -4142 }
       $g.Interior.Pattern = -4142
       $tables++
     }
