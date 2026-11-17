@@ -591,8 +591,25 @@ export async function approveReport(admin: SupabaseClient, reportId: string, who
 export async function pdfQueue(admin: SupabaseClient) {
   // the checked copy is in "Checked (dashboard)" inside the report folder; the PDF goes in the report folder itself
   // checked in place (from 16 Nov 2026): the Word file is in the report folder itself ("." keeps the helper's path joining)
-  const { data } = await admin.from("reports").select("id,main_folder,project_folder_name,folder_name,checked_name,pdf_name,checked_file_id,drive_file_id").eq("status", "approved").is("pdf_made_at", null).not("pdf_requested_at", "is", null).lte("pdf_requested_at", new Date().toISOString()).order("pdf_requested_at").limit(10);
-  return (data ?? []).map((r) => ({ id: r.id, main_folder: r.main_folder, project_folder: r.project_folder_name, report_folder: r.folder_name, checked_folder: r.checked_file_id === r.drive_file_id ? "." : CHECKED_FOLDER, file_name: r.checked_name, pdf_name: r.pdf_name }));
+  const { data } = await admin.from("reports").select("id,main_folder,project_folder_name,folder_name,checked_name,pdf_name,checked_file_id,drive_file_id,file_name").eq("status", "approved").is("pdf_made_at", null).not("pdf_requested_at", "is", null).lte("pdf_requested_at", new Date().toISOString()).order("pdf_requested_at").limit(10);
+  // checked in place and renamed since (Anél renamed Preece House "69 - ..." to "74 - ..." before approving, 17 Nov 2026,
+  // and the helper looked for the old name for hours): the file's name now in Drive, and the PDF named to match
+  const g = (data ?? []).some((r) => r.checked_file_id === r.drive_file_id) ? await driveClient(admin).catch(() => null) : null;
+  const out = [];
+  for (const r of data ?? []) {
+    let name = r.checked_name as string, pdf = r.pdf_name as string | null;
+    if (g && r.checked_file_id === r.drive_file_id) {
+      const now = await g.json<{ name?: string }>(`files/${r.drive_file_id}`, { fields: "name", supportsAllDrives: "true" }).then((f) => f.name ?? null).catch(() => null);
+      if (now && now !== name) {
+        const oldBase = name.replace(/\.docx?$/i, "");
+        if (!pdf || pdf.replace(/\.pdf$/i, "") === oldBase) pdf = `${now.replace(/\.docx?$/i, "")}.pdf`;
+        name = now;
+        await admin.from("reports").update({ checked_name: name, file_name: name, pdf_name: pdf }).eq("id", r.id);
+      }
+    }
+    out.push({ id: r.id, main_folder: r.main_folder, project_folder: r.project_folder_name, report_folder: r.folder_name, checked_folder: r.checked_file_id === r.drive_file_id ? "." : CHECKED_FOLDER, file_name: name, pdf_name: pdf });
+  }
+  return out;
 }
 
 /** The helper has saved the PDF (or couldn't): send it as soon as it's in Drive. */
