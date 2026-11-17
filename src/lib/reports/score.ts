@@ -45,13 +45,16 @@ export function scoreParts(x: In): ScorePart[] {
 
   // photos: enough of them (fresh ones), the same size, none stretched or sideways, big and sharp enough
   const p = x.photos, fresh = Math.max(0, p.count - p.reused);
+  // (Ronan, 17 Nov 2026, after Damian's 276-photo report scored 4/10: "don't take marks off for having lots of photos;
+  // take them off a little bit for irregular sizes"): plenty of photos is never a fault; mixed sizes cost 1 mark;
+  // stretched photos cost nothing (the check straightens them); small or low-detail photos count as a share of all of them
   const enough = p.expected ? Math.min(1, fresh / p.expected) * 4 : 4;
-  const same = p.mixed ? 0 : 2;
-  const shape = photoShapeMark(p.stretched);
-  const clear = Math.max(0, 2 - 0.25 * (p.small + p.blurry));
+  const same = p.mixed ? 1 : 2;
+  const shape = 2;
+  const clear = r1(2 * (1 - Math.min(1, ((p.small + p.blurry) / Math.max(1, p.count)) * 4)));
   const photoNotes = [
     p.expected ? `${p.count} photo${p.count === 1 ? "" : "s"}${p.reused ? ` (${p.reused} reused)` : ""} against ${p.expected} expected` : `${p.count} photos`,
-    p.mixed ? "different sizes" : "", p.stretched ? `${p.stretched} stretched` : "", p.sideways ? `${p.sideways} may be sideways (not marked down)` : "",
+    p.mixed ? "different sizes" : "", p.stretched ? `${p.stretched} stretched (straightened, not marked down)` : "", p.sideways ? `${p.sideways} may be sideways (not marked down)` : "",
     p.small ? `${p.small} too small` : "", p.blurry ? `${p.blurry} low detail` : "",
   ].filter(Boolean);
   const photoTips = [

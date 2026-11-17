@@ -392,6 +392,20 @@ export async function checkOne(admin: SupabaseClient, id: string) {
   else if (!early && hsThin.length >= 3) extra.push({ severity: "low", kind: "other", text: `Health and safety: only "N/A"/"none" for ${hsThin.map((h) => h.label).join(", ")}`, p: null });
   // the issues tracker: no photos in it, every item red/orange/green, closed items dated, green and explained
   const trk = issuesTracker(r);
+  // the tracker kept as its own spreadsheet or PDF beside the report (Ronan, 17 Nov 2026: Damian's Excel tracker), updated
+  // in the last three weeks: it counts as the report's tracker (its contents aren't checked)
+  let trackerFile: string | null = null;
+  if (!trk.tables) {
+    try {
+      const since = new Date(Date.now() - 21 * 864e5).toISOString();
+      const tf = await g.json<{ files: { name: string }[] }>("files", { q: `'${rep.folder_id}' in parents and trashed = false and modifiedTime > '${since}' and (name contains 'racker' or name contains 'efect' or name contains 'ssues log') and (mimeType = 'application/pdf' or mimeType contains 'spreadsheet' or mimeType contains 'excel')`, fields: "files(name)", pageSize: "5", supportsAllDrives: "true", includeItemsFromAllDrives: "true" });
+      trackerFile = tf.files[0]?.name ?? null;
+    } catch { trackerFile = null; }
+    if (trackerFile) {
+      if (ai.standards) (ai.standards as Record<string, boolean>).tracker = true;
+      ai.issues = ai.issues.filter((i) => !/\b(no|missing|without (a|an))\b.{0,30}\b(issues?|defects?) (tracker|log)\b/i.test(i.text));
+    }
+  }
   const nums = (a: string[]) => `${a.slice(0, 8).join(", ")}${a.length > 8 ? ` and ${a.length - 8} more` : ""}`;
   const trkProblems = [
     trk.photos ? `${trk.photos} photo${trk.photos === 1 ? "" : "s"} in the tracker (it should just record the issue and which report it's in)` : "",
@@ -464,7 +478,7 @@ export async function checkOne(admin: SupabaseClient, id: string) {
     spelling: ai.spelling.length, spellingExamples: ai.spelling.slice(0, 4).map((s) => `"${s.find}" → "${s.replace}"`), words,
     hs: early ? null : hs, programme: prog ?? null, programmeGaps: progGaps.length, programmeTips: progGaps, standards: ai.standards ?? null,
     standardsMissed: STANDARD_KEYS.filter((k) => ai.standards?.[k] === false).map((k) => STANDARDS[k].label),
-    tracker: trk.tables ? trkProblems.length : null, trackerProblems: trkProblems, trackerExpected: !early, renamed: !!nameFixed, renamedTo: nameFixed,
+    tracker: trk.tables ? trkProblems.length : trackerFile ? 0 : null, trackerProblems: trkProblems, trackerExpected: !early, renamed: !!nameFixed, renamedTo: nameFixed,
   });
   await admin.from("reports").update({
     status: "ready", ai_summary: ai.summary, issues, spelling_fixed: spelt.applied,
