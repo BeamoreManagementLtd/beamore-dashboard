@@ -108,7 +108,7 @@ export default async function ReportTracker({ searchParams }: { searchParams: Pr
             <thead><tr><th>Job</th><th>Clerk</th>{tr.cols.map((w) => <th key={w} style={{ textAlign: "center", fontWeight: 400 }} className="small">{short(w)}</th>)}</tr></thead>
             <tbody>{rows.map((r) => (
               <tr key={r.key}>
-                <td className="small" style={{ whiteSpace: "nowrap" }}><Link href={`/projects/${r.projectId}`}>{r.name}</Link>{r.elsewhere ? <span className="muted"> · in {r.elsewhere}</span> : null}</td>
+                <td className="small" style={{ whiteSpace: "nowrap" }}><Link href={`/projects/${r.projectId}`}>{r.name}</Link>{r.elsewhere ? <span className="muted"> · {/^no /i.test(r.elsewhere) ? r.elsewhere : `in ${r.elsewhere}`}</span> : null}</td>
                 <td className="small muted" style={{ whiteSpace: "nowrap" }}>{r.clerk ?? ""}</td>
                 {r.cells.map((c, k) => {
                   const s = STYLE[c.state];
