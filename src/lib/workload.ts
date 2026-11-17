@@ -12,6 +12,12 @@ export type WProject = {
   id: string; number: number | null; name: string; stage: string;
   possible: boolean;               // a proposal that's been sent, not yet won
   days: number[]; witness: number[]; edited: boolean[];
+  agreed?: string;                 // work agreed verbally (workload_agreed id): not from a cost schedule
+  projectId?: string | null;       // for an agreed line, the job it's on (if it's on the dashboard)
+};
+export type Agreed = {
+  id: string; clerkId: string; clerk: string; projectId: string | null; job: string; kind: Kind;
+  days: number; per: "week" | "month"; from: string; to: string | null; note: string | null;
 };
 export type WClerk = {
   id: string | null; name: string; daysPerWeek: number;
@@ -22,7 +28,7 @@ export type WClerk = {
   diary: number[];                 // already in the diary
   projects: WProject[];
 };
-export type Workload = { months: string[]; working: number[]; sections: Record<Kind, WClerk[]> };
+export type Workload = { months: string[]; working: number[]; sections: Record<Kind, WClerk[]>; agreed: Agreed[] };
 
 const STAGES = ["sent", "won_arranging", "won_preparing", "live", "on_hold"];
 const iso = (d: Date) => d.toISOString().slice(0, 10);
@@ -66,6 +72,25 @@ export function englandBankHolidays(y: number) {
   return out.map(iso);
 }
 
+/**
+ * Days a piece of agreed work comes to in a month: "per week" is the days times the working weeks it covers that
+ * month (weekdays less bank holidays, over 5); "per month" is the days, cut down for a month it only partly covers.
+ * Rounded to the half day.
+ */
+export function agreedDays(a: { days: number; per: string; date_from: string; date_to: string | null }, month: string, h: Set<string>) {
+  const d = new Date(`${month}T00:00:00Z`), m = d.getUTCMonth();
+  let all = 0, inside = 0;
+  for (; d.getUTCMonth() === m; d.setUTCDate(d.getUTCDate() + 1)) {
+    const s = iso(d);
+    if (d.getUTCDay() % 6 === 0 || h.has(s)) continue;
+    all++;
+    if (s >= a.date_from && (!a.date_to || s <= a.date_to)) inside++;
+  }
+  if (!inside) return 0;
+  const v = a.per === "week" ? (Number(a.days) * inside) / 5 : (Number(a.days) * inside) / all;
+  return Math.max(0.5, Math.round(v * 2) / 2);
+}
+
 export async function loadWorkload(db: SupabaseClient, start: string, n = 13): Promise<Workload> {
   const months = monthList(start, n);
   const end = monthList(months[n - 1], 2)[1];
@@ -76,12 +101,23 @@ export async function loadWorkload(db: SupabaseClient, start: string, n = 13): P
     if (![...h].some((d) => d.startsWith(`${y}-`))) englandBankHolidays(y).forEach((d) => h.add(d));
   const working = months.map((m) => workingDays(m, h));
 
-  const [{ data: projects }, { data: absences }, { data: diary }] = await Promise.all([
+  const [{ data: projects }, { data: absences }, { data: diary }, { data: agreedRows }] = await Promise.all([
     db.from("projects").select("id,number,name,display_name,stage,clerk_id,clerk_me_id").in("stage", STAGES),
     db.from("absences").select("clerk_id,date_from,date_to,part_day,status").neq("status", "cancelled").lte("date_from", end).gte("date_to", months[0]),
     db.rpc("clerk_diary_days", { d_from: months[0], d_to: end }),
+    db.from("workload_agreed").select("id,clerk_id,project_id,label,kind,days,per,date_from,date_to,note,projects(name,display_name,stage)")
+      .lt("date_from", end).or(`date_to.is.null,date_to.gte.${months[0]}`).order("date_from"),
   ]);
   const ps = projects ?? [];
+  type AgreedRow = { id: string; clerk_id: string; project_id: string | null; label: string | null; kind: Kind; days: number; per: string; date_from: string; date_to: string | null; note: string | null; projects: { name: string; display_name: string | null; stage: string } | null };
+  const ag = (agreedRows ?? []) as unknown as AgreedRow[];
+  // months of a job (and building / M&E) covered by agreed work: the cost schedule's days there give way to it
+  const agreedMonths = new Set<string>();
+  const agreedLine = ag.map((a) => {
+    const days = months.map((m) => agreedDays(a, m, h));
+    if (a.project_id) days.forEach((d, i) => { if (d) agreedMonths.add(`${a.project_id}|${a.kind}|${i}`); });
+    return { a, days };
+  });
   const ids = ps.map((p) => p.id);
   const plans: { project_id: string; month: string; building: number; me: number; building_witness: number; me_witness: number }[] = [];
   const edits: { project_id: string; month: string; kind: Kind; days: number }[] = [];
@@ -94,7 +130,7 @@ export async function loadWorkload(db: SupabaseClient, start: string, n = 13): P
     plans.push(...(pm ?? [])); edits.push(...(ov ?? []));
   }
 
-  const clerkIds = [...new Set(ps.flatMap((p) => [p.clerk_id, p.clerk_me_id]).filter(Boolean))] as string[];
+  const clerkIds = [...new Set([...ps.flatMap((p) => [p.clerk_id, p.clerk_me_id]), ...ag.map((a) => a.clerk_id)].filter(Boolean))] as string[];
   const { data: clerks } = clerkIds.length ? await db.from("clerks").select("id,name,days_per_week").in("id", clerkIds) : { data: [] };
   const clerkById = new Map((clerks ?? []).map((c) => [c.id as string, c as { id: string; name: string; days_per_week: number | null }]));
 
@@ -147,6 +183,7 @@ export async function loadWorkload(db: SupabaseClient, start: string, n = 13): P
         witness[i] = days[i] ? r1((witness[i] * Number(e.days)) / days[i]) : 0;
         days[i] = Number(e.days); edited[i] = true;
       }
+      months.forEach((_, i) => { if (agreedMonths.has(`${p.id}|${kind}|${i}`)) { days[i] = 0; witness[i] = 0; } });
       if (!days.some((d) => d > 0) && !edited.some(Boolean)) continue;
       const clerkId = (kind === "me" ? p.clerk_me_id : p.clerk_id) as string | null;
       const c = get(clerkId);
@@ -154,13 +191,26 @@ export async function loadWorkload(db: SupabaseClient, start: string, n = 13): P
       c.projects.push({ id: p.id, number: p.number, name: p.display_name ?? p.name, stage: p.stage, possible, days, witness, edited });
       days.forEach((d, i) => { if (possible) c.possible[i] += d; else c.planned[i] += d; });
     }
+    for (const { a, days } of agreedLine) {
+      if (a.kind !== kind || !days.some((d) => d > 0)) continue;
+      const c = get(a.clerk_id);
+      const name = a.projects ? (a.projects.display_name ?? a.projects.name) : (a.label ?? "Agreed work");
+      c.projects.push({ id: `agreed:${a.id}`, agreed: a.id, projectId: a.project_id, number: null, name, stage: a.projects?.stage ?? "live", possible: false,
+        days, witness: months.map(() => 0), edited: months.map(() => false) });
+      days.forEach((d, i) => { c.planned[i] += d; });
+    }
     const list = [...byClerk.values()];
     for (const c of list) c.projects.sort((a, b) => Number(a.possible) - Number(b.possible) || firstMonth(a.days) - firstMonth(b.days));
     // busiest first (most over their days at any point), "No clerk yet" last
     const pressure = (c: WClerk) => (c.avail ? Math.max(...c.planned.map((p, i) => p - c.avail![i])) : -1e9);
     sections[kind] = list.sort((a, b) => pressure(b) - pressure(a) || a.name.localeCompare(b.name));
   }
-  return { months, working, sections };
+  const agreed: Agreed[] = ag.map((a) => ({
+    id: a.id, clerkId: a.clerk_id, clerk: clerkById.get(a.clerk_id)?.name ?? "?", projectId: a.project_id,
+    job: a.projects ? (a.projects.display_name ?? a.projects.name) : (a.label ?? ""), kind: a.kind,
+    days: Number(a.days), per: a.per as "week" | "month", from: a.date_from, to: a.date_to, note: a.note,
+  }));
+  return { months, working, sections, agreed };
 }
 const firstMonth = (d: number[]) => { const i = d.findIndex((x) => x > 0); return i < 0 ? 99 : i; };
 

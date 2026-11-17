@@ -1,8 +1,12 @@
 "use client";
 import Link from "next/link";
 import { Fragment, useState, useTransition } from "react";
-import type { Kind, WClerk, Workload } from "@/lib/workload";
-import { rereadCostSchedules, setDaysPerWeek, setMonthDays } from "./actions";
+import type { Agreed, Kind, WClerk, Workload } from "@/lib/workload";
+import { addAgreed, removeAgreed, rereadCostSchedules, setDaysPerWeek, setMonthDays } from "./actions";
+
+type Choices = { clerks: { id: string; name: string }[]; jobs: { id: string; name: string }[] };
+const fmtDate = (d: string) => new Date(`${d}T12:00:00Z`).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+const agreedText = (a: Agreed) => `${n1(a.days)} day${a.days === 1 ? "" : "s"} a ${a.per} from ${fmtDate(a.from)}${a.to ? ` to ${fmtDate(a.to)}` : " until further notice"}`;
 
 /** The Workload page (Ronan, 17 Nov 2026). Server work is in src/lib/workload.ts. */
 const COL = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#6250d6", "#e34948", "#3b7d8b", "#a4620a"];
@@ -19,10 +23,11 @@ const quiet = (c: WClerk) => {
 const over = (c: WClerk) => (c.avail ? c.planned.findIndex((p, i) => p > c.avail![i] + 0.01) : -1);
 const tone = (p: number, a: number | null) => (a == null || !p ? "" : p > a + 0.01 ? "bad" : p > a * 0.85 ? "warn" : "good");
 
-export function WorkloadView({ w, lastRead }: { w: Workload; lastRead: string | null }) {
+export function WorkloadView({ w, lastRead, choices, today }: { w: Workload; lastRead: string | null; choices: Choices; today: string }) {
   const [open, setOpen] = useState<Record<Kind, string | null>>({ building: null, me: null });
   const [busy, start] = useTransition();
   const [note, setNote] = useState("");
+  const [adding, setAdding] = useState(false);
   const months = w.months;
 
   const spare = (kind: Kind, i: number, not: string | null) =>
@@ -39,8 +44,10 @@ export function WorkloadView({ w, lastRead }: { w: Workload; lastRead: string | 
         <div className="row" style={{ gap: 8, alignItems: "center" }}>
           <span className="small muted">Cost schedules last read {lastRead ? new Date(lastRead).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", timeZone: "Europe/London" }) : "never"}</span>
           <button className="btn" type="button" disabled={busy} onClick={() => start(async () => { setNote("Reading every project's cost schedule, this can take a minute or two…"); const r = await rereadCostSchedules(); setNote(r.message); })}>{busy ? "Reading…" : "Re-read cost schedules"}</button>
+          <button className="btn primary" type="button" onClick={() => setAdding(!adding)}>{adding ? "Close" : "Add agreed work"}</button>
         </div>
       </div>
+      {adding && <AgreedPanel w={w} choices={choices} today={today} onDone={(m) => { setNote(m); }} />}
       <p className="muted" style={{ marginTop: 6 }}>{mlong(months[0])} to {mlong(months[months.length - 1])}. Days per month from the cost schedule of each job, on whoever is allocated to it, against the working days they have (weekdays less bank holidays and their holidays). Allocate a clerk on a project and their row here changes straight away.</p>
       {note && <p className="callout info small">{note}</p>}
 
@@ -126,6 +133,52 @@ export function WorkloadView({ w, lastRead }: { w: Workload; lastRead: string | 
   );
 }
 
+/** Work agreed verbally: who, which job, so many days a week or a month, from when until when. */
+function AgreedPanel({ w, choices, today, onDone }: { w: Workload; choices: Choices; today: string; onDone: (m: string) => void }) {
+  const [busy, start] = useTransition();
+  const [msg, setMsg] = useState("");
+  const [f, setF] = useState({ clerkId: "", projectId: "", label: "", kind: "building" as Kind, days: "1", per: "week" as "week" | "month", from: today, to: "", note: "" });
+  const set = (k: keyof typeof f) => (e: { target: { value: string } }) => setF({ ...f, [k]: e.target.value });
+  const save = () => start(async () => {
+    const r = await addAgreed({ clerkId: f.clerkId, projectId: f.projectId === "other" ? null : f.projectId || null, label: f.label, kind: f.kind,
+      days: Number(f.days), per: f.per, from: f.from, to: f.to || null, note: f.note });
+    setMsg(r.message);
+    if (r.ok) { onDone(`${r.message}. It's on their row below.`); setF({ ...f, projectId: "", label: "", note: "" }); }
+  });
+  return (
+    <div className="card" style={{ margin: "12px 0", padding: 14 }}>
+      <b>Work agreed by phone or in person</b>
+      <p className="small muted" style={{ margin: "4px 0 10px" }}>For work with no cost schedule, or where what&apos;s been agreed is different from it. It counts on the clerk&apos;s row from the start date, and for those months it takes the place of the job&apos;s cost schedule. If nobody is allocated to the job yet, the clerk is allocated too.</p>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(200px,1fr))", gap: 10, alignItems: "end" }}>
+        <label className="small">Clerk<select value={f.clerkId} onChange={set("clerkId")} style={{ width: "100%" }}><option value="">Choose…</option>{choices.clerks.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select></label>
+        <label className="small">Job<select value={f.projectId} onChange={set("projectId")} style={{ width: "100%" }}><option value="">Choose…</option>{choices.jobs.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}<option value="other">Not a job on the dashboard…</option></select></label>
+        {f.projectId === "other" && <label className="small">What is it<input value={f.label} onChange={set("label")} placeholder="e.g. private job, Smith extension" style={{ width: "100%" }} /></label>}
+        <label className="small">Building or M&amp;E<select value={f.kind} onChange={set("kind")} style={{ width: "100%" }}><option value="building">Building</option><option value="me">M&amp;E</option></select></label>
+        <label className="small">How much<span className="row" style={{ gap: 6 }}><input value={f.days} onChange={set("days")} inputMode="decimal" style={{ width: 60 }} /> days a <select value={f.per} onChange={set("per")}><option value="week">week</option><option value="month">month</option></select></span></label>
+        <label className="small">From<input type="date" value={f.from} onChange={set("from")} style={{ width: "100%" }} /></label>
+        <label className="small">Until (leave empty for until further notice)<input type="date" value={f.to} onChange={set("to")} style={{ width: "100%" }} /></label>
+        <label className="small">Note<input value={f.note} onChange={set("note")} placeholder="e.g. agreed with the client on the phone" style={{ width: "100%" }} /></label>
+        <div><button className="btn primary" type="button" disabled={busy} onClick={save}>{busy ? "Saving…" : "Add"}</button> <span className="small muted">{msg}</span></div>
+      </div>
+      {w.agreed.length > 0 && <>
+        <div className="small" style={{ marginTop: 14, fontWeight: 600 }}>Agreed work on the page now</div>
+        <table className="small" style={{ marginTop: 4 }}>
+          <tbody>
+            {w.agreed.map((a) => (
+              <tr key={a.id}>
+                <td>{a.clerk}</td>
+                <td>{a.projectId ? <Link href={`/projects/${a.projectId}`}>{a.job}</Link> : a.job} <span className="muted">· {a.kind === "me" ? "M&E" : "building"}</span></td>
+                <td>{agreedText(a)}{a.note ? <span className="muted"> · {a.note}</span> : null}</td>
+                <td><button className="btn" type="button" disabled={busy} onClick={() => { if (window.confirm(`Take off ${a.clerk}'s ${a.job} (${agreedText(a)})?`)) start(async () => { const r = await removeAgreed(a.id); setMsg(r.message); }); }}>Remove</button></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </>}
+    </div>
+  );
+}
+
 function Sw({ c, b }: { c: string; b: string }) {
   return <span style={{ display: "inline-block", width: 10, height: 10, borderRadius: 2, background: c, border: `1px solid ${b}`, verticalAlign: -1 }} />;
 }
@@ -166,7 +219,7 @@ function Detail({ c, k, w }: { c: WClerk; k: Kind; w: Workload }) {
       ) : <div className="small muted">Days in cost schedules on jobs with nobody allocated yet. Allocate a clerk on the project page and the days move to them.</div>}
 
       <div className="row small muted" style={{ gap: 12, flexWrap: "wrap" }}>
-        {projects.map((p) => <span key={p.id}><Sw c={colour.get(p.id)!} b={colour.get(p.id)!} /> {p.name}{p.possible ? " (proposal out)" : ""}</span>)}
+        {projects.map((p) => <span key={p.id}><Sw c={colour.get(p.id)!} b={colour.get(p.id)!} /> {p.name}{p.possible ? " (proposal out)" : ""}{p.agreed ? " (agreed)" : ""}</span>)}
         {c.avail && <span><svg width="18" height="8"><line x1="0" x2="18" y1="4" y2="4" stroke="var(--ink)" strokeWidth="1.5" strokeDasharray="4 3" /></svg> Days available</span>}
         {c.diary.some((d) => d > 0) && <span><svg width="10" height="10"><circle cx="5" cy="5" r="4" fill="var(--brand)" /></svg> Already in the diary</span>}
       </div>
@@ -197,12 +250,14 @@ function Detail({ c, k, w }: { c: WClerk; k: Kind; w: Workload }) {
             {projects.map((p) => (
               <tr key={p.id}>
                 <td style={{ width: 190, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", position: "sticky", left: 0, zIndex: 1, background: "var(--surface-2)" }} title={p.name}>
-                  <Sw c={colour.get(p.id)!} b={colour.get(p.id)!} /> <Link href={`/projects/${p.id}`}>{p.name}</Link>
+                  <Sw c={colour.get(p.id)!} b={colour.get(p.id)!} /> {p.agreed ? (p.projectId ? <Link href={`/projects/${p.projectId}`}>{p.name}</Link> : p.name) : <Link href={`/projects/${p.id}`}>{p.name}</Link>}
+                  {p.agreed && <span className="muted"> · agreed</span>}
                   {p.possible && <span className="muted"> · proposal</span>}{p.stage === "on_hold" && <span className="muted"> · on hold</span>}
                 </td>
                 {months.map((m, i) => (
-                  <td key={m} onClick={() => edit(p.id, m, p.days[i])} title={`${p.name}, ${mlong(m)}: ${n1(p.days[i])} days${p.witness[i] ? `, of which ${n1(p.witness[i])} witnessing / snagging` : ""}${p.edited[i] ? " (changed by hand)" : ""}. Click to change.`}
-                    style={{ textAlign: "center", cursor: "pointer", fontVariantNumeric: "tabular-nums", background: p.witness[i] ? "var(--warn-soft)" : undefined, outline: p.edited[i] ? "1.5px dashed var(--link)" : undefined, outlineOffset: -3 }}>
+                  <td key={m} onClick={() => (p.agreed ? setMsg("That's agreed work: change it under Add agreed work at the top") : edit(p.id, m, p.days[i]))}
+                    title={`${p.name}, ${mlong(m)}: ${n1(p.days[i])} days${p.witness[i] ? `, of which ${n1(p.witness[i])} witnessing / snagging` : ""}${p.edited[i] ? " (changed by hand)" : ""}${p.agreed ? " (agreed work)" : ". Click to change."}`}
+                    style={{ textAlign: "center", cursor: "pointer", fontVariantNumeric: "tabular-nums", background: p.witness[i] ? "var(--warn-soft)" : p.agreed && p.days[i] ? "var(--info-soft, var(--surface))" : undefined, outline: p.edited[i] ? "1.5px dashed var(--link)" : undefined, outlineOffset: -3 }}>
                     {p.days[i] ? n1(p.days[i]) : <span className="muted">·</span>}
                   </td>
                 ))}
