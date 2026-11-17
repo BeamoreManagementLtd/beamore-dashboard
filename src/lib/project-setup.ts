@@ -195,15 +195,10 @@ export async function onWon(admin: SupabaseClient, projectId: string) {
     await log(admin, projectId, "Checklist started", `${p.is_dfe ? "DfE" : "Standard"} checklist started when the project was won.${p.is_dfe == null ? " The DfE check hadn't run yet, so this is the standard list; change it if it's a DfE job." : ""}`);
   }
   await attempt("Drive folder", () => ensureProjectFolder(admin, projectId));
-  // the email asking for the project information waits on the "Emails to send" page (Ronan, 16 Nov 2026). It never
-  // thanks them for giving us the job: just asks for the information.
-  await attempt("Info request email", async () => {
-    const e = await composeInfoRequest(admin, projectId);
-    await queueEmail(admin, { kind: "info", to: e.to, subject: e.subject, body: e.body, threadId: e.threadId, inReplyTo: e.inReplyTo, projectId, ref: projectId });
-    const msg = `Email asking for the project information written: it's on Emails to send${e.to ? ` (to ${e.to})` : " (no address found yet: add one there)"}`;
-    await log(admin, projectId, "Info request written", msg);
-    return msg;
-  });
+  // No email asking for the project information when it's won (Ronan, 17 Nov 2026): a job can start months later and the
+  // client won't have it yet. The team writes it from the project page (Email asking for the information) when the job
+  // is about to start.
+  void queueEmail;
   await attempt("Xero tracking", async () => { const r = await setupProjectTracking(admin); if (!r.ok) throw new Error(r.message); return r.message; });
   return out;
 }
