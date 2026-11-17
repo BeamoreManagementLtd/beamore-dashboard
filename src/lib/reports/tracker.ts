@@ -117,7 +117,7 @@ export async function recordReportFiles(admin: SupabaseClient, g: Drive, files: 
     rows.push({
       drive_file_id: f.id, name: f.name, file_type: type, folder_id: at.rf.id, folder_name: at.rf.name.trim(),
       project_folder_id: at.pf.id, project_folder_name: at.pf.name, project_id: at.projectId,
-      kind: /m&e|mep/i.test(at.rf.name) || /\bm&e\b|\bmep\b/i.test(f.name) ? "me" : "building",
+      kind: /m&e|mep/i.test(at.rf.name) || /\bm&e\b|\bmep\b|^\s*me\s?\d/i.test(f.name) ? "me" : "building", // "ME03- CoW Site Diary - Yeovil"
       monthly: isMonthly({ folder_name: at.rf.name, file_name: f.name }), created_time: f.createdTime, report_date: reportDate, week: mondayOf(reportDate),
     });
   }
@@ -179,6 +179,9 @@ export async function buildTracker(db: SupabaseClient, today: string, h: Set<str
       // a row when there's a clerk for it and reports or visits to go on (a building clerk with a weekly frequency counts)
       if (!clerkId && !recent && !v.length) continue;
       if (!recent && !v.length && !(kind === "building" && p.reporting_frequency && p.stage === "live")) continue;
+      // M&E written up in the building report ("plus M&E" in Anél's tracker: Yeovil, Highams Park, Castle Hill...): only
+      // a job that's had its own M&E report lately is expected to have one
+      if (kind === "me" && !mine.some((f) => f.created_time >= plus(from, -60))) continue;
       const cells: Cell[] = cols.map((w) => {
         const inWeek = mine.filter((f) => f.week === w);
         const got = inWeek.map((f) => ({ id: f.drive_file_id as string, name: f.name as string }));
@@ -209,6 +212,10 @@ export async function buildTracker(db: SupabaseClient, today: string, h: Set<str
     // monthly reports: a job that's had one in the last few months is expected to send one for each month, within the
     // first week of the next; shown in the week it came in (or was due)
     const monthlies = fl.filter((f) => f.project_id === p.id && f.monthly);
+    // a job that sends monthly reports: one in at least two of the three months before this one
+    const monthsWith = new Set(monthlies.map((f) => f.created_time.slice(0, 7)));
+    const back = [1, 2, 3].map((m) => { const d = new Date(`${thisWeek}T00:00:00Z`); d.setUTCDate(1); d.setUTCMonth(d.getUTCMonth() - m); return d.toISOString().slice(0, 7); });
+    const regular = back.filter((m) => monthsWith.has(m)).length >= 2;
     if (monthlies.length && p.stage === "live" && !p.reports_elsewhere) {
       const cells: Cell[] = cols.map(() => ({ state: "none", files: [] }));
       for (const f of monthlies) { const k = cols.indexOf(mondayOf(f.created_time.slice(0, 10))); if (k >= 0) cells[k] = { state: "sent", files: [...cells[k].files, { id: f.drive_file_id, name: f.name }], label: "Monthly" }; }
@@ -218,7 +225,7 @@ export async function buildTracker(db: SupabaseClient, today: string, h: Set<str
         const dueOn = addWorkingDays(plus(next, -1), 5, h);
         const got = monthlies.some((f) => f.created_time.slice(0, 10) >= plus(next, -10) && f.created_time.slice(0, 10) <= plus(next, 30));
         const k = cols.indexOf(mondayOf(dueOn));
-        if (got || k < 0 || cells[k].files.length) continue;
+        if (got || k < 0 || cells[k].files.length || !regular) continue;
         cells[k] = today > dueOn ? { state: "missing", files: [], dueOn, overdue: workingDaysBetween(dueOn, today, h), label: "Monthly" } : { state: "due", files: [], dueOn, label: "Monthly" };
       }
       rows.push({ key: `${p.id}:monthly`, projectId: p.id, name: `${name} monthly`, kind: "monthly", clerk: p.clerk_id ? clerkName.get(p.clerk_id) ?? null : null, clerkId: p.clerk_id, elsewhere: null, frequency: "Monthly", cells });
