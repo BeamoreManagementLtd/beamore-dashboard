@@ -119,7 +119,9 @@ export async function scanReports(admin: SupabaseClient) {
   const since = last?.modified_time ? new Date(Date.parse(last.modified_time) - 3600_000).toISOString() : new Date(Date.now() - 21 * 864e5).toISOString();
   const pdfSince = last?.modified_time ? since : new Date(Date.now() - 60 * 864e5).toISOString();
   const [docs, pdfs] = await Promise.all([
-    listAll(g, `mimeType='${DOCX}' and trashed=false and modifiedTime > '${since}'`),
+    // new by when it arrived too: a file copied or moved into Drive keeps an older "modified" date (17 Nov 2026: ten
+    // reports on the old Ready To Check sheet were missed that way); old .doc files are listed so nobody misses them
+    listAll(g, `(mimeType='${DOCX}' or mimeType='application/msword') and trashed=false and (modifiedTime > '${since}' or createdTime > '${since}')`),
     listAll(g, `mimeType='application/pdf' and trashed=false and modifiedTime > '${pdfSince}'`),
   ]);
 
@@ -170,6 +172,8 @@ export async function scanReports(admin: SupabaseClient) {
       project_id: p?.id ?? null, kind, clerk_id: p ? (kind === "me" ? p.clerk_me_id ?? p.clerk_id : p.clerk_id) : null,
       uploaded_at: f.createdTime, modified_at: f.modifiedTime, main_folder: MAIN_FOLDER_NAME[pf.parents?.[0] ?? ""] ?? null,
       checker_id: p?.report_checker_id ?? byFirst((oldQueue ?? []).find((q) => q.project_id === p?.id && q.checker && q.checker !== "Unknown")?.checker),
+      // an old-format Word file can't be checked automatically: it waits for the team to check it by hand
+      ...(/\.doc$/i.test(f.name) ? { status: "failed", error: "Old Word format (.doc): the dashboard can't check it. Open it in Word, check it by hand and save it as .docx (or make the PDF as before)." } : {}),
     });
     found++;
   }
