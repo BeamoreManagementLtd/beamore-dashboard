@@ -147,9 +147,21 @@ export async function scanReports(admin: SupabaseClient) {
     if (f.name.startsWith("~$") || copies.has(f.id)) continue;
     const rf = await folder(f.parents?.[0]);
     if (!rf || !REPORT_FOLDER.test(rf.name.trim())) continue;
-    const pf = await folder(rf.parents?.[0]);
-    if (!pf || !MAIN_FOLDERS.has(pf.parents?.[0] ?? "")) continue;
-    const p = byFolder.get(pf.id) ?? (projects ?? []).find((x) => x.id === match.fromReference(pf.name));
+    const inner = await folder(rf.parents?.[0]);
+    if (!inner) continue;
+    // a job split into phases has one more level: Schools / The Royal School / Project 1 / Diaries (17 Nov 2026)
+    let outer: Folder | null = null;
+    if (!MAIN_FOLDERS.has(inner.parents?.[0] ?? "")) {
+      const o = await folder(inner.parents?.[0]);
+      if (!o || !MAIN_FOLDERS.has(o.parents?.[0] ?? "")) continue;
+      outer = o;
+    }
+    // the job folder as the office PC's path needs it ("The Royal School\Project 1"), its id, and the Schools / Others folder
+    const pf = { id: inner.id, name: outer ? `${outer.name}\\${inner.name}` : inner.name, parents: (outer ?? inner).parents };
+    const phase = outer ? inner.name.replace(/^project\s*/i, "").trim() : "";
+    const p = byFolder.get(inner.id)
+      ?? (projects ?? []).find((x) => x.id === match.fromReference(outer ? `${outer.name} ${phase}` : inner.name))
+      ?? (outer ? (projects ?? []).find((x) => x.id === match.fromReference(`${outer.name} ${inner.name}`)) : undefined);
     const kind = /m&e|mep/i.test(rf.name) ? "me" : "building";
     const { data: existing } = await admin.from("reports").select("id,status,checked_at").eq("drive_file_id", f.id).maybeSingle();
     if (existing) {
