@@ -62,7 +62,7 @@ export async function mailboxConnection(admin: SupabaseClient, email: string) {
   return data as { email: string; connected_at: string } | null;
 }
 /** Sends a plain email from the shared mailbox; null (nothing sent) when it isn't connected. */
-export async function sendFromMailbox(admin: SupabaseClient, mailbox: string, name: string, m: { to: string; subject: string; body: string }) {
+export async function sendFromMailbox(admin: SupabaseClient, mailbox: string, name: string, m: { to: string; subject: string; body: string; html?: string }) {
   const { data: c } = await admin.from("mailbox_google").select("*").eq("email", mailbox).maybeSingle();
   if (!c) return null;
   let access = c.access_token as string | null;
@@ -72,7 +72,15 @@ export async function sendFromMailbox(admin: SupabaseClient, mailbox: string, na
     await admin.from("mailbox_google").update({ access_token: t.access_token, access_expires_at: new Date(Date.now() + (t.expires_in - 60) * 1000).toISOString() }).eq("email", mailbox);
   }
   const CRLF = "\r\n";
-  const mime = [`From: ${enc(name)} <${mailbox}>`, `To: ${m.to}`, `Subject: ${enc(m.subject)}`, "MIME-Version: 1.0", "Content-Type: text/plain; charset=UTF-8", "Content-Transfer-Encoding: base64", "", Buffer.from(m.body).toString("base64").replace(/(.{76})/g, `$1${CRLF}`)].join(CRLF);
+  const b64 = (s: string) => Buffer.from(s).toString("base64").replace(/(.{76})/g, `$1${CRLF}`);
+  const head = [`From: ${enc(name)} <${mailbox}>`, `To: ${m.to}`, `Subject: ${enc(m.subject)}`, "MIME-Version: 1.0"];
+  // with an HTML version (the AI feedback email laid out like the feedback page), the plain text goes alongside it
+  const alt = `alt${Date.now()}`;
+  const mime = m.html
+    ? [...head, `Content-Type: multipart/alternative; boundary="${alt}"`, "",
+      `--${alt}`, "Content-Type: text/plain; charset=UTF-8", "Content-Transfer-Encoding: base64", "", b64(m.body),
+      `--${alt}`, "Content-Type: text/html; charset=UTF-8", "Content-Transfer-Encoding: base64", "", b64(m.html), `--${alt}--`].join(CRLF)
+    : [...head, "Content-Type: text/plain; charset=UTF-8", "Content-Transfer-Encoding: base64", "", b64(m.body)].join(CRLF);
   const res = await fetch("https://gmail.googleapis.com/gmail/v1/users/me/messages/send", { method: "POST", headers: { Authorization: `Bearer ${access}`, "Content-Type": "application/json" }, body: JSON.stringify({ raw: Buffer.from(mime).toString("base64url") }), cache: "no-store" });
   if (!res.ok) throw new Error(`Gmail (${mailbox}) ${res.status}: ${(await res.text()).slice(0, 200)}`);
   return res.json() as Promise<{ id: string }>;
