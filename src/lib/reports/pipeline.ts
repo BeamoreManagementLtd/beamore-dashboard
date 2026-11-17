@@ -306,7 +306,7 @@ export async function checkOne(admin: SupabaseClient, id: string) {
   try {
     const num = /^\s*0*(\d{1,4})(?!\d)/.exec(rep.renamed_from ?? rep.file_name)?.[1];
     if (num) {
-      const near = await g.json<{ files: { id: string; name: string; size?: string; createdTime: string }[] }>("files", { q: `'${rep.folder_id}' in parents and trashed = false and mimeType = 'application/pdf' and name contains 'ppendi'`, fields: "files(id,name,size,createdTime)", orderBy: "createdTime desc", pageSize: "20", supportsAllDrives: "true", includeItemsFromAllDrives: "true" });
+      const near = await g.json<{ files: { id: string; name: string; size?: string; createdTime: string }[] }>("files", { q: `'${rep.folder_id}' in parents and trashed = false and mimeType = 'application/pdf' and name contains 'appendix'`, fields: "files(id,name,size,createdTime)", orderBy: "createdTime desc", pageSize: "20", supportsAllDrives: "true", includeItemsFromAllDrives: "true" });
       const a = near.files.find((f) => /^\s*0*(\d{1,4})(?!\d)/.exec(f.name)?.[1] === num && Number(f.size ?? 0) < 25_000_000);
       if (a) appendix = { name: a.name, pdf: Buffer.from(await g.download(a.id)) };
     }
@@ -385,6 +385,12 @@ export async function checkOne(admin: SupabaseClient, id: string) {
   const hs = healthSafety(r, onDfeForm);
   // the DfE CQM monthly report has a written H&S section rather than the ten rows, so it isn't checked this way
   const cqm = /CQM|Construction Quality\s+Monitoring/i.test(r.paragraphs.slice(0, 40).map((p) => p.text).join(" "));
+  // a job with an end client: a report naming either company is right, so the AI's "client name" point is dropped
+  // (Pepys Court: the AI still raised it after being told, 17 Nov 2026)
+  if (endClient) {
+    const names = [ourClient, endClient].filter(Boolean).map((n) => n!.toLowerCase().replace(/\s*(&|and)\s*/g, " ").split(/\s+/)[0]);
+    ai.issues = ai.issues.filter((i) => !(/\bclient\b/i.test(i.text) && names.some((n) => i.text.toLowerCase().includes(n))));
+  }
   // the ten H&S rows are only looked for in the Word file: with an appendix they may be written there instead
   const early = cqm || !!appendix || Number(/\d+/.exec(ai.report_number ?? "")?.[0] ?? 99) <= 2;
   const hsGone = hs.filter((h) => h.status === "missing" || h.status === "empty"), hsThin = hs.filter((h) => h.status === "thin");
@@ -398,7 +404,7 @@ export async function checkOne(admin: SupabaseClient, id: string) {
   if (!trk.tables) {
     try {
       const since = new Date(Date.now() - 21 * 864e5).toISOString();
-      const tf = await g.json<{ files: { name: string }[] }>("files", { q: `'${rep.folder_id}' in parents and trashed = false and modifiedTime > '${since}' and (name contains 'racker' or name contains 'efect' or name contains 'ssues log') and (mimeType = 'application/pdf' or mimeType contains 'spreadsheet' or mimeType contains 'excel')`, fields: "files(name)", pageSize: "5", supportsAllDrives: "true", includeItemsFromAllDrives: "true" });
+      const tf = await g.json<{ files: { name: string }[] }>("files", { q: `'${rep.folder_id}' in parents and trashed = false and modifiedTime > '${since}' and (name contains 'tracker' or name contains 'defect' or name contains 'defects' or name contains 'issues') and (mimeType = 'application/pdf' or mimeType contains 'spreadsheet' or mimeType contains 'excel')`, fields: "files(name)", pageSize: "5", supportsAllDrives: "true", includeItemsFromAllDrives: "true" });
       trackerFile = tf.files[0]?.name ?? null;
     } catch { trackerFile = null; }
     if (trackerFile) {
