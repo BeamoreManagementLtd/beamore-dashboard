@@ -174,13 +174,14 @@ async function giveFolder(projectId: string, clerkId: string) {
 }
 
 /**
- * A clerk of works allocated to a won job moves it from "Won – arranging clerk" to "Waiting to start" (Ronan,
- * 17 Nov 2026). Only from arranging: a job already waiting, live or on hold keeps its stage.
+ * The building clerk (the CQM lead) allocated to a won job moves it from "Won – arranging clerk" to "Waiting to start"
+ * (Ronan, 17 Nov 2026). An M&E clerk alone doesn't: the job stays on arranging until the building clerk is in place.
+ * Only from arranging: a job already waiting, live or on hold keeps its stage.
  */
 export async function clerkAllocatedStage(db: Awaited<ReturnType<typeof createClient>>, projectId: string) {
   const { data } = await db.from("projects").update({ stage: "won_preparing", stage_changed_at: new Date().toISOString() })
-    .eq("id", projectId).eq("stage", "won_arranging").select("id");
-  if (data?.length) await db.from("project_events").insert({ project_id: projectId, source: "dashboard", kind: "Stage", who: "Dashboard", body: "Clerk allocated: moved to Waiting to start" });
+    .eq("id", projectId).eq("stage", "won_arranging").not("clerk_id", "is", null).select("id");
+  if (data?.length) await db.from("project_events").insert({ project_id: projectId, source: "dashboard", kind: "Stage", who: "Dashboard", body: "Building clerk allocated: moved to Waiting to start" });
   revalidatePath("/projects");
 }
 

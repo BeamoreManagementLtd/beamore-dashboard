@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { requireProfile } from "@/lib/auth";
-import { linkSite, ignoreSite } from "./actions";
+import { linkSite, ignoreSite, setClerk } from "./actions";
 import { createClient } from "@/lib/supabase/server";
 import { fd } from "@/lib/format";
 import { NewProjectForm } from "./new-project-form";
@@ -33,6 +33,10 @@ export default async function Projects({ searchParams }: { searchParams: Promise
     const { data: pm } = await db.from("project_planned_months").select("project_id,building,me").in("project_id", ids.slice(i, i + 10));
     for (const r of pm ?? []) planDays.set(r.project_id, (planDays.get(r.project_id) ?? 0) + Number(r.building) + Number(r.me));
   }
+  // won / live jobs where nobody has said yet whether there's an M&E clerk (Ronan, 17 Nov 2026)
+  const { data: meOpen } = await db.from("projects").select("id,display_name,stage,clerk_me_status,clients(name),clerks!projects_clerk_id_fkey(name)")
+    .in("stage", ["won_arranging", "won_preparing", "live", "on_hold"]).is("clerk_me_id", null)
+    .or("clerk_me_status.is.null,clerk_me_status.eq.finding").order("name");
   const n = (s: string) => (counts ?? []).filter((c) => c.stage === s).length;
   const dd = new Map((diaryDays ?? []).map((d) => [d.project_id as string, d]));
   const month = new Date().toLocaleDateString("en-GB", { month: "long" });
@@ -40,6 +44,28 @@ export default async function Projects({ searchParams }: { searchParams: Promise
   return (
     <>
       <div className="head"><div><h1>Projects</h1><p>From the Cost Proposals Register, the diary and Xero. Money columns are on the director’s view only. <Link href="/projects/dfe">DfE or other: quick check</Link> · <Link href="/projects/requests">Pricing requests</Link> · <Link href="/projects/lists">Email lists: replace someone who has left</Link></p></div></div>
+      {!!meOpen?.length && (
+        <details className="callout warn">
+          <summary>{meOpen.length} won or live job{meOpen.length > 1 ? "s" : ""}: M&amp;E clerk not decided yet</summary>
+          <p className="small">Allocate the M&amp;E clerk on the project page, or say it doesn&rsquo;t need one. A job only moves to Waiting to start when its building clerk (the CQM lead) is in place.</p>
+          <table><tbody>
+            {meOpen.map((p) => (
+              <tr key={p.id}>
+                <td><Link href={`/projects/${p.id}`}><b>{p.display_name}</b></Link><span className="two">{(p.clients as unknown as { name: string } | null)?.name ?? ""}</span></td>
+                <td className="small">{STAGES.find(([k]) => k === p.stage)?.[1]}</td>
+                <td className="small">{(p.clerks as unknown as { name: string } | null)?.name ? `Building: ${(p.clerks as unknown as { name: string }).name}` : <span className="muted">No building clerk yet</span>}</td>
+                <td className="small">{p.clerk_me_status === "finding" ? "Finding an M&E clerk" : ""}</td>
+                <td>
+                  <form action={setClerk.bind(null, p.id)} style={{ display: "inline" }}>
+                    <input type="hidden" name="role" value="me" /><input type="hidden" name="clerk" value="none" />
+                    <button className="btn" title="This job has no M&E clerk">No M&amp;E clerk needed</button>
+                  </form>
+                </td>
+              </tr>
+            ))}
+          </tbody></table>
+        </details>
+      )}
       {!!unmatched?.length && (
         <details className="callout warn">
           <summary>{unmatched.length} Xero invoice reference{unmatched.length > 1 ? "s" : ""} don’t match a project</summary>
