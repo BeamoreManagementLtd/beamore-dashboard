@@ -53,6 +53,16 @@ export async function sendReport(reportId: string, form: FormData) {
   redirect(`/reports?sent=${encodeURIComponent(reportId)}`);
 }
 
+/** Correct a report's visit date by hand (Ronan, 17 Nov 2026); it then isn't replaced by the check. */
+export async function setVisitDate(reportId: string, form: FormData) {
+  await requireProfile();
+  const d = String(form.get("visit_date") ?? "");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return;
+  await createServiceClient().from("reports").update({ visit_date: d, visit_date_source: "manual", updated_at: new Date().toISOString() }).eq("id", reportId);
+  revalidatePath(`/reports/${reportId}`);
+  revalidatePath("/reports");
+}
+
 export async function markDone(reportId: string) {
   const me = await requireProfile();
   await createServiceClient().from("reports").update({ status: "done", done_at: new Date().toISOString(), sent_by: me.id, updated_at: new Date().toISOString() }).eq("id", reportId);

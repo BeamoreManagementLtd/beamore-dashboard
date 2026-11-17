@@ -2,9 +2,10 @@ import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import sharp from "sharp";
 import { driveClient } from "@/lib/google";
+import { visitDateFor } from "./visit-date.mjs";
 import { projectMatcher } from "@/lib/project-match";
 import { sendReportEmail } from "@/lib/google-user";
-import { readReport, photoStats, shrinkPhotos, trackSpelling, saveReport, nearText, photoHashes, reusedCount, uncaptioned, unticked, rotatePhoto, fixPhotoShapes, uniformPhotos, healthSafety, issuesTracker, cleanCopy, acceptOwnRevisions, withoutOwnMarks } from "./docx.mjs";
+import { readReport, photoStats, shrinkPhotos, trackSpelling, saveReport, setLabelValue, nearText, photoHashes, reusedCount, uncaptioned, unticked, rotatePhoto, fixPhotoShapes, uniformPhotos, healthSafety, issuesTracker, cleanCopy, acceptOwnRevisions, withoutOwnMarks } from "./docx.mjs";
 
 /** 0-100: how much the report needed fixing (must-checks count most). Lateness is shown separately. */
 /**
@@ -92,6 +93,8 @@ const MAIN_FOLDER_NAME: Record<string, string> = { "0B5LaG4Rs3CgQd2VIeW5Ya3F3SnM
 const MAIN_FOLDERS = new Set(Object.keys(MAIN_FOLDER_NAME));
 const REPORT_FOLDER = /^(m&e |mep )?(diar(ies|y)|diaires|reports?|monthly reports?|site diar(ies|y))\s*$/i;
 const DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+/** The box in the report for the date it goes to the TA (DfE diaries / site visit reports), most specific first. */
+const TA_DATE_LABELS = ["Date issued to Lead Consultant (TA)", "Date issued to Lead Consultant", "Date issued to TA", "Date issued to the TA", "Date sent to TA", "Issue Date", "Date of issue", "Date issued"];
 const SETTLE_MS = 30 * 60 * 1000;
 const base = (name: string) => name.replace(/\.(docx?|pdf)$/i, "").toLowerCase().replace(/\s*\(\d+\)\s*$/, "").replace(/(\s+copy)+$/, "").replace(/[^a-z0-9]/g, "");
 
@@ -156,8 +159,14 @@ export async function scanReports(admin: SupabaseClient) {
       await admin.from("reports").update({ file_name: f.name, folder_id: rf.id, folder_name: rf.name.trim(), project_folder_id: pf.id, project_folder_name: pf.name, modified_at: f.modifiedTime, ...(changedAfter ? { error: "The report has been changed since it was checked (by the clerk, or in Word here). If the clerk has sent a new version, Check again: the new version is checked, keeping any changes made in Word." } : {}) }).eq("id", existing.id);
       continue;
     }
+    // the visit date from its name, or the diary (replaced by the date written in the report once it's checked)
+    const diary = p ? (await admin.from("diary_visits").select("visit_date,clerk_id,kind").eq("project_id", p.id).gte("visit_date", new Date(Date.parse(f.createdTime) - 60 * 864e5).toISOString().slice(0, 10))).data ?? [] : [];
+    const clerkFor = p ? (kind === "me" ? p.clerk_me_id ?? p.clerk_id : p.clerk_id) : null;
+    const theirs = diary.filter((v) => v.clerk_id === clerkFor || v.kind === (kind === "me" ? "me" : "building"));
+    const vd = visitDateFor({ file_name: f.name, uploaded_at: f.createdTime }, (theirs.length ? theirs : diary).map((v) => v.visit_date as string));
     await admin.from("reports").insert({
       drive_file_id: f.id, file_name: f.name, folder_id: rf.id, folder_name: rf.name.trim(), project_folder_id: pf.id, project_folder_name: pf.name,
+      ...vd,
       project_id: p?.id ?? null, kind, clerk_id: p ? (kind === "me" ? p.clerk_me_id ?? p.clerk_id : p.clerk_id) : null,
       uploaded_at: f.createdTime, modified_at: f.modifiedTime, main_folder: MAIN_FOLDER_NAME[pf.parents?.[0] ?? ""] ?? null,
       checker_id: p?.report_checker_id ?? byFirst((oldQueue ?? []).find((q) => q.project_id === p?.id && q.checker && q.checker !== "Unknown")?.checker),
@@ -408,7 +417,9 @@ export async function checkOne(admin: SupabaseClient, id: string) {
       ...(ai.clerk_points ?? []),
     ].slice(0, 8),
     size_before: raw.length, size_after: out.length, checked_revision: after.headRevisionId, checked_at: new Date().toISOString(),
-    visit_date: ai.visit_date && /^\d{4}-\d{2}-\d{2}$/.test(ai.visit_date) ? ai.visit_date : (nameDate && !Number.isNaN(Date.parse(nameDate)) ? nameDate : null),
+    // the date written in the report wins; otherwise the one already worked out from its name or the diary stays
+    ...(ai.visit_date && /^\d{4}-\d{2}-\d{2}$/.test(ai.visit_date) && rep.visit_date_source !== "manual" ? { visit_date: ai.visit_date, visit_date_source: "report" }
+      : !rep.visit_date && nameDate && !Number.isNaN(Date.parse(nameDate)) ? { visit_date: nameDate, visit_date_source: "name" } : {}),
     report_number: ai.report_number, clerk_name: ai.clerk_name,
     text_snapshot: r.paragraphs.map((x) => x.text).filter((x) => x.trim()).join("\n").slice(0, 20000),
     modified_at: new Date().toISOString(), updated_at: new Date().toISOString(),
@@ -466,9 +477,25 @@ export async function approveReport(admin: SupabaseClient, reportId: string, who
   if (!rep.main_folder) throw new Error("Can't tell where this report is on the office PC; please make the PDF in Word by hand");
   if (!rep.checked_file_id) throw new Error("This report hasn't been checked yet");
   const pdfName = `${String(rep.checked_name ?? rep.file_name).replace(/\.docx?$/i, "")}.pdf`;
+  // the date it goes to the TA (Ronan, 17 Nov 2026): "Date issued to Lead Consultant (TA)" / "Issue Date" in the report
+  // gets today's date, replacing any date already there. The office PC then needs a moment to get that version before
+  // it makes the PDF, so the PDF is asked for 90 seconds later. If the box isn't found, nothing changes.
+  const today = new Date().toLocaleDateString("en-GB", { timeZone: "Europe/London" }); // dd/mm/yyyy
+  let issued: string | null = null, rev: string | null = null;
+  try {
+    const g = await driveClient(admin);
+    const r = await readReport(Buffer.from(await g.download(rep.checked_file_id)));
+    if (setLabelValue(r, TA_DATE_LABELS, today)) {
+      await g.replaceContent(rep.checked_file_id, await saveReport(r), DOCX);
+      rev = (await g.json<{ headRevisionId: string }>(`files/${rep.checked_file_id}`, { fields: "headRevisionId", supportsAllDrives: "true" })).headRevisionId;
+      issued = today.split("/").reverse().join("-");
+    }
+  } catch { /* the report still goes; the date just isn't filled in */ }
   await admin.from("reports").update({
     status: "approved", approved_by: who.id, approved_at: new Date().toISOString(), error: null,
-    pending_email: { ...m, by: who.id, by_name: who.full_name }, pdf_name: pdfName, pdf_requested_at: new Date().toISOString(), pdf_made_at: null,
+    pending_email: { ...m, by: who.id, by_name: who.full_name }, pdf_name: pdfName, pdf_made_at: null,
+    pdf_requested_at: new Date(Date.now() + (issued ? 90_000 : 0)).toISOString(),
+    ...(issued ? { issued_on: issued, ...(rep.checked_file_id === rep.drive_file_id && rev ? { checked_revision: rev } : {}) } : {}),
   }).eq("id", reportId);
 }
 
@@ -476,7 +503,7 @@ export async function approveReport(admin: SupabaseClient, reportId: string, who
 export async function pdfQueue(admin: SupabaseClient) {
   // the checked copy is in "Checked (dashboard)" inside the report folder; the PDF goes in the report folder itself
   // checked in place (from 16 Nov 2026): the Word file is in the report folder itself ("." keeps the helper's path joining)
-  const { data } = await admin.from("reports").select("id,main_folder,project_folder_name,folder_name,checked_name,pdf_name,checked_file_id,drive_file_id").eq("status", "approved").is("pdf_made_at", null).not("pdf_requested_at", "is", null).order("pdf_requested_at").limit(10);
+  const { data } = await admin.from("reports").select("id,main_folder,project_folder_name,folder_name,checked_name,pdf_name,checked_file_id,drive_file_id").eq("status", "approved").is("pdf_made_at", null).not("pdf_requested_at", "is", null).lte("pdf_requested_at", new Date().toISOString()).order("pdf_requested_at").limit(10);
   return (data ?? []).map((r) => ({ id: r.id, main_folder: r.main_folder, project_folder: r.project_folder_name, report_folder: r.folder_name, checked_folder: r.checked_file_id === r.drive_file_id ? "." : CHECKED_FOLDER, file_name: r.checked_name, pdf_name: r.pdf_name }));
 }
 

@@ -8,7 +8,7 @@ import { userConnection } from "@/lib/google-user";
 import { EXAMPLES, PROGRAMME_METHOD, SUMMARY_METHOD } from "@/lib/reports/examples";
 import { STANDARDS, STANDARD_KEYS, tipFor, type StandardsMet } from "@/lib/reports/standards";
 import type { ScorePart } from "@/lib/reports/score";
-import { assignChecker, sendReport, markDone, ignoreReport, checkAgain, sendClerkEmail } from "../actions";
+import { assignChecker, sendReport, markDone, ignoreReport, checkAgain, sendClerkEmail, setVisitDate } from "../actions";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -175,8 +175,14 @@ export default async function ReportPage({ params, searchParams }: { params: Pro
         <section className="panel">
           <h2>Details</h2>
           <table><tbody>
-            <tr><td className="muted small">Visit date</td><td>{fd(r.visit_date)}</td></tr>
+            <tr><td className="muted small">Visit date</td><td>
+              <form action={setVisitDate.bind(null, r.id)} className="row" style={{ gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+                <input type="date" name="visit_date" defaultValue={r.visit_date ?? ""} aria-label="Visit date" />
+                <button className="btn">Save</button>
+                <span className="small muted">{({ report: "read from the report", name: "from the file name", "name+diary": "from the file name and the diary", diary: "the job's last diary visit before the upload", manual: "set by hand", monthly: "monthly report: no visit date" } as Record<string, string>)[r.visit_date_source ?? ""] ?? ""}</span>
+              </form></td></tr>
             <tr><td className="muted small">Uploaded</td><td>{fdt(r.uploaded_at)}</td></tr>
+            {r.issued_on && <tr><td className="muted small">Date issued to TA</td><td>{fd(r.issued_on)} <span className="small muted">put in the report when it was approved</span></td></tr>}
             <tr><td className="muted small">Status</td><td>{r.status}{r.sent_at ? ` · sent ${fdt(r.sent_at)} by ${nameOf(r.sent_by) ?? ""}` : r.done_at ? ` · done ${fdt(r.done_at)}` : ""}</td></tr>
             {r.sent_to && <tr><td className="muted small">Sent to</td><td className="small">{r.sent_to.join(", ")}{r.sent_cc?.length ? ` · cc ${r.sent_cc.join(", ")}` : ""}</td></tr>}
           </tbody></table>

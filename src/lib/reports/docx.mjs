@@ -415,6 +415,65 @@ export function fillBlank(r, label, value) {
   return done;
 }
 
+/**
+ * Sets the value after a label to `value`, replacing whatever is there (Ronan, 17 Nov 2026: "Date issued to Lead
+ * Consultant (TA)" gets the date the report is approved; a date already in the box is taken out). Handles the label and
+ * value in one cell or paragraph ("Issue Date: 02/07/2026") and the value in the next table cell. The first label found
+ * wins. Returns the label it set, or null. Not tracked: the PDF is made from the file straight after.
+ */
+export function setLabelValue(r, labels, value) {
+  const norm = (s) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+  const wants = labels.map(norm);
+  const runs = (px) => [...px.matchAll(/<w:r\b[^>]*>[\s\S]*?<\/w:r>/g)];
+  const runText = (run) => textOf(run);
+  const newRun = (rPr, text) => `<w:r>${rPr}<w:t xml:space="preserve">${esc(text)}</w:t></w:r>`;
+  const spans = paragraphSpans(r.xml);
+  for (const want of wants) {
+    for (const sp of spans) {
+      const px = r.xml.slice(sp.start, sp.end);
+      const t = textOf(px);
+      const colon = t.indexOf(":");
+      if (colon < 0 || norm(t.slice(0, colon)) !== want) continue;
+      // keep the runs up to the colon, drop what follows it, add the value
+      const rs = runs(px);
+      let acc = 0, cut = -1;
+      for (let k = 0; k < rs.length; k++) { const len = runText(rs[k][0]).length; if (acc + len > colon) { cut = k; break; } acc += len; }
+      if (cut < 0) continue;
+      const keep = rs[cut][0];
+      const keepText = runText(keep).slice(0, colon - acc + 1);
+      const labelRPr = /<w:rPr>[\s\S]*?<\/w:rPr>/.exec(keep)?.[0] ?? "";
+      const valueRPr = (rs[cut + 1] && /<w:rPr>[\s\S]*?<\/w:rPr>/.exec(rs[cut + 1][0])?.[0]) ?? labelRPr.replace(/<w:b\/>|<w:bCs\/>/g, "");
+      const head = px.slice(0, rs[cut].index);
+      const tail = px.slice(rs[rs.length - 1].index + rs[rs.length - 1][0].length).replace(/<w:(ins|del)\b[^>]*>\s*<\/w:\1>/g, "");
+      const out = head + newRun(labelRPr, keepText) + newRun(valueRPr, ` ${value}`) + tail;
+      r.xml = r.xml.slice(0, sp.start) + out + r.xml.slice(sp.end);
+      r.spans = paragraphSpans(r.xml);
+      return labels[wants.indexOf(want)];
+    }
+    // the label alone in a cell, the value in the next cell
+    let done = false;
+    r.xml = r.xml.replace(/<w:tr\b[\s\S]*?<\/w:tr>/g, (row) => {
+      if (done) return row;
+      const cells = [...row.matchAll(/<w:tc\b[\s\S]*?<\/w:tc>/g)];
+      for (let k = 0; k + 1 < cells.length; k++) {
+        if (norm(textOf(cells[k][0])) !== want) continue;
+        const cell = cells[k + 1][0];
+        const firstP = /<w:p\b[^>]*>(?:<w:pPr>[\s\S]*?<\/w:pPr>)?/.exec(cell);
+        if (!firstP) continue;
+        const rPr = /<w:rPr>[\s\S]*?<\/w:rPr>/.exec(cell)?.[0] ?? "";
+        // the cell keeps its properties and first paragraph's formatting; its text becomes the value
+        const props = /<w:tcPr>[\s\S]*?<\/w:tcPr>/.exec(cell)?.[0] ?? "";
+        const fresh = `<w:tc>${props}${firstP[0]}${newRun(rPr, value)}</w:p></w:tc>`;
+        done = true;
+        return row.slice(0, cells[k + 1].index) + fresh + row.slice(cells[k + 1].index + cell.length);
+      }
+      return row;
+    });
+    if (done) { r.spans = paragraphSpans(r.xml); return labels[wants.indexOf(want)]; }
+  }
+  return null;
+}
+
 /** Turns a photo the right way up (90, 180 or 270 degrees clockwise) and swaps its shown width and height if needed. */
 export async function rotatePhoto(r, sharp, path, degrees) {
   const buf = await r.zip.file(path).async("nodebuffer");

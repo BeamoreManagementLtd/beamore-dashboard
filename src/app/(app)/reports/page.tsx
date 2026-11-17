@@ -96,6 +96,22 @@ export default async function Reports({ searchParams }: { searchParams: Promise<
     if (r.visit_date) { const d = workingDaysBetween(r.visit_date, r.uploaded_at.slice(0, 10), h); x.days += d; x.timed++; if (d > clerkDays) x.late++; }
     byClerk.set(k, x);
   }
+  // clerks getting their reports in on time, last three months (Ronan, 17 Nov 2026): due clerkDays working days after
+  // the visit; days late = working days past that. Monthly reports have no visit date and don't count.
+  const { data: q3 } = await db.from("reports").select("id,clerk_id,clerk_name,visit_date,uploaded_at,file_name,clerks(name)")
+    .not("visit_date", "is", null).gte("uploaded_at", addDays(t, -92)).order("uploaded_at", { ascending: false });
+  const punctual = new Map<string, { id: string | null; n: number; onTime: number; lateDays: number; worst: number; recentN: number; recentOn: number; lastLate: { file: string; days: number; up: string } | null }>();
+  const monthAgo = addDays(t, -30);
+  for (const r of q3 ?? []) {
+    const k = (r.clerks as unknown as { name?: string } | null)?.name ?? r.clerk_name ?? "Unknown";
+    const x = punctual.get(k) ?? { id: r.clerk_id as string | null, n: 0, onTime: 0, lateDays: 0, worst: 0, recentN: 0, recentOn: 0, lastLate: null };
+    const late = Math.max(0, workingDaysBetween(r.visit_date!, r.uploaded_at.slice(0, 10), h) - clerkDays);
+    x.n++; if (!late) x.onTime++; x.lateDays += late; x.worst = Math.max(x.worst, late);
+    if (r.uploaded_at >= monthAgo) { x.recentN++; if (!late) x.recentOn++; }
+    if (late && !x.lastLate) x.lastLate = { file: r.file_name, days: late, up: r.uploaded_at };
+    punctual.set(k, x);
+  }
+  const punctualRows = [...punctual].filter(([k]) => k !== "Unknown").sort((a, b) => a[1].onTime / a[1].n - b[1].onTime / b[1].n || b[1].lateDays - a[1].lateDays);
   const byChecker = new Map<string, { n: number; days: number; late: number }>();
   for (const r of dm.filter((x) => x.sent_at && x.sent_by)) {
     const k = name(r.sent_by) ?? "?";
@@ -189,6 +205,28 @@ export default async function Reports({ searchParams }: { searchParams: Promise<
           ))}</tbody></table>
         </section>
       )}
+
+      <section className="panel">
+        <h2>Clerks: reports in on time <span className="small muted">last 3 months</span></h2>
+        <p className="small muted">A report is due {clerkDays} working day{clerkDays === 1 ? "" : "s"} after the visit (weekends and bank holidays don&apos;t count). The visit date is the one written in the report, or from its file name, or the diary; monthly reports aren&apos;t counted. Least on time first. Office only.</p>
+        {!punctualRows.length ? <p className="empty">No dated reports yet.</p> : (
+          <table><thead><tr><th>Clerk</th><th className="num">Reports</th><th className="num">On time</th><th className="num" title="Working days late, averaged over the late ones">Average late</th><th className="num">Worst</th><th title="The last 30 days against the 3 months">Lately</th><th>Last late report</th></tr></thead>
+            <tbody>{punctualRows.map(([k, x]) => {
+              const share = x.onTime / x.n, lateN = x.n - x.onTime, recent = x.recentN ? x.recentOn / x.recentN : null;
+              return (
+                <tr key={k}>
+                  <td>{x.id ? <Link href={`/personnel/${x.id}`}>{k}</Link> : k}</td>
+                  <td className="num">{x.n}</td>
+                  <td className={`num ${share < 0.7 ? "neg" : share >= 0.9 ? "pos" : ""}`}>{Math.round(share * 100)}%</td>
+                  <td className="num">{lateN ? `${(x.lateDays / lateN).toFixed(1)} days` : "—"}</td>
+                  <td className={`num ${x.worst >= 5 ? "neg" : ""}`}>{x.worst ? `${x.worst} days` : "—"}</td>
+                  <td className="small">{recent === null ? <span className="muted">none lately</span> : recent > share + 0.1 ? <span className="pos">↑ better</span> : recent < share - 0.1 ? <span className="neg">↓ worse</span> : <span className="muted">→ steady</span>}</td>
+                  <td className="small">{x.lastLate ? <>{x.lastLate.days} day{x.lastLate.days === 1 ? "" : "s"} late, {fd(x.lastLate.up)}<span className="two muted">{x.lastLate.file.slice(0, 60)}</span></> : <span className="muted">none</span>}</td>
+                </tr>
+              );
+            })}</tbody></table>
+        )}
+      </section>
 
       <h2>{monthLabel(monthStart)}: how quickly reports get out</h2>
       <div className="grid2">

@@ -9,6 +9,7 @@ import { EmailBox } from "../../email/email-box";
 import { joinLink } from "@/lib/join-link";
 import { buildOnboarding } from "@/lib/onboarding";
 import { ScoreTrend } from "../score-trend";
+import { ReportTiming } from "../report-timing";
 
 export const dynamic = "force-dynamic";
 
@@ -73,6 +74,7 @@ export default async function Clerk({ params, searchParams }: { params: Promise<
       </form>
 
       <ScoreTrend clerkId={id} />
+      <ReportTiming clerkId={id} />
 
       <section className="panel">
         <h2>From the portal <Link className="small" href={`/clerk-portal?tab=uploads&who=${id}`}>all uploads →</Link></h2>
