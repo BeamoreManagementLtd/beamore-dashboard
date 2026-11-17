@@ -17,9 +17,10 @@ export async function POST(req: Request) {
   const { data: me } = user ? await db.from("profiles").select("role").eq("id", user.id).maybeSingle() : { data: null };
   if (me?.role !== "director") return NextResponse.json({ error: "director only" }, { status: 403 });
   const admin = createServiceClient();
-  const { after } = (await req.json().catch(() => ({}))) as { after?: string };
+  const { after, only } = (await req.json().catch(() => ({}))) as { after?: string; only?: string };
   const { data: jobs } = await admin.from("projects").select("id,name").in("stage", ["won_arranging", "won_preparing", "live", "on_hold"]).order("name").order("id");
-  const list = jobs ?? [];
+  // { only: project id }: just that job (e.g. after it's turned out to be DfE and has the DfE checklist)
+  const list = only ? (jobs ?? []).filter((j) => j.id === only) : jobs ?? [];
   const start = after ? list.findIndex((j) => j.id === after) + 1 : 0;
   const t0 = Date.now(), done: string[] = [];
   let filled = 0, last: string | null = after ?? null;
