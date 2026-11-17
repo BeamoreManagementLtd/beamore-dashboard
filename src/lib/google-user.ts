@@ -39,6 +39,45 @@ export async function connectUserGoogle(admin: SupabaseClient, profileId: string
   return email as string;
 }
 
+/**
+ * A shared Beamore mailbox the dashboard sends from (Ronan, 17 Nov 2026: the AI feedback emails come from
+ * ai@beamore.co.uk, its own account). Signed in once by whoever has its password; send permission only.
+ */
+export const AI_MAILBOX = "ai@beamore.co.uk";
+export async function connectMailbox(admin: SupabaseClient, expected: string, byProfile: string, code: string, redirectUri: string) {
+  const t = await token({ grant_type: "authorization_code", code, redirect_uri: redirectUri });
+  if (!t.refresh_token) throw new Error("Google didn't give a lasting permission; remove the dashboard's access in that account and try again");
+  if (!/gmail\.send/.test(t.scope ?? "")) throw new Error("Permission to send email wasn't given");
+  const email = t.id_token ? JSON.parse(Buffer.from(t.id_token.split(".")[1], "base64url").toString()).email : null;
+  if (!email || email.toLowerCase() !== expected.toLowerCase()) throw new Error(`That was ${email ?? "another account"}: please sign in as ${expected}`);
+  const { error } = await admin.from("mailbox_google").upsert({
+    email: expected, refresh_token: t.refresh_token, access_token: t.access_token,
+    access_expires_at: new Date(Date.now() + (t.expires_in - 60) * 1000).toISOString(), connected_at: new Date().toISOString(), connected_by: byProfile,
+  });
+  if (error) throw new Error(error.message);
+  return email as string;
+}
+export async function mailboxConnection(admin: SupabaseClient, email: string) {
+  const { data } = await admin.from("mailbox_google").select("email,connected_at").eq("email", email).maybeSingle();
+  return data as { email: string; connected_at: string } | null;
+}
+/** Sends a plain email from the shared mailbox; null (nothing sent) when it isn't connected. */
+export async function sendFromMailbox(admin: SupabaseClient, mailbox: string, name: string, m: { to: string; subject: string; body: string }) {
+  const { data: c } = await admin.from("mailbox_google").select("*").eq("email", mailbox).maybeSingle();
+  if (!c) return null;
+  let access = c.access_token as string | null;
+  if (!access || !c.access_expires_at || new Date(c.access_expires_at) <= new Date()) {
+    const t = await token({ grant_type: "refresh_token", refresh_token: c.refresh_token });
+    access = t.access_token;
+    await admin.from("mailbox_google").update({ access_token: t.access_token, access_expires_at: new Date(Date.now() + (t.expires_in - 60) * 1000).toISOString() }).eq("email", mailbox);
+  }
+  const CRLF = "\r\n";
+  const mime = [`From: ${enc(name)} <${mailbox}>`, `To: ${m.to}`, `Subject: ${enc(m.subject)}`, "MIME-Version: 1.0", "Content-Type: text/plain; charset=UTF-8", "Content-Transfer-Encoding: base64", "", Buffer.from(m.body).toString("base64").replace(/(.{76})/g, `$1${CRLF}`)].join(CRLF);
+  const res = await fetch("https://gmail.googleapis.com/gmail/v1/users/me/messages/send", { method: "POST", headers: { Authorization: `Bearer ${access}`, "Content-Type": "application/json" }, body: JSON.stringify({ raw: Buffer.from(mime).toString("base64url") }), cache: "no-store" });
+  if (!res.ok) throw new Error(`Gmail (${mailbox}) ${res.status}: ${(await res.text()).slice(0, 200)}`);
+  return res.json() as Promise<{ id: string }>;
+}
+
 export async function userConnection(admin: SupabaseClient, profileId: string) {
   const { data } = await admin.from("user_google").select("email,connected_at").eq("profile_id", profileId).maybeSingle();
   return data as { email: string; connected_at: string } | null;

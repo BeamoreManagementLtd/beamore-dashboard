@@ -2,7 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { requireDirector, requireProfile } from "@/lib/auth";
 import { createServiceClient } from "@/lib/supabase/server";
 import { connectGoogle } from "@/lib/google";
-import { connectUserGoogle } from "@/lib/google-user";
+import { connectUserGoogle, connectMailbox, AI_MAILBOX } from "@/lib/google-user";
 import { syncDiary } from "@/lib/sync/diary-sync";
 
 export const maxDuration = 120;
@@ -13,6 +13,20 @@ export async function GET(request: NextRequest) {
   const code = searchParams.get("code");
   const stateOk = searchParams.get("state") === request.cookies.get("google_state")?.value;
   const done = (res: NextResponse) => { res.cookies.delete({ name: "google_state", path: "/api/google" }); res.cookies.delete({ name: "google_for", path: "/api/google" }); return res; };
+
+  // the ai@beamore.co.uk mailbox (director only), for the AI feedback emails to clerks
+  if (request.cookies.get("google_for")?.value === "ai") {
+    const me = await requireDirector();
+    const back = (q: string) => done(NextResponse.redirect(`${origin}/reports/settings?${q}`));
+    if (searchParams.get("error") || !code) return back(`ai=error&reason=${encodeURIComponent(searchParams.get("error") ?? "no code")}`);
+    if (!stateOk) return back("ai=error&reason=state");
+    try {
+      await connectMailbox(createServiceClient(), AI_MAILBOX, me.id, code, `${origin}/api/google/callback`);
+      return back("ai=connected");
+    } catch (e) {
+      return back(`ai=error&reason=${encodeURIComponent(e instanceof Error ? e.message : "connect failed")}`);
+    }
+  }
 
   if (request.cookies.get("google_for")?.value === "me") {
     const me = await requireProfile();

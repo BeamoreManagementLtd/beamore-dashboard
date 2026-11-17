@@ -18,6 +18,7 @@ export async function notifyAiFeedback(admin: SupabaseClient) {
   const site = process.env.NEXT_PUBLIC_SITE_URL ?? "https://dashboard.beamore.co.uk";
   const { driveClient } = await import("@/lib/google");
   const { queueEmail } = await import("@/lib/outbox");
+  const { sendFromMailbox, AI_MAILBOX } = await import("@/lib/google-user");
   const g = await driveClient(admin);
   let sent = 0;
   for (const r of reps) {
@@ -34,8 +35,9 @@ export async function notifyAiFeedback(admin: SupabaseClient) {
       `You can switch these emails and the feedback off at any time under Your reports in the portal.`,
       `Beamore Management`,
     ].join("\n\n");
-    const res = await g.sendAutomaticAs({ email: "ai@beamore.co.uk", name: "Beamore AI" }, { to: c.email!, subject, body });
-    if (!res) return { sent, waiting: true }; // Gmail can't send as ai@ yet: try again next time
+    // from the ai@beamore.co.uk mailbox itself once it's connected (Reports → Settings), else Ronan's Gmail sending as it
+    const res = (await sendFromMailbox(admin, AI_MAILBOX, "Beamore AI", { to: c.email!, subject, body })) ?? (await g.sendAutomaticAs({ email: AI_MAILBOX, name: "Beamore AI" }, { to: c.email!, subject, body }));
+    if (!res) return { sent, waiting: true }; // ai@ isn't connected yet: try again next time
     await queueEmail(admin, { kind: "ai-feedback", to: c.email!, subject, body, clerkId: c.id, ref: r.id, status: "sent", note: "Sent automatically from ai@beamore.co.uk" });
     sent++;
   }
