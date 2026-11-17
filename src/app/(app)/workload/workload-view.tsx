@@ -78,6 +78,26 @@ export function WorkloadView({ w, lastRead, choices, today }: { w: Workload; las
         </div>
       </div>
 
+      {w.unplanned.length > 0 && (
+        <details className="callout warn" style={{ color: "var(--ink)", margin: "6px 0 10px" }}>
+          <summary style={{ cursor: "pointer" }}><b style={{ color: "var(--warn)" }}>No planned visits · {w.unplanned.length} won or live jobs with nothing planned from {mlong(months[0])} on</b>
+            <span className="small muted"> · their clerks look quieter here than they are. Click to see them.</span></summary>
+          <p className="small muted" style={{ margin: "6px 0" }}>Each needs a month-by-month cost schedule in its Cost Proposals folder (read every morning), or the visits agreed with <b>Add agreed work</b> above. Then what&apos;s been done can be compared with what was planned.</p>
+          <table className="small" style={{ marginTop: 4 }}>
+            <thead><tr><th style={{ textAlign: "left" }}>Job</th><th style={{ textAlign: "left" }}>Clerk (building / M&amp;E)</th><th style={{ textAlign: "left" }}>Why</th></tr></thead>
+            <tbody>
+              {w.unplanned.map((u) => (
+                <tr key={u.id}>
+                  <td><Link href={`/projects/${u.id}`}>{u.name}</Link>{u.stage !== "live" && <span className="muted"> · {u.stage === "on_hold" ? "on hold" : "won"}</span>}</td>
+                  <td>{u.clerks || <span className="muted">nobody yet</span>}</td>
+                  <td className="muted">{u.why}{u.lastPlanned ? ` (last planned month ${mlong(u.lastPlanned)})` : ""}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </details>
+      )}
+
       <div className="row small muted" style={{ gap: 14, flexWrap: "wrap", margin: "10px 0" }}>
         <span><Sw c="var(--bad-soft)" b="var(--bad)" /> Booked for more than they have</span>
         <span><Sw c="var(--warn-soft)" b="var(--warn)" /> Over 85%</span>

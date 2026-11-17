@@ -28,7 +28,9 @@ export type WClerk = {
   diary: number[];                 // already in the diary
   projects: WProject[];
 };
-export type Workload = { months: string[]; working: number[]; sections: Record<Kind, WClerk[]>; agreed: Agreed[] };
+/** A won / live job with no planned days from this month on (Ronan, 17 Nov 2026: every job should have a plan). */
+export type Unplanned = { id: string; name: string; stage: string; clerks: string; why: string; lastPlanned: string | null };
+export type Workload = { months: string[]; working: number[]; sections: Record<Kind, WClerk[]>; agreed: Agreed[]; unplanned: Unplanned[] };
 
 const STAGES = ["sent", "won_arranging", "won_preparing", "live", "on_hold"];
 const iso = (d: Date) => d.toISOString().slice(0, 10);
@@ -102,7 +104,7 @@ export async function loadWorkload(db: SupabaseClient, start: string, n = 13): P
   const working = months.map((m) => workingDays(m, h));
 
   const [{ data: projects }, { data: absences }, { data: diary }, { data: agreedRows }] = await Promise.all([
-    db.from("projects").select("id,number,name,display_name,stage,clerk_id,clerk_me_id").in("stage", STAGES),
+    db.from("projects").select("id,number,name,display_name,stage,clerk_id,clerk_me_id,plan_file,proposal_folder_id").in("stage", STAGES),
     db.from("absences").select("clerk_id,date_from,date_to,part_day,status").neq("status", "cancelled").lte("date_from", end).gte("date_to", months[0]),
     db.rpc("clerk_diary_days", { d_from: months[0], d_to: end }),
     db.from("workload_agreed").select("id,clerk_id,project_id,label,kind,days,per,date_from,date_to,note,projects(name,display_name,stage)")
@@ -205,12 +207,32 @@ export async function loadWorkload(db: SupabaseClient, start: string, n = 13): P
     const pressure = (c: WClerk) => (c.avail ? Math.max(...c.planned.map((p, i) => p - c.avail![i])) : -1e9);
     sections[kind] = list.sort((a, b) => pressure(b) - pressure(a) || a.name.localeCompare(b.name));
   }
+  // won / live jobs with nothing planned from this month on, and why
+  const lastPlan = new Map<string, string>();
+  const noFuture = ids.filter((id) => !plans.some((r) => r.project_id === id));
+  for (let i = 0; i < noFuture.length; i += 10) {
+    const { data } = await db.from("project_planned_months").select("project_id,month").in("project_id", noFuture.slice(i, i + 10)).order("month", { ascending: false }).limit(1000);
+    for (const r of data ?? []) if (!lastPlan.has(r.project_id)) lastPlan.set(r.project_id, r.month);
+  }
+  const hasFuture = new Set(plans.filter((r) => Number(r.building) + Number(r.me) > 0).map((r) => r.project_id));
+  for (const a of ag) if (a.project_id) hasFuture.add(a.project_id);
+  const unplanned: Unplanned[] = ps.filter((p) => p.stage !== "sent" && !hasFuture.has(p.id)).map((p) => {
+    const last = lastPlan.get(p.id) ?? null;
+    const pf = (p.plan_file as string | null) ?? "";
+    const why = last ? "The cost schedule runs out before this month"
+      : /^no /i.test(pf) ? pf
+      : p.proposal_folder_id ? "No month-by-month cost schedule in its Cost Proposals folder"
+      : "No Cost Proposals folder found for it";
+    const names = [p.clerk_id, p.clerk_me_id].filter(Boolean).map((id) => clerkById.get(id as string)?.name ?? "").filter(Boolean);
+    return { id: p.id, name: p.display_name ?? p.name, stage: p.stage, clerks: names.join(" / "), why, lastPlanned: last };
+  }).sort((a, b) => Number(!!a.lastPlanned) - Number(!!b.lastPlanned) || a.name.localeCompare(b.name));
+
   const agreed: Agreed[] = ag.map((a) => ({
     id: a.id, clerkId: a.clerk_id, clerk: clerkById.get(a.clerk_id)?.name ?? "?", projectId: a.project_id,
     job: a.projects ? (a.projects.display_name ?? a.projects.name) : (a.label ?? ""), kind: a.kind,
     days: Number(a.days), per: a.per as "week" | "month", from: a.date_from, to: a.date_to, note: a.note,
   }));
-  return { months, working, sections, agreed };
+  return { months, working, sections, agreed, unplanned };
 }
 const firstMonth = (d: number[]) => { const i = d.findIndex((x) => x > 0); return i < 0 ? 99 : i; };
 

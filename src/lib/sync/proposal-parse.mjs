@@ -56,5 +56,68 @@ export function parseCostSheet(wb) {
       if (rows.length) return rows.sort((a, b) => a.month.localeCompare(b.month));
     }
   }
+  return parseLooseSheet(wb);
+}
+
+/**
+ * Older cost sheets laid out differently (Ronan, 17 Nov 2026: "all projects should have a planned number of visits"):
+ * no "Total days" column ("Full Building Clerk days … Full Building Rate"), the month in column B ("Month | No of Days
+ * for building …"), or days counted in half days ("Regular M&E Clerk (half days)"). Takes the day columns after the
+ * month column up to the first total / rate / cost / comments column; report-writing columns aren't site days.
+ */
+const DAYISH = /clerk|days?\b|visits?|cqm|inspect|snag|witness|commission|supervis|defect|engineer|architect|\bM\s*&\s*E\b|\bMEP\b|building/i;
+const STOP = /^total|rate|cost|£|comment|note|per (visit|month|day)/i;
+function parseLooseSheet(wb) {
+  for (const ws of wb.worksheets) {
+    for (let r = 1; r <= Math.min(ws.rowCount, 20); r++) {
+      // the month column: the one of A-C with months in the rows below this one
+      let mc = 0;
+      for (let c = 1; c <= 3 && !mc; c++) {
+        let n = 0;
+        for (let rr = r + 1; rr <= Math.min(ws.rowCount, r + 60); rr++) if (monthOf(ws.getCell(rr, c).value)) n++;
+        if (n >= 2) mc = c;
+      }
+      if (!mc || monthOf(ws.getCell(r, mc).value)) continue; // a month row is data, not headings
+      // a title across merged cells ("St Columba's School - CoW cost and inspection schedule" in every column) isn't headings
+      const filled = [];
+      for (let c = 1; c <= Math.min(ws.columnCount, 30); c++) { const h = text(ws.getCell(r, c).value).trim(); if (h) filled.push(h); }
+      const most = Math.max(0, ...[...new Set(filled)].map((h) => filled.filter((x) => x === h).length));
+      if (most >= 3 && most >= filled.length * 0.5) continue;
+      const cols = [];
+      let blank = 0;
+      for (let c = mc + 1; c <= Math.min(ws.columnCount, 30); c++) {
+        const h = text(ws.getCell(r, c).value).trim();
+        if (!h) { if (++blank >= 2) break; continue; } // headings sit next to the month column; two gaps = past them
+        blank = 0;
+        if (STOP.test(h)) break;
+        // report-writing columns aren't site days ("Building Reports (half days)"); "visits incl. report" are
+        if ((/report/i.test(h) && !/incl\w*\.?\s*reports?/i.test(h)) || /per week|a week|per month/i.test(h) || !DAYISH.test(h)) continue;
+        cols.push({ c, kind: ME.test(h) ? "me" : OTHER.test(h) ? "other" : "building", witness: WITNESS.test(h), f: /half/i.test(h) ? 0.5 : 1 });
+      }
+      if (!cols.length) continue;
+      const out = new Map();
+      // the first block only: a sheet with options ("2 days a week" then "3 days a week") lists the months again below
+      let gap = 0;
+      for (let rr = r + 1; rr <= ws.rowCount; rr++) {
+        const month = monthOf(ws.getCell(rr, mc).value);
+        if (!month) {
+          if (out.size && (/^total/i.test(text(ws.getCell(rr, mc).value).trim()) || ++gap > 3)) break;
+          continue;
+        }
+        gap = 0;
+        if (out.has(month)) break;
+        const row = { month, building: 0, me: 0, building_witness: 0, me_witness: 0, other: 0 };
+        for (const { c, kind, witness, f } of cols) {
+          const d = num(ws.getCell(rr, c).value) * f;
+          row[kind] += d;
+          if (witness && kind === "building") row.building_witness += d;
+          if (witness && kind === "me") row.me_witness += d;
+        }
+        out.set(month, row);
+      }
+      const rows = [...out.values()].filter((x) => x.building || x.me || x.other);
+      if (rows.length) return rows.sort((a, b) => a.month.localeCompare(b.month));
+    }
+  }
   return [];
 }

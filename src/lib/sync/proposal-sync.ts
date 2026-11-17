@@ -63,7 +63,8 @@ export async function syncProposalPlans(admin: SupabaseClient, opts: { limit?: n
       const files = await list(`'${folderId}' in parents and (mimeType = '${XLSX}' or mimeType = '${GSHEET}') and trashed = false`);
       for (const sub of await list(`'${folderId}' in parents and mimeType = '${FOLDER}' and trashed = false`))
         files.push(...await list(`'${sub.id}' in parents and (mimeType = '${XLSX}' or mimeType = '${GSHEET}') and trashed = false`));
-      const rank = (f: F) => (/attendance/i.test(f.name) ? 1 : 0);
+      // attendance plans and "Copy of …" files (a client's annotated copy) only if nothing else reads
+      const rank = (f: F) => (/attendance|^copy of/i.test(f.name) ? 1 : 0);
       files.sort((a, b) => rank(a) - rank(b) || b.modifiedTime.localeCompare(a.modifiedTime));
       if (files[0] && files[0].id === p.plan_file_id && Date.parse(files[0].modifiedTime) === Date.parse(p.plan_file_modified ?? "")) { unchanged++; continue; }
       let done = false;
