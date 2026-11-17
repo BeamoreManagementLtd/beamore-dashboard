@@ -61,8 +61,10 @@ export async function syncProposalPlans(admin: SupabaseClient, opts: { limit?: n
       matched++;
       // spreadsheets in the folder (and one level down), newest first; cost schedules before attendance plans
       const files = await list(`'${folderId}' in parents and (mimeType = '${XLSX}' or mimeType = '${GSHEET}') and trashed = false`);
+      // a subfolder that is another job's own folder ("Wisbech/Main works" for Wisbech – Main works) isn't this job's
+      const others = new Set((projects ?? []).filter((x) => x.id !== p.id && x.proposal_folder_id).map((x) => x.proposal_folder_id as string));
       for (const sub of await list(`'${folderId}' in parents and mimeType = '${FOLDER}' and trashed = false`))
-        files.push(...await list(`'${sub.id}' in parents and (mimeType = '${XLSX}' or mimeType = '${GSHEET}') and trashed = false`));
+        if (!others.has(sub.id)) files.push(...await list(`'${sub.id}' in parents and (mimeType = '${XLSX}' or mimeType = '${GSHEET}') and trashed = false`));
       // attendance plans and "Copy of …" files (a client's annotated copy) only if nothing else reads
       const rank = (f: F) => (/attendance|^copy of/i.test(f.name) ? 1 : 0);
       files.sort((a, b) => rank(a) - rank(b) || b.modifiedTime.localeCompare(a.modifiedTime));
