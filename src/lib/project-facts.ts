@@ -64,6 +64,49 @@ export async function readClientInfo(admin: SupabaseClient, projectId: string) {
   return { values, emails: mails.length };
 }
 
+/**
+ * The project details from the clerk's most recent report on the job (Ronan, 17 Nov 2026: "get all the information you
+ * can from their diaries, the most recent diary, because some people change"). DfE diaries and reports carry the DfE
+ * project director and manager, the TA, the principal contractor's project manager and the project numbers in their
+ * header. Returns suggested answers by checklist item id, and which report they came from.
+ */
+export async function readReportInfo(admin: SupabaseClient, projectId: string) {
+  const { data: items } = await admin.from("project_info").select("id,item").eq("project_id", projectId).order("created_at");
+  if (!items?.length) return { values: {} as Record<string, string>, from: null as string | null };
+  const { data: reps } = await admin.from("reports").select("id,file_name,drive_file_id,text_snapshot,uploaded_at,visit_date")
+    .eq("project_id", projectId).order("uploaded_at", { ascending: false }).limit(3);
+  let text = "", from: string | null = null;
+  for (const r of reps ?? []) {
+    if (r.text_snapshot) { text = r.text_snapshot.slice(0, 8000); from = r.file_name; break; }
+    try {
+      const { readReport } = await import("@/lib/reports/docx.mjs");
+      const g = await driveClient(admin);
+      const rep = await readReport(Buffer.from(await g.download(r.drive_file_id)));
+      text = rep.paragraphs.map((x: { text: string }) => x.text).filter((x: string) => x.trim()).join("\n").slice(0, 8000);
+      from = r.file_name; break;
+    } catch { /* try the one before */ }
+  }
+  if (!text) return { values: {}, from: null };
+  const want = items.filter((i) => forClerks(i.item) && !/distribution|CPs|drawings|programme/i.test(i.item));
+  if (!want.length) return { values: {}, from };
+  const schema = {
+    type: "object", additionalProperties: false, required: ["items"],
+    properties: { items: { type: "array", items: { type: "object", additionalProperties: false, required: ["id", "value"], properties: {
+      id: { type: "string" }, value: { type: ["string", "null"], description: "Exactly as written in the report: names (with firm, email or phone if given), numbers, address. null if the report doesn't give it or leaves it blank" } } } } },
+  };
+  const ask = `This is the start of a clerk of works' latest report for a construction project. Fill in each item from it, exactly as written (the header table usually has the DfE project director, DfE project manager, TA / lead consultant, principal contractor and their project manager, project numbers, site address). Leave value null if the report doesn't say or the box is empty. Don't guess.\n\nItems:\n${want.map((i) => `${i.id}: ${i.item}`).join("\n")}\n\nReport (${from}):\n${text}`;
+  const res = await new Anthropic().messages.create({
+    model: MODEL, max_tokens: 2000,
+    output_config: { effort: "low", format: { type: "json_schema", schema } },
+    messages: [{ role: "user", content: ask }],
+  } as Anthropic.MessageCreateParamsNonStreaming);
+  const t = res.content.find((b) => b.type === "text");
+  const out = t && t.type === "text" ? (JSON.parse(t.text) as { items: { id: string; value: string | null }[] }).items : [];
+  const values: Record<string, string> = {};
+  for (const x of out) if (x.value && x.value.trim().length > 1 && want.some((i) => i.id === x.id)) values[x.id] = x.value.trim();
+  return { values, from };
+}
+
 /** The clerks' copy: what they need on site, never anything financial. */
 export async function clerkSheet(admin: SupabaseClient, projectId: string) {
   const { data: p } = await admin.from("projects").select("id,name,display_name,site,report_to,report_cc,drive_folder_id,clerk_id,clerk_me_id,clients(name)").eq("id", projectId).single();

@@ -4,7 +4,7 @@ import { readInfoFromEmail, saveInfoAnswers } from "../actions";
 
 type Item = { id: string; item: string; value: string | null; value_from: string | null };
 const OFFICE_ONLY = /\bPO\b|purchase order|invoic|fee|rate|cost|payment/i;
-const FROM: Record<string, string> = { email: "from the client's email", diary: "from the clerk's diary", manual: "typed in" };
+const FROM: Record<string, string> = { email: "from the client's email", diary: "from the clerk's diary", report: "from the latest report", manual: "typed in" };
 
 /**
  * What the client gave us for each checklist item (Ronan, 17 Nov 2026). "Read the client's emails" fills in what it can
