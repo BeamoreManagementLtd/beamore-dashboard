@@ -70,9 +70,12 @@ async function draftCorrection(admin: SupabaseClient, u: Row, problems: string[]
   if (!c?.email) return;
   const what = u.kind === "insurance" ? "insurance certificate" : u.kind === "invoice" ? "invoice" : "certificate";
   const body = `Hi ${c.name.split(" ")[0]},\n\nThanks for uploading your ${what} (${u.file_name ?? "your file"}). We checked it and found:\n\n${problems.map((p) => `- ${p}`).join("\n")}\n\nCould you upload a corrected or renewed copy on the portal when you can?\n\nhttps://portal.beamore.co.uk\n\nMany thanks,\nRonan\n\nRonan O'Boyle\nBeamore Management Ltd`;
-  // waits on the "Emails to send" page (Ronan, 16 Nov 2026), not in Gmail Drafts
+  // sent straight away from Ronan's Gmail (Ronan, 17 Nov 2026: "don't put them onto the to-do list, just deal with them");
+  // a copy is kept on "Emails to send". When a good replacement is uploaded the flag clears itself (supersede below).
   const { queueEmail } = await import("@/lib/outbox");
-  await queueEmail(admin, { kind: "portal-correction", to: c.email, subject: `Please update your ${what}`, body, clerkId: u.clerk_id, ref: u.id });
+  const subject = `Please update your ${what}`;
+  await (await driveClient(admin)).sendAutomatic({ to: c.email, subject, body });
+  await queueEmail(admin, { kind: "portal-correction", to: c.email, subject, body, clerkId: u.clerk_id, ref: u.id, status: "sent", note: "Sent automatically" });
   await admin.from("portal_uploads").update({ correction_drafted_at: new Date().toISOString() }).eq("id", u.id);
 }
 
@@ -249,6 +252,16 @@ export async function processUpload(admin: SupabaseClient, id: string) {
   await admin.from("portal_uploads").update({ ai_state: "done", ai_result: { ...result, ai_notes: ai }, issues, status }).eq("id", u.id);
   // (old-portal uploads: the old portal already emailed the clerk, so no new draft)
   if (problems.length && u.clerk_id && (u as Row & { source?: string }).source !== "legacy") await draftCorrection(admin, { ...u, issues }, problems).catch(() => undefined);
+  // a good one replaces the earlier ones we'd asked them to fix: those clear themselves (Ronan, 17 Nov 2026: "update it
+  // as they send them"). Insurance: any earlier insurance upload; certificates: the same kind; invoices: the same month.
+  if (status === "accepted" || status === "checked") {
+    let q = admin.from("portal_uploads").update({ status: "accepted", resolved_at: new Date().toISOString(), resolved_by: `replaced by ${u.file_name ?? "a newer upload"}` })
+      .eq("clerk_id", u.clerk_id!).eq("kind", u.kind).eq("status", "needs_correction").lt("received_at", u.received_at).neq("id", u.id);
+    if (u.kind === "qualification" && result.doc_type) q = q.eq("doc_type", String(result.doc_type));
+    const { data: up } = await admin.from("portal_uploads").select("period").eq("id", u.id).single();
+    if (u.kind === "invoice") q = q.eq("period", up?.period ?? "none");
+    if (u.clerk_id && (u.kind !== "invoice" || up?.period)) await q;
+  }
 }
 
 /** Hourly: anything not yet filed or read (e.g. the AI key was added later, or a step failed). */

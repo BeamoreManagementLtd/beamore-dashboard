@@ -203,7 +203,9 @@ export async function buildDueList(db: SupabaseClient, me: Profile): Promise<Due
     const waiting = (pu ?? []).filter((u) => u.ai_state === "pending");
     const names = (l: typeof look) => [...new Set(l.map((u) => (u.clerks as unknown as { name: string } | null)?.name).filter(Boolean))].join(", ");
     if (look.length) items.push({ key: "portal-look", kind: "Personnel", title: `${look.length} portal upload${look.length > 1 ? "s" : ""} to look at`, detail: names(look), due: t, link: "/clerk-portal", ...ownerOf(director ? me.id : null, "Ronan") });
-    if (fix.length) items.push({ key: "portal-fix", kind: "Personnel", title: `${fix.length} upload${fix.length > 1 ? "s" : ""} waiting for the clerk to send a better copy`, detail: `${names(fix)}. Correction drafts are in Gmail Drafts`, due: t, link: "/clerk-portal", ...ownerOf(director ? me.id : null, "Ronan") });
+    // uploads waiting for a better copy aren't a to-do (Ronan, 17 Nov 2026): the clerk is emailed automatically and the
+    // flag clears when the replacement arrives. They stay on the clerk portal page.
+    void fix;
     if (waiting.length && director) items.push({ key: "portal-ai", kind: "Personnel", title: `${waiting.length} portal upload${waiting.length > 1 ? "s" : ""} waiting for AI reading`, detail: "Add ANTHROPIC_API_KEY in Vercel to switch on reading of certificates and invoices", due: t, link: "/clerk-portal", ...ownerOf(me.id, null) });
   }
 
