@@ -346,6 +346,15 @@ export async function checkOne(admin: SupabaseClient, id: string) {
   // the ten H&S items at the start of the report: none deleted or left empty, and properly filled in (Ronan, 15 Nov
   // 2026). Not held against the first couple of reports on a job, when there may genuinely be little to say.
   const onDfeForm = prog?.dfe ?? /\bDfE\b|CQM|TAS20/i.test(r.paragraphs.slice(0, 60).map((p) => p.text).join(" "));
+  // the DfE form doesn't generally let clerks put a progress summary up front (Ronan, 17 Nov 2026: "you're marking
+  // people down unnecessarily"), so on DfE reports it isn't counted, raised or suggested; reports checked before stay
+  // as they were
+  if (onDfeForm) {
+    if (ai.standards) delete (ai.standards as Record<string, unknown>).summary;
+    const upFront = /\b(progress )?summary\b.{0,40}\b(up front|at the (start|top|beginning)|open(s|ing)? with)\b|\bopen(s|ing)? with (a|an|the) (short |clear |brief )?(progress )?summary\b/i;
+    ai.issues = ai.issues.filter((i) => !upFront.test(i.text));
+    ai.clerk_points = (ai.clerk_points ?? []).filter((t) => !upFront.test(t));
+  }
   const hs = healthSafety(r, onDfeForm);
   // the DfE CQM monthly report has a written H&S section rather than the ten rows, so it isn't checked this way
   const cqm = /CQM|Construction Quality\s+Monitoring/i.test(r.paragraphs.slice(0, 40).map((p) => p.text).join(" "));
