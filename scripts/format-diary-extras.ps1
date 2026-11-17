@@ -27,20 +27,28 @@ try {
         }
       }
     }
-    # 2. client invoice tables: a header row with "No of days" in X; the table runs down to its "Total" row (Y)
+    # 2. client invoice tables: a header row with "No of days" in X, the sites below, then Gross / Vat / Total (Y).
+    #    The Comments column takes the Totals column's own look for the header and the site rows (mainly vertical lines,
+    #    as the rest of the table), and nothing beside Gross, Vat and Total (Ronan, 17 Nov 2026)
     $tables = 0
     for ($r = 1; $r -le 499; $r++) {
       if (([string]$ws.Range("X$r").Value2).Trim() -ne 'No of days') { continue }
-      $end = $r
-      for ($k = $r + 1; $k -le $r + 80; $k++) { if (([string]$ws.Range("Y$k").Value2).Trim() -eq 'Total') { $end = $k; break } }
-      if (([string]$ws.Range("AA$r").Value2).Trim() -eq 'Comments') { continue }
-      $ws.Range("Z$($r):Z$end").Copy() | Out-Null
-      $ws.Range("AA$($r):AA$end").PasteSpecial(-4122) | Out-Null   # formats only
+      $gross = 0; $end = $r
+      for ($k = $r + 1; $k -le $r + 80; $k++) {
+        $y = ([string]$ws.Range("Y$k").Value2).Trim()
+        if ($y -eq 'Gross' -and -not $gross) { $gross = $k }
+        if ($y -eq 'Total') { $end = $k; break }
+      }
+      if (-not $gross) { $gross = $end }
+      $ws.Range("Z$($r):Z$($gross - 1)").Copy() | Out-Null
+      $ws.Range("AA$($r):AA$($gross - 1)").PasteSpecial(-4122) | Out-Null   # formats only: exactly the Totals column's lines
       $ws.Range("AA$($r):AA$end").ClearContents() | Out-Null
       $ws.Range("AA$r").Value2 = 'Comments'
-      $ws.Range("AA$($r + 1):AA$end").HorizontalAlignment = -4131; $ws.Range("AA$($r + 1):AA$end").NumberFormat = '@'
-      $b = $ws.Range("AA$($r):AA$end").Borders
-      foreach ($e in 7, 8, 9, 10, 12) { $b.Item($e).LineStyle = 1; $b.Item($e).Weight = 2 }   # box and lines between rows
+      $ws.Range("AA$($r + 1):AA$($gross - 1)").HorizontalAlignment = -4131; $ws.Range("AA$($r + 1):AA$($gross - 1)").NumberFormat = '@'
+      # beside Gross / Vat / Total: no lines and no fill (the left edge is the Totals column's own line, left as it is)
+      $g = $ws.Range("AA$($gross):AA$end")
+      foreach ($e in 8, 9, 10, 11, 12) { $g.Borders.Item($e).LineStyle = -4142 }
+      $g.Interior.Pattern = -4142
       $tables++
     }
     $ws.Columns('AA').ColumnWidth = 34
