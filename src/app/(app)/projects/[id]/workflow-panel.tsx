@@ -73,7 +73,7 @@ export function WorkflowPanel({ projectId, stages, current, clerks, ticked, stat
         </span>
       );
     if (st.id === "S2" && st.state !== "done")
-      return <span className="wf-ctl"><EmailBox kind="info" refId={projectId} label="Write the email" /></span>;
+      return <span className="wf-ctl"><EmailBox kind="info" refId={projectId} label="Request information" /></span>;
     if (st.id === "S6" && st.state !== "done")
       return (
         <form action={setPo.bind(null, projectId)} className="wf-ctl wf-inline">

@@ -163,7 +163,8 @@ export function buildWorkflow(p: WorkflowProject, f: Facts): Workflow {
     else status = { text: `Proposal sent${changed ? ` ${ago(daysSince(changed))}` : ""}. Waiting on the client to reply.`, waitingOn: "client", days: daysSince(changed) };
   } else if (current === "setup") {
     const id = waitingStep?.id;
-    if (id === "S1" || id === "S2") status = { text: `Won${changed ? ` ${ago(daysSince(changed))}` : ""}. Waiting on us to ask the client for the project information.`, waitingOn: "us", days: daysSince(changed) };
+    // asked for when the job is about to start, not when it's won (Ronan, 17 Nov 2026)
+    if (id === "S1" || id === "S2") status = { text: `Won${changed ? ` ${ago(daysSince(changed))}` : ""}. When it's about to start, press Request information to ask the client for the project information.`, waitingOn: "us", days: daysSince(changed) };
     else if (id === "S3") status = p.clerk_status === "finding"
       ? { text: "Waiting on us to find a building clerk of works.", waitingOn: "us" }
       : { text: "Waiting on us to choose the building clerk of works.", waitingOn: "us" };
