@@ -4,6 +4,7 @@ import type { Profile } from "@/lib/auth";
 import { SCOPES_CHANGED_AT } from "@/lib/xero";
 import { GOOGLE_SCOPES_CHANGED_AT } from "@/lib/google";
 import { loadWorkflows, WORKFLOW_COLUMNS, daysSince, type WorkflowProject } from "@/lib/workflow";
+const fdShort = (d: string) => new Date(`${d}T12:00:00Z`).toLocaleDateString("en-GB", { day: "numeric", month: "short", timeZone: "UTC" });
 
 /**
  * The team due list. Most items are worked out from live data each time (they disappear once the underlying thing is
@@ -243,10 +244,18 @@ export async function buildDueList(db: SupabaseClient, me: Profile): Promise<Due
       items.push({ key: `chart-${name}`, kind: "Personnel", title: `${name}: chartership renewal due`, due: c.chartership_renewal, link: "/personnel", ...ronan });
     const clerkLink = `/personnel/${c.clerk_id}`;
     const active = (c.clerks as unknown as { active: boolean } | null)?.active !== false;
-    for (const [field, label] of [["pi_insurance_expiry", "professional indemnity insurance"], ["pl_insurance_expiry", "public liability insurance"], ["cscs_expiry", "CSCS card"]] as const) {
+    // insurance: the clerk is emailed automatically a week before, on the day and then weekly (clerk-expiry.ts), so it
+    // only comes to Ronan once it has actually expired with no renewal uploaded (Ronan, 17 Nov 2026: "I'm not doing
+    // that, and I don't want to see it on my list ... if after the due date they haven't uploaded, put it on my to-do list")
+    for (const [field, label] of [["pi_insurance_expiry", "professional indemnity insurance"], ["pl_insurance_expiry", "public liability insurance"]] as const) {
       const d = c[field] as string | null;
+      if (active && d && d < t)
+        items.push({ key: `${field}-${c.clerk_id}`, kind: "Personnel", title: `${name}: ${label} expired ${fdShort(d)}, no renewal yet`, detail: "They've had the reminder emails (a week before, on the day, then weekly). Chase them: they shouldn't be on site without it", due: d, link: clerkLink, ...ronan });
+    }
+    {
+      const d = c.cscs_expiry as string | null;
       if (active && d && d <= addDays(t, 30))
-        items.push({ key: `${field}-${c.clerk_id}`, kind: "Personnel", title: `${name}: ${label} ${d < t ? "expired" : "expires soon"}`, detail: "Ask for the new certificate and update the date", due: d, link: clerkLink, ...ronan });
+        items.push({ key: `cscs_expiry-${c.clerk_id}`, kind: "Personnel", title: `${name}: CSCS card ${d < t ? "expired" : "expires soon"}`, detail: "Ask for the new card and update the date", due: d, link: clerkLink, ...ronan });
     }
     if (c.onboarding_started && !c.onboarding_complete)
       items.push({ key: `onboard-${c.clerk_id}`, kind: "Personnel", title: `Onboard ${name}`, detail: "New clerk: insurance, DBS, CSCS, PPE, terms and set-up. Not ready for site until it's all done", due: addDays(c.onboarding_started as string, 7), link: clerkLink, ...ronan });
