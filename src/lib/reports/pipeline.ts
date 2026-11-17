@@ -300,6 +300,18 @@ export async function checkOne(admin: SupabaseClient, id: string) {
     } catch { template = null; /* a check that can't be done is left out, never holds the report up */ }
   }
 
+  // the report's appendix, if the clerk keeps one as a separate PDF beside it with the same report number ("151. ...
+  // St Michael's appendix. field-note-report....pdf" for "151- ...CoWDiary 11.11.26.docx"): read together with it
+  let appendix: { name: string; pdf: Buffer } | null = null;
+  try {
+    const num = /^\s*0*(\d{1,4})(?!\d)/.exec(rep.renamed_from ?? rep.file_name)?.[1];
+    if (num) {
+      const near = await g.json<{ files: { id: string; name: string; size?: string; createdTime: string }[] }>("files", { q: `'${rep.folder_id}' in parents and trashed = false and mimeType = 'application/pdf' and name contains 'ppendi'`, fields: "files(id,name,size,createdTime)", orderBy: "createdTime desc", pageSize: "20", supportsAllDrives: "true", includeItemsFromAllDrives: "true" });
+      const a = near.files.find((f) => /^\s*0*(\d{1,4})(?!\d)/.exec(f.name)?.[1] === num && Number(f.size ?? 0) < 25_000_000);
+      if (a) appendix = { name: a.name, pdf: Buffer.from(await g.download(a.id)) };
+    }
+  } catch { appendix = null; }
+
   const ai = await checkReport({
     fileName: rep.renamed_from ?? rep.file_name, folder: rep.folder_name ?? "", project: p?.name ?? rep.project_folder_name ?? "",
     client: ourClient && endClient ? `${ourClient} (Beamore's client), working for the end client ${endClient}: the report may name either as the client, and both are correct, so don't raise it` : ourClient,
@@ -309,7 +321,7 @@ export async function checkOne(admin: SupabaseClient, id: string) {
     previous: prev ? { number: prev.report_number, date: prev.visit_date, text: prev.text_snapshot ?? "" } : null,
     paragraphs: r.paragraphs, blanks: r.blanks, placeholders: r.placeholders,
     photos: { count: stats.count, blurry: stats.blurry, smallOnPage: stats.smallOnPage, stretched: stats.stretched, mb: raw.length / 1e6, usual, reused, uncaptioned: uncaptioned(r) },
-    unticked: unticked(r), thumbnails: thumbs, today: new Date().toISOString().slice(0, 10),
+    unticked: unticked(r), thumbnails: thumbs, today: new Date().toISOString().slice(0, 10), appendix,
   });
 
   // first: the file name follows the pattern of the other reports in its folder (next number, this visit's date)
@@ -350,8 +362,9 @@ export async function checkOne(admin: SupabaseClient, id: string) {
   const monthly = isMonthly(rep);
   const min = rep.kind === "me" ? { photos: 12, words: 800 } : { photos: 20, words: 1200 };
   const extra: Issue[] = [];
-  if (!monthly && stats.count < min.photos) extra.push({ severity: "medium", kind: "photos", text: `Only ${stats.count} photo${stats.count === 1 ? "" : "s"}: good reports have ${rep.kind === "me" ? "20 or more" : "35-50"}${usual ? ` (this clerk usually has about ${usual} here)` : ""}`, p: null });
-  if (!monthly && words < min.words) extra.push({ severity: "medium", kind: "vague", text: `Not much written (about ${words} words): good reports describe each area in detail, typically ${rep.kind === "me" ? "1,000+" : "1,800-5,000"} words`, p: null });
+  // with an appendix, the photos and much of the writing are in it (Tom Hunt's St Michael's reports)
+  if (!monthly && !appendix && stats.count < min.photos) extra.push({ severity: "medium", kind: "photos", text: `Only ${stats.count} photo${stats.count === 1 ? "" : "s"}: good reports have ${rep.kind === "me" ? "20 or more" : "35-50"}${usual ? ` (this clerk usually has about ${usual} here)` : ""}`, p: null });
+  if (!monthly && !appendix && words < min.words) extra.push({ severity: "medium", kind: "vague", text: `Not much written (about ${words} words): good reports describe each area in detail, typically ${rep.kind === "me" ? "1,000+" : "1,800-5,000"} words`, p: null });
   // progress vs programme, the Beamore way (Ronan's "Site Diaries" email, Aug 2024): raised even if the AI didn't list it
   const prog = ai.programme;
   const progGaps = programmeGaps(prog);
@@ -372,7 +385,8 @@ export async function checkOne(admin: SupabaseClient, id: string) {
   const hs = healthSafety(r, onDfeForm);
   // the DfE CQM monthly report has a written H&S section rather than the ten rows, so it isn't checked this way
   const cqm = /CQM|Construction Quality\s+Monitoring/i.test(r.paragraphs.slice(0, 40).map((p) => p.text).join(" "));
-  const early = cqm || Number(/\d+/.exec(ai.report_number ?? "")?.[0] ?? 99) <= 2;
+  // the ten H&S rows are only looked for in the Word file: with an appendix they may be written there instead
+  const early = cqm || !!appendix || Number(/\d+/.exec(ai.report_number ?? "")?.[0] ?? 99) <= 2;
   const hsGone = hs.filter((h) => h.status === "missing" || h.status === "empty"), hsThin = hs.filter((h) => h.status === "thin");
   if (!early && hsGone.length) extra.push({ severity: hsGone.length >= 5 ? "high" : "medium", kind: "other", text: `Health and safety: ${hs.length - hsGone.length - hsThin.length} of the ${hs.length} standard items filled in properly. ${hsGone.map((h) => `${h.label} ${h.status === "missing" ? "deleted" : "left empty"}`).join("; ")}${hsThin.length ? `; only "N/A"/"none" for ${hsThin.map((h) => h.label).join(", ")}` : ""}`, p: null });
   else if (!early && hsThin.length >= 3) extra.push({ severity: "low", kind: "other", text: `Health and safety: only "N/A"/"none" for ${hsThin.map((h) => h.label).join(", ")}`, p: null });
@@ -446,7 +460,7 @@ export async function checkOne(admin: SupabaseClient, id: string) {
   // the report's mark, from the report as the clerk sent it, before any corrections (Ronan, 16 Nov 2026)
   const parts = scoreParts({
     quality: Number.isFinite(ai.quality) ? ai.quality : null, qualityWhy: ai.quality_why || null,
-    photos: { count: stats.count, expected: monthly ? 0 : rep.kind === "me" ? 20 : 35, mixed: !uniform.wasUniform, stretched: stats.stretched, small: stats.smallOnPage, blurry: stats.blurry, sideways: sideways.length, reused },
+    photos: { count: stats.count, expected: monthly || appendix ? 0 : rep.kind === "me" ? 20 : 35, mixed: !uniform.wasUniform, stretched: stats.stretched, small: stats.smallOnPage, blurry: stats.blurry, sideways: sideways.length, reused },
     spelling: ai.spelling.length, spellingExamples: ai.spelling.slice(0, 4).map((s) => `"${s.find}" → "${s.replace}"`), words,
     hs: early ? null : hs, programme: prog ?? null, programmeGaps: progGaps.length, programmeTips: progGaps, standards: ai.standards ?? null,
     standardsMissed: STANDARD_KEYS.filter((k) => ai.standards?.[k] === false).map((k) => STANDARDS[k].label),

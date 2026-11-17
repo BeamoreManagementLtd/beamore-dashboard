@@ -119,6 +119,8 @@ export type CheckInput = {
   paragraphs: { i: number; text: string }[]; blanks: string[]; placeholders: { i: number; text: string }[];
   photos: { count: number; blurry: number; smallOnPage: number; stretched: number; mb: number; usual: number | null; reused: number; uncaptioned: number };
   unticked: number; thumbnails: Buffer[]; today: string;
+  /** The report's appendix, a separate PDF the clerk keeps observations in (Tom Hunt's St Michael's field-note reports). */
+  appendix?: { name: string; pdf: Buffer } | null;
 };
 
 export async function checkReport(input: CheckInput): Promise<Check> {
@@ -171,6 +173,11 @@ Give the paragraph number when an issue is about one place. Don't repeat spellin
 5. programme: say whether it's a DfE report, then judge its progress reporting against the right standard above. For DfE be strict, item by item: no programme named, fewer than 8 activities, activities with no weeks ahead/behind, or a synopsis under 5-6 lines with no overall view, is "weak". Set percentages_shown but it isn't a fault.`;
   const content: Anthropic.ContentBlockParam[] = [
     { type: "text", text: `${facts}\n\n${input.previous ? `PREVIOUS REPORT (for comparison, start of it):\n${input.previous.text.slice(0, 8000)}\n\n` : ""}THIS REPORT:\n${body}` },
+    // read together with its appendix (Ronan, 17 Nov 2026: Tom Hunt keeps his H&S and quality comments there)
+    ...(input.appendix ? [
+      { type: "text" as const, text: `THIS REPORT'S APPENDIX ("${input.appendix.name}"), attached below. It is part of the report: the clerk keeps observations here (e.g. health and safety, quality and workmanship). Read the report and the appendix together. Anything covered in the appendix is NOT missing from the report, a "see appendix" reference is fine, and judge detail, follow-up and quality across both.` },
+      { type: "document" as const, source: { type: "base64" as const, media_type: "application/pdf" as const, data: input.appendix.pdf.toString("base64") } },
+    ] : []),
     ...input.thumbnails.slice(0, 12).flatMap((b, k) => [
       { type: "text" as const, text: `Photo ${k + 1}:` },
       { type: "image" as const, source: { type: "base64" as const, media_type: "image/jpeg" as const, data: b.toString("base64") } },
