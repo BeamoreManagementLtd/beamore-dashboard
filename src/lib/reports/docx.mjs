@@ -164,6 +164,40 @@ export function closingReasonOk(comment) {
     .some((s) => CLOSING.test(s) && !STILL_OPEN.test(s.replace(/\bno \w+ (was|were|is) (needed|required)|not (needed|required|necessary)/gi, "")));
 }
 
+/**
+ * Every item in the report's issues tracker: its number, what it is, its colour, whether it's closed (and the date),
+ * and the latest comment. Used to check a monthly report's tracker against the last weekly diary of the month (Ronan,
+ * 17 Nov 2026: "make sure the monthly reports have been brought up to date").
+ */
+export function trackerItems(r) {
+  const out = [];
+  for (const t of r.xml.match(/<w:tbl>[\s\S]*?<\/w:tbl>/g) ?? []) {
+    const rows = t.match(/<w:tr\b[\s\S]*?<\/w:tr>/g) ?? [];
+    const head = (rows[0]?.match(/<w:tc\b[\s\S]*?<\/w:tc>/g) ?? []).map((c) => textOf(c).replace(/\s+/g, " ").trim().toLowerCase());
+    const closedCol = head.findIndex((h) => /closed/.test(h));
+    // a tracker without a "closed" column (Northumberland's monthly: Number | Source (CoW report) | Item)
+    const sourceTable = head.some((h) => /source|report no/.test(h)) && head.some((h) => /item|observation/.test(h));
+    if ((closedCol < 0 && !sourceTable) || head.length < 3) continue;
+    const commentCol = head.findIndex((h, k) => k !== closedCol && /comment|status/.test(h));
+    let itemCol = head.findIndex((h) => /observation|subject|item\b/.test(h) && !/^(item|number|no\.?)$/.test(h));
+    if (itemCol < 0) itemCol = head.findIndex((h, k) => k > 0 && /item/.test(h));
+    for (const row of rows.slice(1)) {
+      const cells = row.match(/<w:tc\b[\s\S]*?<\/w:tc>/g) ?? [];
+      const text = cells.map((c) => textOf(c).replace(/\s+/g, " ").trim());
+      const item = text[itemCol >= 0 ? itemCol : 2] ?? "";
+      if (!item) continue;
+      const closedText = closedCol >= 0 ? text[closedCol] ?? "" : "";
+      out.push({
+        no: text[0] || String(out.length + 1), item, hasStatus: closedCol >= 0,
+        colour: cells.map((c) => rag(/w:fill="([0-9A-Fa-f]{6}|auto)"/.exec(c)?.[1])).find(Boolean) ?? null,
+        closed: isDate(closedText) || /^closed\b/i.test(closedText), closedText,
+        comment: commentCol >= 0 ? text[commentCol] ?? "" : "",
+      });
+    }
+  }
+  return out;
+}
+
 export function issuesTracker(r) {
   const out = { tables: 0, items: 0, photos: 0, uncoloured: [], greenNoDate: [], closedNotGreen: [], closedNoReason: [], closedReasonUnclear: [], unclearExamples: [] };
   for (const t of r.xml.match(/<w:tbl>[\s\S]*?<\/w:tbl>/g) ?? []) {

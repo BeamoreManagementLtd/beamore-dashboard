@@ -24,6 +24,8 @@ export function dropOrphanComments(r: Report): Promise<number>;
 export function nearText(r: Report, p: number | null | undefined): string | null;
 export type Tracker = { tables: number; items: number; photos: number; uncoloured: string[]; greenNoDate: string[]; closedNotGreen: string[]; closedNoReason: string[]; closedReasonUnclear: string[]; unclearExamples: { no: string; comment: string }[] };
 export function issuesTracker(r: Report): Tracker;
+export type TrackerItem = { no: string; item: string; hasStatus: boolean; colour: "red" | "orange" | "green" | null; closed: boolean; closedText: string; comment: string };
+export function trackerItems(r: Report): TrackerItem[];
 export function closingReasonOk(comment: string): boolean;
 export function unticked(r: Report): number;
 export function fillBlank(r: Report, label: string, value: string): boolean;

@@ -49,8 +49,7 @@ $plan = @(
 foreach ($d in 4, 11, 18, 25) { $plan += , @('Stephen Brewer', $d, 'HarrisScience', 'HarrisScience', $E) }
 foreach ($d in 5, 12, 19, 26) { $plan += , @('Stephen Brewer', $d, 'HadlowH&V', 'HadlowH&V', $E) }
 foreach ($d in 6, 13, 20, 27) { $plan += , @('Stephen Brewer', $d, 'HarrisScience', 'HarrisScience', $E) }
-# Ben Lacey: Pepys Court on Mondays (Ronan put those in), Longfield on Thursdays
-foreach ($d in 5, 12, 19, 26) { $plan += , @('Ben Lacey', $d, 'Longfield', 'Longfield', $E) }
+# Ben Lacey: Pepys Court on Mondays (Ronan put those in); Longfield is on pause (Ronan, 17 Nov 2026), so nothing there
 # Paul Hankin: one day a week each at St Columba's (Mondays) and St John Vianney (Tuesdays)
 foreach ($d in 2, 9, 16, 23) { $plan += , @('Paul Hankin', $d, 'StColumbas', 'StColumbas', $E) }
 foreach ($d in 3, 10, 17, 24) { $plan += , @('Paul Hankin', $d, 'StJohnVianney', 'StJohnVianney', $E) }

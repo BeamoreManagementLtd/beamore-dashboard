@@ -5,7 +5,8 @@ import { driveClient } from "@/lib/google";
 import { visitDateFor } from "./visit-date.mjs";
 import { projectMatcher } from "@/lib/project-match";
 import { sendReportEmail } from "@/lib/google-user";
-import { readReport, photoStats, shrinkPhotos, trackSpelling, saveReport, setLabelValue, nearText, photoHashes, reusedCount, uncaptioned, unticked, rotatePhoto, fixPhotoShapes, uniformPhotos, healthSafety, issuesTracker, cleanCopy, acceptOwnRevisions, withoutOwnMarks } from "./docx.mjs";
+import { readReport, photoStats, shrinkPhotos, trackSpelling, saveReport, setLabelValue, nearText, photoHashes, reusedCount, uncaptioned, unticked, rotatePhoto, fixPhotoShapes, uniformPhotos, healthSafety, issuesTracker, trackerItems, cleanCopy, acceptOwnRevisions, withoutOwnMarks } from "./docx.mjs";
+import { isMonthly, lastDiaryOfMonth, compareTrackers, trackerGapText } from "./monthly";
 
 /** 0-100: how much the report needed fixing (must-checks count most). Lateness is shown separately. */
 /**
@@ -328,7 +329,7 @@ export async function checkOne(admin: SupabaseClient, id: string) {
   // not enough photos or not enough written, against the benchmark clerks' reports (weekly diaries: 35-57 photos,
   // 1,800-5,000 words); monthly reports aren't judged on this
   const words = r.paragraphs.reduce((n, p) => n + (p.text.match(/[A-Za-z]{2,}/g) ?? []).length, 0);
-  const monthly = /monthly/i.test(rep.folder_name ?? "") || /monthly/i.test(rep.file_name);
+  const monthly = isMonthly(rep);
   const min = rep.kind === "me" ? { photos: 12, words: 800 } : { photos: 20, words: 1200 };
   const extra: Issue[] = [];
   if (!monthly && stats.count < min.photos) extra.push({ severity: "medium", kind: "photos", text: `Only ${stats.count} photo${stats.count === 1 ? "" : "s"}: good reports have ${rep.kind === "me" ? "20 or more" : "35-50"}${usual ? ` (this clerk usually has about ${usual} here)` : ""}`, p: null });
@@ -361,6 +362,19 @@ export async function checkOne(admin: SupabaseClient, id: string) {
     trk.closedReasonUnclear.length ? `item${trk.closedReasonUnclear.length === 1 ? "" : "s"} ${nums(trk.closedReasonUnclear)} closed, but the comment doesn't say why (e.g. ${trk.unclearExamples[0] ? `item ${trk.unclearExamples[0].no}: "${trk.unclearExamples[0].comment}"` : ""})` : "",
   ].filter(Boolean);
   if (trkProblems.length) extra.push({ severity: "medium", kind: "other", text: `Issues tracker: ${trkProblems.join("; ")}`, p: null });
+  // a monthly report's tracker brought up to date with the last weekly diary of the month (Ronan, 17 Nov 2026)
+  let monthlyTracker: { against: string; month: string; missing: string[]; behind: string[]; text: string | null } | null = null;
+  if (monthly) {
+    try {
+      const last = await lastDiaryOfMonth(admin, { id, project_id: rep.project_id, kind: rep.kind, file_name: rep.renamed_from ?? rep.file_name, uploaded_at: rep.uploaded_at });
+      if (last) {
+        const gap = compareTrackers(trackerItems(r), trackerItems(await readReport(Buffer.from(await g.download(last.drive_file_id)))), r.paragraphs.map((x) => x.text));
+        const text = trackerGapText(gap, last.file_name);
+        monthlyTracker = { against: last.file_name, month: last.month, missing: gap.missing, behind: gap.behind, text };
+        if (text) extra.push({ severity: "medium", kind: "other", text, p: null });
+      }
+    } catch { /* a check that can't be done is left out, never holds the report up */ }
+  }
   if (sideways.length) extra.push({ severity: "low", kind: "photos", text: `${sideways.length} photo${sideways.length === 1 ? "" : "s"} may be on ${sideways.length === 1 ? "its" : "their"} side: please check and turn by hand if so (not changed automatically)`, p: null });
   // the date issued to the Lead Consultant is filled in by the office when it's sent (Ronan, 15 Nov 2026)
   const notOurs = (i: Issue) => /date issued to (the )?lead consultant|issued to lead consultant/i.test(i.text) || (i.kind === "photos" && /caption/i.test(i.text) && !/fewer|only \d+ photo/i.test(i.text)) || /beamore'?s diary|in the diary for this job|diary (says|shows)/i.test(i.text);
@@ -415,7 +429,7 @@ export async function checkOne(admin: SupabaseClient, id: string) {
     status: "ready", ai_summary: ai.summary, issues, spelling_fixed: spelt.applied,
     photos: { count: stats.count, blurry: stats.blurry, smallOnPage: stats.smallOnPage, stretched: stats.stretched, shrunk: shrunk.changed, rotated: rotated.length, reused, usual, uncaptioned: uncaptioned(r) },
     photo_hashes: hashes, photo_count: stats.count,
-    fixes: { spelling: applied, rotated: rotated.length, shrunk: shrunk.changed, stretched: shapes.stretched, enlarged: shapes.enlarged, uniform: uniform.changed, mixed: !uniform.wasUniform, side_cm: uniform.side ? +(uniform.side / 360000).toFixed(1) : null, renamed: nameFixed, words, programme: prog ?? null, standards: ai.standards ?? null, health_safety: hs, tracker: trk,
+    fixes: { spelling: applied, rotated: rotated.length, shrunk: shrunk.changed, stretched: shapes.stretched, enlarged: shapes.enlarged, uniform: uniform.changed, mixed: !uniform.wasUniform, side_cm: uniform.side ? +(uniform.side / 360000).toFixed(1) : null, renamed: nameFixed, words, programme: prog ?? null, standards: ai.standards ?? null, health_safety: hs, tracker: trk, monthly_tracker: monthlyTracker,
       score_by: "parts", score_parts: parts, template, pages_state: issues.some((i) => i.near) ? "waiting" : "none" },
     // lateness is shown on its own on the Reports page
     score: scoreTotal(parts),
@@ -428,6 +442,7 @@ export async function checkOne(admin: SupabaseClient, id: string) {
       ...(raw.length > 10_000_000 ? [`The file came in at ${(raw.length / 1e6).toFixed(0)} MB, so it's worth shrinking the photos before inserting them (in Word: Picture Format > Compress Pictures)`] : []),
       ...(!early && (hsGone.length || hsThin.length >= 3) ? [`It would be great to see all ${hs.length} health and safety items at the start of the report filled in, even briefly, rather than taken out or left as "N/A". This time it was ${hs.filter((h) => h.status !== "ok").map((h) => h.label).join(", ")}`] : []),
       ...(trkProblems.length ? [`On the issues tracker: it works best as a simple record of each issue and which report to read about it in (so no photos), with every item red, orange or green. When you close one, add the date, turn it green and add a line in the comments saying why it's closed, e.g. "certificate received 12/11/26" or "remedial work seen complete on 12/11/26", rather than leaving the earlier progress note as the last word`] : []),
+      ...(monthlyTracker?.text ? [`It would help to bring the monthly report's issues tracker up to date with the last diary of the month (${monthlyTracker.against.replace(/\.docx?$/i, "")}), so it shows the same open and closed items`] : []),
       ...(prog && (prog.verdict === "weak" || prog.verdict === "missing") ? [`On the ${prog.dfe ? "progress vs programme section" : "progress summary"}, it would help to ${progGaps.join("; ") || "follow the approach below"}`] : []),
       ...(template && templatePoint(template) ? [templatePoint(template)!] : []),
       ...(ai.clerk_points ?? []),
