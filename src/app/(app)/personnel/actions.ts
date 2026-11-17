@@ -2,7 +2,7 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { requireProfile } from "@/lib/auth";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { buildOnboarding } from "@/lib/onboarding";
 
 const s = (f: FormData, k: string) => String(f.get(k) ?? "").trim() || null;
@@ -167,4 +167,14 @@ export async function draftJoin(clerkId: string) {
   let msg: string;
   try { msg = await draftJoinEmail(admin, clerkId); } catch (e) { msg = `Draft not saved: ${e instanceof Error ? e.message : String(e)}`; }
   redirect(`/personnel/${clerkId}?draft=${encodeURIComponent(msg)}`);
+}
+
+/** Days a week a clerk works for us (5 = full time), for the Workload page. */
+export async function saveDaysPerWeek(clerkId: string, form: FormData) {
+  await requireProfile();
+  const days = Number(String(form.get("days") ?? "").trim());
+  if (!(days > 0 && days <= 7)) return;
+  await createServiceClient().from("clerks").update({ days_per_week: days }).eq("id", clerkId);
+  revalidatePath(`/personnel/${clerkId}`);
+  revalidatePath("/workload");
 }

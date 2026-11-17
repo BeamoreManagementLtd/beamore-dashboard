@@ -9,7 +9,8 @@ import { parseCostSheet } from "@/lib/sync/proposal-parse.mjs";
  * Planned days by month from each active project's latest cost sheet (daily, read only).
  * Finds the project's folder under My Drive/Business/Beamore Management/Cost Proposals/<Client>/ by name, picks the
  * most recently changed spreadsheet in it that has the month-by-month layout (cost schedules before attendance
- * plans), and stores its building and M&E days per month. Unchanged files are skipped.
+ * plans), and stores its building and M&E days per month. Unchanged files are skipped. Proposals still out (sent)
+ * are read too, so the Workload page can show them as possible work.
  */
 const FOLDER = "application/vnd.google-apps.folder";
 const XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
@@ -40,7 +41,7 @@ export async function syncProposalPlans(admin: SupabaseClient, opts: { limit?: n
     for (const c of clients) for (const f of await list(`'${c.id}' in parents and mimeType = '${FOLDER}' and trashed = false`)) folders.push({ ...f, client: c.name });
 
     const { data: projects } = await admin.from("projects").select("id,name,display_name,diary_aliases,proposal_folder_id,plan_file_id,plan_file_modified,clients(name)")
-      .in("stage", ["won_arranging", "won_preparing", "live", "on_hold"]);
+      .in("stage", ["sent", "won_arranging", "won_preparing", "live", "on_hold"]); // sent: shown as possible work on the Workload page
     let matched = 0, planned = 0, unchanged = 0, noSheet = 0;
     const missing: string[] = [];
     for (const p of (projects ?? []).slice(0, opts.limit ?? 1000)) {
@@ -68,7 +69,7 @@ export async function syncProposalPlans(admin: SupabaseClient, opts: { limit?: n
       let done = false;
       for (const f of files.slice(0, 6)) {
         const buf = f.mimeType === GSHEET ? await g.exportXlsx(f.id) : await g.download(f.id);
-        let rows: { month: string; building: number; me: number }[] = [];
+        let rows: { month: string; building: number; me: number; building_witness: number; me_witness: number; other: number }[] = [];
         try { rows = parseCostSheet(await loadWorkbook(Buffer.from(buf))); } catch { continue; }
         if (!rows.length) continue;
         await admin.from("project_planned_months").delete().eq("project_id", p.id);

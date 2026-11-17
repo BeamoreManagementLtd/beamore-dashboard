@@ -13,6 +13,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     ["/workflows", "Workflows"],
     ["/diary", "Diary"],
     ["/projects", "Projects"],
+    ["/workload", "Workload"],
     ["/invoices", "Overdue invoices"],
     ["/reports", "Reports"],
     ["/personnel", "Personnel"],

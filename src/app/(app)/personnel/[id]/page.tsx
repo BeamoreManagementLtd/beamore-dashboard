@@ -4,7 +4,7 @@ import { requireProfile } from "@/lib/auth";
 import { insuranceSummary, type Policy } from "@/lib/portal/data";
 import { createClient } from "@/lib/supabase/server";
 import { fd, fdy, today } from "@/lib/format";
-import { saveCompliance, startOnboarding, tickOnboarding, setActive, makeJoinLink } from "../actions";
+import { saveCompliance, startOnboarding, tickOnboarding, setActive, makeJoinLink, saveDaysPerWeek } from "../actions";
 import { EmailBox } from "../../email/email-box";
 import { joinLink } from "@/lib/join-link";
 import { buildOnboarding } from "@/lib/onboarding";
@@ -30,7 +30,7 @@ export default async function Clerk({ params, searchParams }: { params: Promise<
   const t = today();
   const monthStart = `${t.slice(0, 7)}-01`;
   const [{ data: clerk }, { data: comp }, { data: items }, { data: visits }, { data: absences }] = await Promise.all([
-    db.from("clerks").select("id,name,email,phone,active").eq("id", id).maybeSingle(),
+    db.from("clerks").select("id,name,email,phone,active,days_per_week").eq("id", id).maybeSingle(),
     db.from("clerk_compliance").select("*").eq("clerk_id", id).maybeSingle(),
     db.from("onboarding_items").select("id,item,done_on").eq("clerk_id", id).order("item"),
     db.from("diary_visits").select("visit_date,site_as_typed,kind,side,days,projects(display_name)").eq("clerk_id", id).gte("visit_date", monthStart).order("visit_date"),
@@ -64,6 +64,13 @@ export default async function Clerk({ params, searchParams }: { params: Promise<
         <div><h1>{clerk.name}</h1><p><Link href="/personnel">← Personnel</Link>{c.updated_at ? ` · record updated ${fdy(c.updated_at)}` : ""}</p></div>
         <form action={setActive.bind(null, id, !clerk.active)}><button className="btn">{clerk.active ? "Mark as no longer working with us" : "Mark as active again"}</button></form>
       </div>
+
+      <form action={saveDaysPerWeek.bind(null, id)} className="row small" style={{ gap: 8, alignItems: "center", margin: "0 0 12px" }}>
+        <label htmlFor="dpw">Works for us</label>
+        <input id="dpw" name="days" defaultValue={String(clerk.days_per_week ?? 5)} inputMode="decimal" style={{ width: 56 }} />
+        <span>days a week</span><button className="btn">Save</button>
+        <span className="muted">Used on the <Link href="/workload">Workload</Link> page to work out the days they have each month (holidays come off on top).</span>
+      </form>
 
       <ScoreTrend clerkId={id} />
 
