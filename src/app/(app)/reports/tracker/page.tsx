@@ -4,7 +4,7 @@ import { createClient } from "@/lib/supabase/server";
 import { today } from "@/lib/format";
 import { loadHolidays } from "@/lib/reports/days";
 import { buildTracker, type Cell } from "@/lib/reports/tracker";
-import { setReporting, setChasing } from "./actions";
+import { setReporting, setChasing, finishJob } from "./actions";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -105,7 +105,7 @@ export default async function ReportTracker({ searchParams }: { searchParams: Pr
         </div>
         <div className="tbl-wrap">
           <table style={{ borderCollapse: "separate", borderSpacing: 3 }}>
-            <thead><tr><th>Job</th><th>Clerk</th>{tr.cols.map((w) => <th key={w} style={{ textAlign: "center", fontWeight: 400 }} className="small">{short(w)}</th>)}</tr></thead>
+            <thead><tr><th>Job</th><th>Clerk</th>{tr.cols.map((w) => <th key={w} style={{ textAlign: "center", fontWeight: 400 }} className="small">{short(w)}</th>)}<th /></tr></thead>
             <tbody>{rows.map((r) => (
               <tr key={r.key}>
                 <td className="small" style={{ whiteSpace: "nowrap" }}><Link href={`/projects/${r.projectId}`}>{r.name}</Link>{r.elsewhere ? <span className="muted"> · {/^no /i.test(r.elsewhere) ? r.elsewhere : `in ${r.elsewhere}`}</span> : null}</td>
@@ -116,6 +116,7 @@ export default async function ReportTracker({ searchParams }: { searchParams: Pr
                   const box = <span style={{ display: "block", minWidth: 38, height: 22, lineHeight: "22px", borderRadius: 5, textAlign: "center", fontSize: 11.5, fontWeight: c.state === "missing" ? 700 : 500, background: s.bg, color: s.fg, border: c.state === "due" ? "1px dashed var(--line)" : "none" }}>{c.label === "Monthly" && c.files.length ? "M" : s.text}</span>;
                   return <td key={k} title={title} style={{ padding: 0 }}>{c.files[0] ? <a href={`https://drive.google.com/file/d/${c.files[0].id}/view`} target="_blank" rel="noreferrer" style={{ textDecoration: "none" }}>{box}</a> : box}</td>;
                 })}
+                <td style={{ paddingLeft: 6 }}>{r.kind !== "monthly" && <form action={finishJob}><input type="hidden" name="project" value={r.projectId} /><button className="btn small" title="Job finished: mark it complete so it leaves the tracker">Finished</button></form>}</td>
               </tr>
             ))}</tbody>
           </table>

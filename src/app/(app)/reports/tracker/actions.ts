@@ -15,6 +15,17 @@ export async function setReporting(form: FormData) {
   revalidatePath("/reports/tracker");
 }
 
+/** A job finished (Ronan, 17 Nov 2026: "shouldn't a report disappear off it when I say that the project is closed"): marked complete, so it leaves the tracker. */
+export async function finishJob(form: FormData) {
+  await requireProfile();
+  const id = String(form.get("project") ?? "");
+  if (!id) return;
+  const admin = createServiceClient();
+  const { data } = await admin.from("projects").update({ stage: "complete", stage_changed_at: new Date().toISOString() }).eq("id", id).in("stage", ["live", "on_hold", "won_preparing"]).select("id");
+  if (data?.length) await admin.from("project_events").insert({ project_id: id, source: "dashboard", kind: "Stage", who: "Dashboard", body: "Complete (marked finished on the report tracker)" });
+  revalidatePath("/reports/tracker");
+}
+
 /** Chasing missing reports by email: off until Ronan switches it on. */
 export async function setChasing(form: FormData) {
   const me = await requireProfile();
