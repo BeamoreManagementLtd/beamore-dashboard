@@ -115,13 +115,23 @@ export async function clerkSheet(admin: SupabaseClient, projectId: string) {
   const lines = (items ?? []).filter((i) => forClerks(i.item) && i.value?.trim()).map((i) => ({ label: i.item.replace(/\s*\(.*?\)\s*$/, ""), value: i.value!.trim() }));
   const reports = [p.report_to, p.report_cc].filter(Boolean).join("; ").split(/[;,]\s*/).filter((e) => e.includes("@") && !AP.test(e));
   if (reports.length && !lines.some((l) => /distribution/i.test(l.label))) lines.push({ label: "Reports go to", value: reports.join(", ") });
+  // the inspection schedule (Ronan, 17 Nov 2026): planned days per month from the cost schedule, or what's been agreed
+  // by phone; days only, never rates or money
+  const [{ data: pm }, { data: ag }] = await Promise.all([
+    admin.from("project_planned_months").select("month,building,me,building_witness,me_witness").eq("project_id", projectId).order("month"),
+    admin.from("workload_agreed").select("kind,days,per,date_from,date_to").eq("project_id", projectId).order("date_from"),
+  ]);
+  const plan = (pm ?? []).map((r) => ({ month: r.month as string, building: Number(r.building), me: Number(r.me), witness: Number(r.building_witness) + Number(r.me_witness) }))
+    .filter((r) => r.building || r.me);
+  const agreed = (ag ?? []).map((a) => `${a.kind === "me" ? "M&E" : "Building"}: ${Number(a.days)} day${Number(a.days) === 1 ? "" : "s"} a ${a.per} from ${ukDate(a.date_from)}${a.date_to ? ` to ${ukDate(a.date_to)}` : " until further notice"}`);
   return {
     project: p.display_name ?? p.name, client: (p.clients as unknown as { name?: string } | null)?.name ?? null, site: p.site as string | null,
     folder: p.drive_folder_id ? `https://drive.google.com/drive/folders/${p.drive_folder_id}` : null,
-    lines, clerks: [...new Set([p.clerk_id, p.clerk_me_id].filter(Boolean) as string[])],
+    lines, clerks: [...new Set([p.clerk_id, p.clerk_me_id].filter(Boolean) as string[])], plan, agreed,
   };
 }
 
+const ukDate = (d: string) => new Date(`${d}T12:00:00Z`).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" });
 const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
 /**
