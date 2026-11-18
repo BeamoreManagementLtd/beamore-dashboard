@@ -114,13 +114,14 @@ export async function precheckOne(admin: SupabaseClient, id: string) {
     },
   });
 
+  const beamore = await isBeamoreReport(r, p);
   await admin.from("report_prechecks").update({
     status: "done", checked_at: new Date().toISOString(), score: scoreTotal(j.parts), summary: ai.summary,
     issues: j.issues, clerk_points: j.clerkPoints,
     fixes: {
       spelling: ai.spelling.map((s) => ({ find: s.find, replace: s.replace })), wording: heldBack.map((s) => ({ find: s.find, replace: s.replace })),
       score_parts: j.parts, words: j.words, photos: stats.count, mixed: !uniform.wasUniform, stretched: stats.stretched, sideways, renamed: nameFixed,
-      report_number: ai.report_number, visit_date: ai.visit_date, mb: +(raw.length / 1e6).toFixed(1),
+      report_number: ai.report_number, visit_date: ai.visit_date, mb: +(raw.length / 1e6).toFixed(1), beamore, summary: ai.summary,
     },
     storage_path: null,
   }).eq("id", id);
@@ -151,6 +152,30 @@ export async function emailPrecheck(admin: SupabaseClient, id: string) {
   const { queueEmail } = await import("@/lib/outbox");
   await queueEmail(admin, { kind: "ai-precheck", to: c.email, subject: e.subject, body: e.text, clerkId: c.id, ref: id, status: "sent", note: "Sent automatically from ai@beamore.co.uk" });
   return true;
+}
+
+// words in job names that don't identify a job on their own
+const GENERIC = new Set(["school", "schools", "academy", "college", "primary", "secondary", "high", "junior", "infant", "infants", "church", "england", "catholic", "the", "and", "for", "new", "block", "phase", "building", "works", "project", "site", "house", "centre", "center", "court", "road", "street", "lane", "park", "village", "fabric", "build", "trust", "girls", "boys", "grammar", "community", "free", "sixth", "form", "campus", "extension", "refurbishment"]);
+
+/**
+ * Is this a Beamore report? (Ronan, 18 Nov 2026: "highlight to me if anyone tries to check a report that's not a
+ * Beamore report".) Beamore's reports name Beamore (or BML in the DfE file codes) in the text, a header or footer, or
+ * the file's details. Some DfE forms don't (4 of 45 tried), but they always name the job, so only a report that names
+ * neither Beamore nor the job chosen is flagged.
+ */
+export async function isBeamoreReport(r: Awaited<ReturnType<typeof readReport>>, p: { name?: string | null; display_name?: string | null; dfe_project_number?: string | null; po_number?: string | null } | null) {
+  let text = "";
+  for (const n of Object.keys(r.zip.files)) if (/^(word\/(document|header\d*|footer\d*)\.xml|docProps\/(core|app|custom)\.xml)$/.test(n)) text += " " + (await r.zip.file(n)!.async("string")).replace(/<[^>]+>/g, " ");
+  text = text.replace(/\s+/g, " ");
+  if (/beamore|BML/i.test(text)) return { ok: true, why: "Names Beamore" };
+  const lower = text.toLowerCase();
+  const nums = [p?.dfe_project_number, p?.po_number].filter((x): x is string => !!x && /\d{3}/.test(x)).filter((x) => lower.includes(x.toLowerCase()));
+  const words = [...new Set(`${p?.name ?? ""} ${p?.display_name ?? ""}`.toLowerCase().replace(/[^a-z0-9' ]/g, " ").split(/\s+/).filter((w) => w.length >= 4 && !GENERIC.has(w) && !/^\d+$/.test(w)))];
+  const hits = words.filter((w) => new RegExp(`\\b${w.replace(/'/g, "'?")}`, "i").test(text));
+  // one shared ordinary word isn't enough ("leisure" in a school report): the job number, the first word of the job's
+  // name (usually the place: "Ormiston" for Ormiston Bridge Academy), or two of its words
+  if (nums.length || hits.includes(words[0]) || hits.length >= 2) return { ok: true, why: `Doesn't name Beamore, but is about the job (${[...nums, ...hits].slice(0, 3).join(", ")})` };
+  return { ok: false, why: `Doesn't mention Beamore or the job chosen (${p?.display_name ?? p?.name ?? "no job"})` };
 }
 
 /** Any check left waiting (the page was closed while it ran, say), picked up by the 15-minute report job. */

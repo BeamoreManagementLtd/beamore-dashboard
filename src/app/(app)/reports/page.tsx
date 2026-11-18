@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { requireProfile } from "@/lib/auth";
 import { createClient } from "@/lib/supabase/server";
+import { Prechecks } from "./prechecks";
 import { fd, fdt, today } from "@/lib/format";
 import { loadHolidays, addWorkingDays, workingDaysBetween, rag } from "@/lib/reports/days";
 import { refreshReports } from "./actions";
@@ -140,6 +141,7 @@ export default async function Reports({ searchParams }: { searchParams: Promise<
       {refreshed && <p className="callout info">Looked just now: {refreshed}.</p>}
       {sent && <p className="callout good">Approved. The office PC makes the PDF in Word, saves it next to the report and it is sent from your email, usually within a few minutes.</p>}
       {helperLate && <p className="callout warn">The PC that makes the PDFs in Word{helper?.file_id && helper.file_id !== "pc" ? ` (${helper.file_id})` : ""} hasn’t checked in {helperSeen ? `since ${fdt(helperSeen)}` : "yet"}: approved reports wait until it’s on.</p>}
+      <Prechecks />
       {lastRun?.[0] && <p className="small muted">Last looked {fdt(lastRun[0].finished_at)}: {lastRun[0].ok ? lastRun[0].message : <span className="neg">{lastRun[0].message}</span>}. Every 15 minutes. Clerks have {clerkDays} working day{clerkDays === 1 ? "" : "s"} after a visit; the team {teamDays} after upload.</p>}
 
       <div className="tiles">
