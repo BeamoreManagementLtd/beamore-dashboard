@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { gbp, fdt } from "@/lib/format";
 import { syncNow, syncDiaryNow, syncGmailNow, setupTracking } from "./actions";
 import { OwedBreakdown } from "./owed";
+import { estimateMonth, monthsToEstimate } from "@/lib/finance-estimate";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300; // "Read diary now" / "Read Gmail now" can take a minute or two
@@ -32,6 +33,17 @@ export default async function Finance({ searchParams }: { searchParams: Promise<
   const fytd = snaps?.find((s) => s.period.startsWith("FY"));
   const gp = (s?: { sales: number; subcontractors: number; cogs: number }) => (s ? (s.sales ?? 0) - (s.subcontractors ?? 0) - (s.cogs ?? 0) : null);
   const pct = (a: number | null, b?: number) => (a != null && b ? `${((a / b) * 100).toFixed(1)}%` : "—");
+  // next month from the diary's grey side, with overheads as in Xero's last month (Ronan, 18 Nov 2026)
+  const overheads = month ? (gp(month) ?? 0) - Number(month.net_profit ?? 0) : 0;
+  const estimates = await Promise.all((await monthsToEstimate(db, month?.period)).map((m) => estimateMonth(db, m)));
+  const monthName = (m: string) => new Date(m + "T00:00:00Z").toLocaleDateString("en-GB", { month: "long", year: "numeric", timeZone: "UTC" });
+  // drafts waiting in Xero (Ronan, 18 Nov 2026: "how many invoices are still in draft")
+  const [{ data: drafts }, { data: held }] = await Promise.all([
+    db.from("xero_draft_invoices").select("xero_invoice_id,number,contact,reference,issued,subtotal,projects(display_name)").order("issued"),
+    db.from("held_draft_contacts").select("contact"),
+  ]);
+  const heldSet = new Set((held ?? []).map((h) => h.contact));
+  const draftTotal = (drafts ?? []).reduce((n, d) => n + Number(d.subtotal ?? 0), 0);
 
   return (
     <>
@@ -130,6 +142,48 @@ export default async function Finance({ searchParams }: { searchParams: Promise<
                 <tr><td>Net profit</td><td className="num">{gbp(month?.net_profit)}</td><td className="num">{gbp(fytd?.net_profit)}</td></tr>
               </tbody>
             </table>
+          </section>
+          {estimates.map((e) => {
+            const net = e.fees - e.clerks - overheads;
+            return (
+              <section className="panel" key={e.month}>
+                <h2>Estimated net profit, {monthName(e.month)}</h2>
+                <p className="small muted">From the grey (planned) side of the diary: {e.days} days at each job&apos;s day rate (the rate kept for the job, else its last invoice less VAT), less what each planned day costs in clerks, less overheads as in Xero for {month?.period}. An estimate: the real figure follows what&apos;s charged on the salmon side and invoiced.</p>
+                <table>
+                  <tbody>
+                    <tr><td>Fees ({e.days - e.unpricedDays} planned days priced)</td><td className="num">{gbp(e.fees)}</td></tr>
+                    <tr><td>Clerk costs</td><td className="num">−{gbp(e.clerks)}</td></tr>
+                    <tr><td>Gross profit</td><td className="num">{gbp(e.fees - e.clerks)} <span className="muted small">{pct(e.fees - e.clerks, e.fees)}</span></td></tr>
+                    <tr><td>Overheads (as {month?.period})</td><td className="num">−{gbp(overheads)}</td></tr>
+                    <tr><td><b>Estimated net profit</b></td><td className="num"><b className={net < 0 ? "neg" : ""}>{gbp(net)}</b></td></tr>
+                  </tbody>
+                </table>
+                {!!e.unpricedDays && (
+                  <p className="small muted">Not priced: {e.unpricedDays} planned days on jobs with no day rate or invoice yet ({e.unpriced.map((u) => `${u.name} ${u.days}`).join(", ")}). Their clerk costs are included, so the profit is understated by their fees; add a day rate on the job to include them.</p>
+                )}
+              </section>
+            );
+          })}
+          <section className="panel">
+            <h2>Invoices still in draft in Xero</h2>
+            {!drafts?.length ? <p className="muted small">No draft invoices.</p> : (
+              <>
+                <p className="small muted">{drafts.length} draft invoice{drafts.length === 1 ? "" : "s"} worth {gbp(draftTotal)} before VAT, not yet approved or sent{heldSet.size ? `; those marked held are kept back on purpose` : ""}.</p>
+                <div className="tbl-wrap"><table className="small">
+                  <thead><tr><th>Dated</th><th>Invoice</th><th>Contact</th><th>Job</th><th>Reference</th><th className="num">Before VAT</th></tr></thead>
+                  <tbody>{drafts.map((d) => (
+                    <tr key={d.xero_invoice_id}>
+                      <td>{d.issued ? new Date(d.issued + "T00:00:00Z").toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" }) : ""}</td>
+                      <td>{d.number ?? <span className="muted">no number</span>}</td>
+                      <td>{d.contact}{heldSet.has(d.contact ?? "") ? <span className="pill small"> held</span> : null}</td>
+                      <td>{(d.projects as unknown as { display_name: string } | null)?.display_name ?? ""}</td>
+                      <td className="muted">{d.reference}</td>
+                      <td className="num">{gbp(d.subtotal)}</td>
+                    </tr>
+                  ))}</tbody>
+                </table></div>
+              </>
+            )}
           </section>
         </>
       )}

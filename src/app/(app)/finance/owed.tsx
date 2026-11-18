@@ -27,7 +27,7 @@ const monthLabel = (ym: string) => new Date(`${ym}-01T12:00:00Z`).toLocaleDateSt
  * Who owes Beamore what (Ronan, 18 Nov 2026: "a breakdown of which company owes what and who", then "more information
  * about who's overdue … a list of all the overdue invoices"): headline numbers, one line per company (Xero contacts of
  * the same company combined) with what's overdue and how late, every overdue invoice with where its chase has got to,
- * what falls due in the next 30 days, and what was invoiced each month and how much of it is still unpaid.
+ * and what was invoiced each month and how much of it is still unpaid.
  */
 export async function OwedBreakdown() {
   const db = await createClient();
@@ -81,9 +81,6 @@ export async function OwedBreakdown() {
     const x = byStatus.get(s) ?? { n: 0, v: 0 };
     x.n++; x.v += Number(i.amount_due); byStatus.set(s, x);
   }
-  const in30 = new Date(Date.parse(t) + 30 * 864e5).toISOString().slice(0, 10);
-  const dueSoon = rows.filter((i) => i.due && i.due >= t && i.due <= in30);
-  const dueSoonTotal = dueSoon.reduce((s, i) => s + Number(i.amount_due), 0);
   const over90 = bandTotals[4];
 
   // invoiced each month (last 12) and how much of it is still unpaid
@@ -104,7 +101,6 @@ export async function OwedBreakdown() {
         <div className="tile r"><span className="label">Overdue</span><span className="big">{gbp(late)}</span><span className="sub">{overdueRows.length} invoices · {cos.filter((c) => c.overdue > 0).length} companies</span></div>
         <div className="tile r"><span className="label">Over 90 days late</span><span className="big">{gbp(over90)}</span><span className="sub">{overdueRows.filter((i) => daysLate(i.due, t) > 90).length} invoices</span></div>
         <div className="tile r"><span className="label">Average days late</span><span className="big">{Math.round(avgLate)}</span><span className="sub">weighted by amount</span></div>
-        <div className="tile r"><span className="label">Due in the next 30 days</span><span className="big">{gbp(dueSoonTotal)}</span><span className="sub">{dueSoon.length} invoices</span></div>
       </div>
 
       <section className="panel">
@@ -182,27 +178,6 @@ export async function OwedBreakdown() {
             );
           })}</tbody>
         </table></div>
-      </section>
-
-      <section className="panel">
-        <h2>Due in the next 30 days</h2>
-        {!dueSoon.length ? <p className="muted small">Nothing falls due in the next 30 days.</p> : (
-          <>
-            <p className="small muted">{gbp(dueSoonTotal)} on {dueSoon.length} invoices should come in by {fd(in30)} if paid on time.</p>
-            <div className="tbl-wrap"><table className="small">
-              <thead><tr><th>Due</th><th>Invoice</th><th>Company</th><th>Job</th><th className="num">Owed</th></tr></thead>
-              <tbody>{dueSoon.map((i) => (
-                <tr key={i.number}>
-                  <td>{fd(i.due!)}</td>
-                  <td><Link href={`/invoices/${encodeURIComponent(i.number)}`}>{i.number}</Link></td>
-                  <td>{company(contactName(i))}</td>
-                  <td>{job(i)}</td>
-                  <td className="num">{gbp(i.amount_due)}</td>
-                </tr>
-              ))}</tbody>
-            </table></div>
-          </>
-        )}
       </section>
 
       <section className="panel">
