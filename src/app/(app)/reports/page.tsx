@@ -51,8 +51,15 @@ export default async function Reports({ searchParams }: { searchParams: Promise<
     return { ...r, due, colour: rag(due, t), clerkLate, high: issues.filter((i) => i.severity === "high").length, issueCount: issues.length };
   });
   const mine = (r: { checker_id: string | null }) => r.checker_id === me.id;
-  const shown = rows.filter((r) => (!who ? true : who === "me" ? mine(r) : who === "none" ? !r.checker_id : r.checker_id === who))
-    .sort((a, b) => ["red", "orange", "green"].indexOf(a.colour) - ["red", "orange", "green"].indexOf(b.colour) || a.due.localeCompare(b.due));
+  const urgent = (a: typeof rows[number], b: typeof rows[number]) => ["red", "orange", "green"].indexOf(a.colour) - ["red", "orange", "green"].indexOf(b.colour) || a.due.localeCompare(b.due);
+  // grouped by job (Ronan, 18 Nov 2026): the job with the most urgent report first, then all its other reports straight
+  // underneath, oldest first; then the next job
+  const filtered = rows.filter((r) => (!who ? true : who === "me" ? mine(r) : who === "none" ? !r.checker_id : r.checker_id === who));
+  const jobKey = (r: typeof rows[number]) => r.project_id ?? r.project_folder_name ?? r.id;
+  const jobRank = new Map<string, number>();
+  [...filtered].sort(urgent).forEach((r, k) => { if (!jobRank.has(jobKey(r))) jobRank.set(jobKey(r), k); });
+  const shown = filtered.sort((a, b) => jobRank.get(jobKey(a))! - jobRank.get(jobKey(b))!
+    || (a.visit_date ?? a.uploaded_at).localeCompare(b.visit_date ?? b.uploaded_at) || a.uploaded_at.localeCompare(b.uploaded_at));
   const count = (c: string) => rows.filter((r) => r.colour === c).length;
   const checkers = [...new Set(rows.map((r) => r.checker_id).filter(Boolean))] as string[];
 
@@ -148,13 +155,16 @@ export default async function Reports({ searchParams }: { searchParams: Promise<
         {!shown.length ? <p className="empty">Nothing waiting.</p> : (
           <div className="tbl-wrap"><table>
             <thead><tr><th /><th>Project</th><th>Report</th><th>Clerk</th><th>Visit</th><th>Uploaded</th><th>Due out</th><th>Issues</th><th className="num" title="The AI&apos;s overall score for the report, out of 100 (grey: scored the old way; check it again)">Score</th><th>Status</th><th>Checker</th></tr></thead>
-            <tbody>{shown.map((r) => {
+            <tbody>{shown.map((r, k) => {
               const p = r.projects as unknown as { name?: string } | null;
               const [st, tone] = STATUS[r.status] ?? [r.status, "muted"];
+              // the first report of each job starts a group (a line above it); the job's later reports sit under it
+              const first = k === 0 || jobKey(shown[k - 1]) !== jobKey(r);
+              const more = first ? shown.filter((x) => jobKey(x) === jobKey(r)).length : 0;
               return (
-                <tr key={r.id}>
+                <tr key={r.id} style={first && k ? { borderTop: "2px solid var(--line)" } : undefined}>
                   <td title={r.colour}>{r.colour === "red" ? "🔴" : r.colour === "orange" ? "🟠" : "🟢"}</td>
-                  <td><b>{p?.name ?? r.project_folder_name}</b><span className="two">{r.folder_name}</span></td>
+                  <td>{first ? <><b>{p?.name ?? r.project_folder_name}</b>{more > 1 ? <span className="muted small"> · {more} reports</span> : null}</> : <span className="muted small">↳ same job</span>}<span className="two">{r.folder_name}</span></td>
                   <td className="small"><Link href={`/reports/${r.id}`}>{r.file_name}</Link></td>
                   <td className="small">{(r.clerks as unknown as { name?: string } | null)?.name ?? "—"}</td>
                   <td className="small">{fd(r.visit_date)}</td>
