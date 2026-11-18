@@ -1,4 +1,5 @@
 import "server-only";
+import JSZip from "jszip";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { projectMatcher } from "@/lib/project-match";
 import { dateInName } from "./naming.mjs";
@@ -18,7 +19,7 @@ const DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.doc
 
 type Folder = { id: string; name: string; parents?: string[] };
 export type DriveFile = { id: string; name: string; parents?: string[]; createdTime: string; mimeType?: string };
-type Drive = { json: <T>(path: string, params: Record<string, string>) => Promise<T> };
+type Drive = { json: <T>(path: string, params: Record<string, string>) => Promise<T>; download?: (fileId: string) => Promise<ArrayBuffer> };
 
 export const mondayOf = (d: string) => { const x = new Date(`${d}T00:00:00Z`); x.setUTCDate(x.getUTCDate() - ((x.getUTCDay() + 6) % 7)); return x.toISOString().slice(0, 10); };
 const plus = (d: string, n: number) => { const x = new Date(`${d}T00:00:00Z`); x.setUTCDate(x.getUTCDate() + n); return x.toISOString().slice(0, 10); };
@@ -121,8 +122,74 @@ export async function recordReportFiles(admin: SupabaseClient, g: Drive, files: 
       monthly: isMonthly({ folder_name: at.rf.name, file_name: f.name }), created_time: f.createdTime, report_date: reportDate, week: mondayOf(reportDate),
     });
   }
+  await readInside(admin, g, rows);
   for (let i = 0; i < rows.length; i += 200) await admin.from("report_files").upsert(rows.slice(i, i + 200));
   return rows.length;
+}
+
+type FileRow = { drive_file_id: string; name: string; file_type: string; folder_id: string; project_id: string | null; kind: string; monthly: boolean; created_time: string; report_date: string; week: string };
+const MONTHS: Record<string, string> = { jan: "01", feb: "02", mar: "03", apr: "04", may: "05", jun: "06", jul: "07", aug: "08", sep: "09", oct: "10", nov: "11", dec: "12" };
+/** "Site Visit Date: 12/10/2026", "Date of visit 6th October 2026"... as written in the report itself. */
+export function visitDateInText(t: string) {
+  const m = /(?:visit|inspection)\s*(?:date|on)?\s*(?:of\s*visit)?\s*:?\s*(?:[a-z]+day,?\s*)?(\d{1,2})(?:st|nd|rd|th)?[\s\/.\-]+(\d{1,2}|[a-z]{3,9})[\s\/.\-,]+(\d{2,4})/i.exec(t)
+    ?? /date\s*of\s*visit\s*:?\s*(?:[a-z]+day,?\s*)?(\d{1,2})(?:st|nd|rd|th)?[\s\/.\-]+(\d{1,2}|[a-z]{3,9})[\s\/.\-,]+(\d{2,4})/i.exec(t);
+  if (!m) return null;
+  const mo = /^\d+$/.test(m[2]) ? m[2].padStart(2, "0") : MONTHS[m[2].slice(0, 3).toLowerCase()];
+  if (!mo || +mo > 12 || +m[1] < 1 || +m[1] > 31) return null;
+  const iso = `${m[3].length === 2 ? `20${m[3]}` : m[3]}-${mo}-${m[1].padStart(2, "0")}`;
+  return Number.isNaN(Date.parse(iso)) ? null : iso;
+}
+const fileBase = (n: string) => n.replace(/\.(docx?|pdf)$/i, "").toLowerCase().replace(/\s+/g, " ").trim();
+
+/**
+ * What the report itself says (Ronan, 18 Nov 2026: Mark Hanson's Polam Hall reports have no date in their names, so
+ * they were put in the wrong weeks and showed as missing; M&E reports kept in the building folder showed the M&E week
+ * as missing): a Word report's visit date, and whether it was written by the job's M&E clerk rather than its building
+ * clerk. A PDF follows its Word file of the same name. Changes the rows given.
+ */
+export async function readInside(admin: SupabaseClient, g: Drive, rows: FileRow[]) {
+  if (!g.download || !rows.length) return 0;
+  const pids = [...new Set(rows.map((r) => r.project_id).filter(Boolean))] as string[];
+  const { data: ps } = pids.length ? await admin.from("projects").select("id,clerk_id,clerk_me_id").in("id", pids) : { data: [] };
+  const cids = [...new Set((ps ?? []).flatMap((p) => [p.clerk_id, p.clerk_me_id]).filter(Boolean))] as string[];
+  const { data: cs } = cids.length ? await admin.from("clerks").select("id,name").in("id", cids) : { data: [] };
+  const surname = (id: string | null) => ((cs ?? []).find((c) => c.id === id)?.name ?? "").trim().split(/\s+/).at(-1)?.toLowerCase() ?? "";
+  let changed = 0;
+  const words = new Map<string, { date: string | null; kind: string | null }>();
+  for (const r of rows.filter((x) => x.file_type === "docx" && !x.monthly)) {
+    let text = "";
+    try {
+      const z = await JSZip.loadAsync(Buffer.from(await g.download(r.drive_file_id)));
+      text = ((await z.file("word/document.xml")?.async("string")) ?? "").replace(/<\/w:p>/g, "\n").replace(/<[^>]+>/g, " ").replace(/&amp;/g, "&").replace(/\s+/g, " ").slice(0, 8000);
+    } catch { continue; }
+    const created = r.created_time.slice(0, 10);
+    // only when the name has no usable date: clerks often copy last week's report and leave the old visit date inside
+    // ("45- Burnside Secondary - W.C 28.9.26" still says 7 Sep), so a date in the name wins
+    const named = dateInName(r.name);
+    const d = named && named <= created && named >= plus(created, -45) ? null : visitDateInText(text);
+    const date = d && d <= plus(created, 1) && d >= plus(created, -21) ? d : null; // an old copied date is ignored
+    const p = (ps ?? []).find((x) => x.id === r.project_id);
+    let kind: string | null = null;
+    if (p?.clerk_me_id && p.clerk_id && p.clerk_me_id !== p.clerk_id) {
+      const head = text.slice(0, 3000).toLowerCase(), me = surname(p.clerk_me_id), b = surname(p.clerk_id);
+      // M&E only when it says so as well (Alan Wilcox's Bramhall diaries name him, the M&E clerk, but are building reports)
+      const says = /m\s*&\s*e|\bmep\b|mechanical/.test(head);
+      if (me && b && me !== b) kind = head.includes(me) && !head.includes(b) && says ? "me" : head.includes(b) && !head.includes(me) && !says ? "building" : null;
+    }
+    words.set(`${r.folder_id}|${fileBase(r.name)}`, { date, kind });
+    if (date && date !== r.report_date) { r.report_date = date; r.week = mondayOf(date); changed++; }
+    if (kind && kind !== r.kind) { r.kind = kind; changed++; }
+  }
+  // PDFs: their Word file's date and kind
+  for (const r of rows.filter((x) => x.file_type === "pdf" && !x.monthly)) {
+    // only a Word file whose date was just read from inside it: a date held from before may be a guess
+    const w = words.get(`${r.folder_id}|${fileBase(r.name)}`);
+    const pdfNamed = dateInName(r.name), pdfCreated = r.created_time.slice(0, 10);
+    const ownDate = !!pdfNamed && pdfNamed <= pdfCreated && pdfNamed >= plus(pdfCreated, -45);
+    if (!ownDate && w?.date && w.date !== r.report_date) { r.report_date = w.date; r.week = mondayOf(w.date); changed++; }
+    if (w?.kind && w.kind !== r.kind) { r.kind = w.kind; changed++; }
+  }
+  return changed;
 }
 
 /** Missing reports before this week (a Monday) are no longer counted or chased. */
