@@ -9,6 +9,7 @@ import { scoreTotal } from "./score";
 import { isMonthly, lastDiaryOfMonth, compareTrackers, trackerGapText } from "./monthly";
 import { conventionName } from "./naming.mjs";
 import { templateBits, compareTemplate, pickLast, type TemplateCheck } from "./template";
+import { feedbackEmail, type FeedbackReport } from "./feedback-email";
 
 export const PRECHECK_BUCKET = "report-prechecks";
 const DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
@@ -125,6 +126,31 @@ export async function precheckOne(admin: SupabaseClient, id: string) {
   }).eq("id", id);
   // the draft isn't kept: it was only for this check
   await admin.storage.from(PRECHECK_BUCKET).remove([pc.storage_path]).catch(() => undefined);
+  await emailPrecheck(admin, id).catch(() => undefined);
+}
+
+/**
+ * The results emailed to the clerk who asked for the check (Ronan, 18 Nov 2026), from ai@beamore.co.uk like all the AI
+ * feedback emails: what the check found, that nothing has been changed, and that the final report still needs
+ * uploading to Google Drive once they've put things right. Once per check; kept on "Emails to send" as a record.
+ */
+export async function emailPrecheck(admin: SupabaseClient, id: string) {
+  const { data: pc } = await admin.from("report_prechecks").select("id,clerk_id,file_name,score,clerk_points,fixes,status,projects(name,display_name)").eq("id", id).single();
+  if (!pc || pc.status !== "done") return false;
+  const { data: c } = await admin.from("clerks").select("id,name,email,active").eq("id", pc.clerk_id).single();
+  if (!c?.email) return false;
+  const { data: before } = await admin.from("email_outbox").select("id").eq("kind", "ai-precheck").eq("ref", id).limit(1);
+  if (before?.length) return false;
+  const p = pc.projects as unknown as { name?: string; display_name?: string } | null;
+  const site = process.env.NEXT_PUBLIC_SITE_URL ?? "https://dashboard.beamore.co.uk";
+  const e = feedbackEmail(pc as unknown as FeedbackReport, { first: c.name.split(" ")[0], job: p?.name ?? p?.display_name ?? "your job", site, precheck: true });
+  const { sendFromMailbox, AI_MAILBOX } = await import("@/lib/google-user");
+  const res = (await sendFromMailbox(admin, AI_MAILBOX, "Beamore AI", { to: c.email, subject: e.subject, body: e.text, html: e.html }))
+    ?? (await (await driveClient(admin)).sendAutomaticAs({ email: AI_MAILBOX, name: "Beamore AI" }, { to: c.email, subject: e.subject, body: e.text }));
+  if (!res) return false; // ai@ isn't connected: never sent from anyone else's address
+  const { queueEmail } = await import("@/lib/outbox");
+  await queueEmail(admin, { kind: "ai-precheck", to: c.email, subject: e.subject, body: e.text, clerkId: c.id, ref: id, status: "sent", note: "Sent automatically from ai@beamore.co.uk" });
+  return true;
 }
 
 /** Any check left waiting (the page was closed while it ran, say), picked up by the 15-minute report job. */

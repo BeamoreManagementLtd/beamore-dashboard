@@ -19,7 +19,7 @@ export function PrecheckBox({ jobs, disabled }: { jobs: { id: string; name: stri
     const f = Array.from(files)[0];
     if (!f) return;
     if (!job) return setMsg({ state: "error", text: "Please choose the job first." });
-    setMsg({ state: "sending", text: `Uploading ${f.name}…` });
+    setMsg({ state: "sending", text: `Uploading ${f.name}… the check then takes a few minutes.` });
     try {
       const s = await startPrecheck({ projectId: job, fileName: f.name, bytes: f.size });
       if (!s.ok) return setMsg({ state: "error", text: s.message });
@@ -44,10 +44,15 @@ export function PrecheckBox({ jobs, disabled }: { jobs: { id: string; name: stri
       onDrop={(e) => { e.preventDefault(); setOver(false); send(e.dataTransfer.files); }}
     >
       <div className="drop-icon" aria-hidden>✓</div>
-      <b>Check a report before you upload it</b>
-      <p className="muted small">
-        Get the AI feedback on your report now, put right anything you want to, then upload the final version to the job&apos;s
-        Google Drive folder as normal. The copy you check here doesn&apos;t go into Google Drive or to the office, and it isn&apos;t kept.
+      <b>Upload your report here for a pre-check</b>
+      <p className="small" style={{ margin: "4px 0" }}>
+        1. Choose the job and your Word file. 2. Wait a few minutes while it&apos;s checked: the results open on this page and are
+        emailed to you too. 3. Put right anything you want to in Word. 4. Upload the final report to the job&apos;s Google Drive
+        folder as normal.
+      </p>
+      <p className="muted small" style={{ margin: "4px 0" }}>
+        This is only a check. Nothing in your report is changed, and the copy you upload here does <b>not</b> go into Google Drive
+        or to the office, so you still need to upload your report to Google Drive yourself.
       </p>
       <label className="small">Job{" "}
         <select value={job} onChange={(e) => setJob(e.target.value)}>
@@ -55,7 +60,7 @@ export function PrecheckBox({ jobs, disabled }: { jobs: { id: string; name: stri
           {jobs.map((j) => <option key={j.id} value={j.id}>{j.name}</option>)}
         </select>
       </label>
-      <button className="btn primary" type="button" disabled={msg?.state === "sending"} onClick={() => input.current?.click()}>Choose the Word file (.docx)</button>
+      <button className="btn primary" type="button" disabled={msg?.state === "sending"} onClick={() => input.current?.click()}>Upload report for a pre-check (.docx)</button>
       <input ref={input} type="file" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" hidden onChange={(e) => { if (e.target.files) send(e.target.files); e.target.value = ""; }} />
       {msg && <p className={`small ${msg.state === "error" ? "neg" : "muted"}`}>{msg.text}</p>}
     </div>

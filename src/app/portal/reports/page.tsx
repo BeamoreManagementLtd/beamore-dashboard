@@ -30,13 +30,9 @@ export default async function YourReports() {
   ]);
   return (
     <>
+      <h1>Your reports</h1>
       <section className="card">
-        <h1>Your reports</h1>
-        <AiNote />
-        <AiSwitch on={on} email={!!c?.ai_feedback_email} viewingAs={me.viewingAs} />
-      </section>
-      <section className="card">
-        <h2>Check before you upload</h2>
+        <h2>Pre-check a report before uploading it to Google Drive</h2>
         <PrecheckBox jobs={(jobs ?? []).map((j) => ({ id: j.id, name: j.display_name ?? j.name }))} disabled={me.viewingAs ? "Only the clerk can check reports here." : undefined} />
         {!!checks?.length && (
           <table className="ptable" style={{ marginTop: 12 }}>
@@ -55,6 +51,11 @@ export default async function YourReports() {
             })}</tbody>
           </table>
         )}
+      </section>
+      <section className="card">
+        <h2>AI feedback on your sent reports</h2>
+        <AiNote />
+        <AiSwitch on={on} email={!!c?.ai_feedback_email} viewingAs={me.viewingAs} />
       </section>
       {on && (
         <ScoreGraph rows={(reps ?? []).filter((r) => r.score !== null && r.score !== undefined)
