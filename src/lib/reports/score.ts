@@ -53,7 +53,8 @@ export function scoreParts(x: In): ScorePart[] {
   const shape = 2;
   const clear = r1(2 * (1 - Math.min(1, ((p.small + p.blurry) / Math.max(1, p.count)) * 4)));
   const photoNotes = [
-    p.expected ? `${p.count} photo${p.count === 1 ? "" : "s"}${p.reused ? ` (${p.reused} reused)` : ""} against ${p.expected} expected` : `${p.count} photos`,
+    // (Ronan, 18 Nov 2026: "41 against 20 expected" read as a fault; the figure is a minimum, and more is a good thing)
+    p.expected ? `${p.count} photo${p.count === 1 ? "" : "s"}${p.reused ? ` (${p.reused} reused)` : ""}${fresh >= p.expected ? `, plenty (${p.expected} or more is the aim)` : `, short of the ${p.expected} or more aimed for`}` : `${p.count} photos`,
     p.mixed ? "different sizes" : "", p.stretched ? `${p.stretched} stretched (straightened, not marked down)` : "", p.sideways ? `${p.sideways} may be sideways (not marked down)` : "",
     p.small ? `${p.small} too small` : "", p.blurry ? `${p.blurry} low detail` : "",
   ].filter(Boolean);
