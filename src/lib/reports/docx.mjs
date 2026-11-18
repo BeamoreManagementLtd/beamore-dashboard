@@ -252,11 +252,35 @@ export function frontPageEnd(xml) {
   return (xml.slice(0, end).match(/<w:drawing>/g) ?? []).length > 10 ? 0 : end;
 }
 
-/** The pictures on the front page (their files), which are never resized, cropped or made smaller. */
-export function frontPagePaths(r, rels) {
+/**
+ * Where the back page starts: after the last page or section break, when what follows is pictures with no real wording
+ * (or only Beamore's own details), like the page of past projects and the Beamore logo at the end of the CoW reports
+ * (Ronan, 18 Nov 2026, Union Road). A last page of site photos has captions and notes, so it isn't counted.
+ * xml.length when there's no back page.
+ */
+export function backPageStart(xml) {
+  const body = xml.lastIndexOf("<w:sectPr");
+  const at = Math.max(...[/<w:br\b[^>]*w:type="page"/g, /<w:lastRenderedPageBreak\s*\/>/g, /<w:sectPr\b/g]
+    .map((re) => [...xml.matchAll(re)].map((m) => m.index).filter((i) => i !== body).pop() ?? -1));
+  if (at <= 0) return xml.length;
+  const tail = xml.slice(at, body > at ? body : xml.length);
+  const pics = (tail.match(/<w:drawing>/g) ?? []).length;
+  const words = (tail.match(/<w:t(?:\s[^>]*)?>[^<]*<\/w:t>/g) ?? []).map((t) => t.replace(/<[^>]+>/g, "")).join(" ").replace(/\s+/g, " ").trim();
+  const bare = words.length < 60 || (/Beamore/i.test(words) && words.length < 300 && !/photo|\d{1,2}[./]\d{1,2}[./]\d{2,4}/i.test(words));
+  return pics && pics <= 14 && bare ? at : xml.length;
+}
+
+/** Whether a position in document.xml is on the front or back cover, where pictures are never changed. */
+export function onCover(xml) {
+  const front = frontPageEnd(xml), back = backPageStart(xml);
+  return (i) => i < front || i >= back;
+}
+
+/** The pictures on the front and back covers (their files), which are never resized, cropped or made smaller. */
+export function coverPaths(r, rels) {
   const relPath = new Map([...rels.matchAll(/<Relationship\b[^>]*Id="([^"]+)"[^>]*Target="([^"]+)"/g)].map((m) => [m[1], `word/${m[2].replace(/^\.?\//, "")}`]));
-  const end = frontPageEnd(r.xml);
-  return new Set([...r.xml.slice(0, end).matchAll(/<a:blip\b[^>]*r:embed="([^"]+)"/g)].map((m) => relPath.get(m[1])).filter(Boolean));
+  const cover = onCover(r.xml);
+  return new Set([...r.xml.matchAll(/<a:blip\b[^>]*r:embed="([^"]+)"/g)].filter((m) => cover(m.index)).map((m) => relPath.get(m[1])).filter(Boolean));
 }
 
 /** The photo's pixel shape the way round it's shown on the page (w/h, or h/w when it's stored turned on its side). */
@@ -292,7 +316,7 @@ export async function photoStats(r, sharp) {
 /** Makes photos with more detail than the page needs smaller: 300 dots per inch at the size shown (looks the same). */
 export async function shrinkPhotos(r, sharp, stats) {
   let before = 0, after = 0, changed = 0;
-  const front = frontPagePaths(r, await r.zip.file("word/_rels/document.xml.rels")?.async("string") ?? "");
+  const front = coverPaths(r, await r.zip.file("word/_rels/document.xml.rels")?.async("string") ?? "");
   for (const p of stats.list.filter((x) => x.large && !front.has(x.path))) {
     const buf = await r.zip.file(p.path).async("nodebuffer");
     const target = p.shownCm ? Math.max(600, Math.round((p.shownCm / 2.54) * 300)) : 1600;
@@ -563,11 +587,11 @@ export async function fixPhotoShapes(r, stats) {
   const byPath = new Map(stats.list.map((p) => [p.path, p]));
   let stretched = 0, enlarged = 0;
   const xml = r.xml;
-  const front = frontPageEnd(xml);
+  const cover = onCover(xml);
   let out = "", last = 0;
   for (const m of xml.matchAll(/<w:drawing>[\s\S]*?<\/w:drawing>/g)) {
     let d = m[0];
-    const ph = m.index < front ? null : byPath.get(relPath.get(/<a:blip\b[^>]*r:embed="([^"]+)"/.exec(d)?.[1] ?? "") ?? "");
+    const ph = cover(m.index) ? null : byPath.get(relPath.get(/<a:blip\b[^>]*r:embed="([^"]+)"/.exec(d)?.[1] ?? "") ?? "");
     const ext = /<wp:extent cx="(\d+)" cy="(\d+)"/.exec(d);
     if (ph && ext && ph.width && ph.height && !/<a:srcRect\b[^>]*(l|t|r|b)="\d+"/.test(d)) {
       let cx = +ext[1], cy = +ext[2];
@@ -615,8 +639,8 @@ export function uniformPhotos(r, stats, rels) {
     return ph && ext && +ext[1] >= 540_000 && +ext[1] <= 3_600_000 && Math.min(ph.width, ph.height) >= 200;
   };
   const drawings = [...xml.matchAll(/<w:drawing>[\s\S]*?<\/w:drawing>/g)].map((m) => ({ m, ph: byPath.get(relPath.get(/<a:blip\b[^>]*r:embed="([^"]+)"/.exec(m[0])?.[1] ?? "") ?? "") }));
-  const front = frontPageEnd(xml);
-  const photos = drawings.filter((x) => x.m.index >= front && isPhoto(x.m[0], x.ph));
+  const cover = onCover(xml);
+  const photos = drawings.filter((x) => !cover(x.m.index) && isPhoto(x.m[0], x.ph));
   if (photos.length < 2) return { side: null, changed: 0, wasUniform: true };
   // the size: 6 cm, unless the usual photo panel is too narrow for two of those side by side
   const widths = new Map();
