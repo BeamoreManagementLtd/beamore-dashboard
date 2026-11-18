@@ -4,9 +4,10 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 /**
  * Each team member's own Gmail, used for one thing only: sending a checked report when they click "Approve and send"
  * (Ronan, 15 Nov 2026 - the second exception to "the dashboard never sends", after the new-clerk welcome email).
- * Only the "send email" permission is asked for: the dashboard can't read their mailbox.
+ * Only the "send email" permission is asked for, plus their basic Gmail settings so their own signature goes under the
+ * reports they send (Ronan, 18 Nov 2026): the dashboard can't read their mailbox.
  */
-const SEND_SCOPE = "openid email https://www.googleapis.com/auth/gmail.send";
+const SEND_SCOPE = "openid email https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/gmail.settings.basic";
 
 export function userAuthorizeUrl(redirectUri: string, state: string, email: string) {
   const q = new URLSearchParams({
@@ -102,16 +103,55 @@ async function accessFor(admin: SupabaseClient, profileId: string) {
 
 const enc = (s: string) => (/^[\x20-\x7e]*$/.test(s) ? s : `=?UTF-8?B?${Buffer.from(s).toString("base64")}?=`);
 
+/** This person's Gmail signature (HTML), or null when there isn't one or they connected before signatures were asked for. */
+async function gmailSignature(access: string, email: string) {
+  const res = await fetch("https://gmail.googleapis.com/gmail/v1/users/me/settings/sendAs", { headers: { Authorization: `Bearer ${access}` }, cache: "no-store" }).catch(() => null);
+  if (!res?.ok) return null;
+  const list = ((await res.json()) as { sendAs?: { sendAsEmail: string; isDefault?: boolean; signature?: string }[] }).sendAs ?? [];
+  const sa = list.find((x) => x.sendAsEmail.toLowerCase() === email.toLowerCase()) ?? list.find((x) => x.isDefault);
+  return sa?.signature?.trim() || null;
+}
+/** Whether this person's signature can be read, and what it looks like (for the settings page). */
+export async function signatureFor(admin: SupabaseClient, profileId: string) {
+  try { const { access, email } = await accessFor(admin, profileId); return { html: await gmailSignature(access, email) }; }
+  catch { return { html: null }; }
+}
+/** The lines under the sign-off ("Kind regards," then a typed name and "Beamore Management Ltd") go when the signature replaces them. */
+export function withoutTypedName(body: string) {
+  const lines = body.replace(/\s+$/, "").split(/\r?\n/);
+  for (let k = lines.length - 1; k >= Math.max(0, lines.length - 5); k--) {
+    if (/^(kind|best|warm)?\s*(regards|wishes)[,.!]?$|^(many )?thanks[,.!]?$|^thank you[,.!]?$/i.test(lines[k].trim())) {
+      const after = lines.slice(k + 1).filter((l) => l.trim());
+      if (after.length <= 3 && after.every((l) => l.trim().length <= 50)) return lines.slice(0, k + 1).join("\n");
+      break;
+    }
+  }
+  return lines.join("\n");
+}
+const escHtml = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+export function htmlToText(h: string) {
+  return h.replace(/<(br|\/div|\/p|\/tr|\/li)[^>]*>/gi, "\n").replace(/<[^>]+>/g, "").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
 /**
  * Sends one email from this team member's own Gmail: a checked report (PDF attached) to the client's list, or the
  * note about a report to its clerk (no attachment). Only ever on their click (Ronan, 15 Nov 2026).
  */
 export async function sendReportEmail(admin: SupabaseClient, profileId: string, m: {
   to: string[]; cc: string[]; subject: string; body: string; fileName?: string; pdf?: Buffer;
+  /** put the sender's own Gmail signature under it (the report to the client's list) */
+  signature?: boolean;
   /** an HTML version with pictures inside it (the examples in a note to a clerk) */
   html?: string; inline?: { cid: string; name: string; mime: string; data: Buffer }[];
 }) {
   const { access, email } = await accessFor(admin, profileId);
+  // their own Gmail signature (logo, role, phone...): it takes the place of the typed name under "Kind regards,"
+  const sig = m.signature && !m.html ? await gmailSignature(access, email) : null;
+  if (sig) {
+    const body = withoutTypedName(m.body);
+    m = { ...m, body: `${body}\n\n${htmlToText(sig)}`, html: `<div style="font-family:Arial,sans-serif;font-size:14px">${escHtml(body).replace(/\r?\n/g, "<br>")}</div><br><div>${sig}</div>`, inline: [] };
+  }
   const b = `beamore${Date.now()}`, rel = `${b}rel`, alt = `${b}alt`;
   const CRLF = "\r\n";
   const wrap = (s: string) => s.replace(/(.{76})/g, `$1${CRLF}`);

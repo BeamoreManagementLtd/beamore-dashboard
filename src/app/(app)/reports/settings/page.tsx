@@ -3,7 +3,7 @@ import { requireProfile } from "@/lib/auth";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { fdt } from "@/lib/format";
 import { saveSettings } from "../actions";
-import { mailboxConnection, AI_MAILBOX } from "@/lib/google-user";
+import { mailboxConnection, AI_MAILBOX, signatureFor } from "@/lib/google-user";
 
 export const dynamic = "force-dynamic";
 
@@ -20,6 +20,9 @@ export default async function ReportSettings({ searchParams }: { searchParams: P
   ]);
   const mine = (conns ?? []).find((c) => c.profile_id === me.id);
   const aiBox = me.role === "director" ? await mailboxConnection(admin, AI_MAILBOX) : null;
+  // each connected person's Gmail signature, which goes under the reports they send (Ronan, 18 Nov 2026)
+  const sigs = new Map(await Promise.all((conns ?? []).map(async (c) => [c.profile_id, (await signatureFor(admin, c.profile_id)).html] as const)));
+  const mySig = mine ? sigs.get(me.id) ?? null : null;
   return (
     <>
       <p className="small"><Link href="/reports">Reports</Link></p>
@@ -34,9 +37,13 @@ export default async function ReportSettings({ searchParams }: { searchParams: P
         <h2>Your email</h2>
         {mine ? <p>Connected as <b>{mine.email}</b> since {fdt(mine.connected_at)}. <Link className="btn small" href="/api/google/connect?for=me">Connect again</Link></p>
           : <p>Not connected yet. <Link className="btn primary" href="/api/google/connect?for=me">Connect my email</Link></p>}
-        <p className="small muted">Google asks you to sign in with your @beamore.co.uk account and allow the dashboard to send email for you. It can only send; it can&apos;t read your mailbox. Sent reports appear in your own Sent folder.</p>
+        <p className="small muted">Google asks you to sign in with your @beamore.co.uk account and allow the dashboard to send email for you and see your Gmail settings, so your own signature goes under the reports you send. It can&apos;t read your mailbox. Sent reports appear in your own Sent folder.</p>
+        {mine && (mySig
+          ? <><p className="small"><b>Your signature</b>, as it will appear under the reports you send (it replaces the typed name under &ldquo;Kind regards,&rdquo;). To change it, change your signature in Gmail.</p>
+              <div className="panel" style={{ background: "#fff", color: "#222" }} dangerouslySetInnerHTML={{ __html: mySig }} /></>
+          : <p className="callout info small">No signature yet. If you have one in Gmail, click <b>Connect again</b> above and allow the extra permission, so it goes under the reports you send. Until then the email ends with your typed name.</p>)}
         <table><tbody>{(staff ?? []).map((p) => { const c = (conns ?? []).find((x) => x.profile_id === p.id); return (
-          <tr key={p.id}><td>{p.full_name ?? p.email}</td><td className="small">{c ? <span className="pill good">Connected ({c.email})</span> : <span className="pill muted">Not connected</span>}</td></tr>
+          <tr key={p.id}><td>{p.full_name ?? p.email}</td><td className="small">{c ? <span className="pill good">Connected ({c.email})</span> : <span className="pill muted">Not connected</span>}</td><td className="small">{c ? (sigs.get(p.id) ? <span className="pill good">Signature added</span> : <span className="pill muted">No signature: connect again</span>) : null}</td></tr>
         ); })}</tbody></table>
       </section>
 
