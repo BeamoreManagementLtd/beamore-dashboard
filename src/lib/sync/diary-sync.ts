@@ -67,7 +67,7 @@ export async function syncDiary(admin: SupabaseClient, { force = false } = {}) {
     const preferred = [parsed[wi], ...newestFirst.filter((p) => p !== parsed[wi])];
     const pick = <K extends keyof Parsed>(k: K): Parsed[K] => preferred.find((p) => (p[k] as unknown[]).length)?.[k] ?? parsed[0][k];
     const merged = {
-      visits: parsed.flatMap((p) => p.visits), absences: parsed.flatMap((p) => p.absences), invoiceLines: parsed.flatMap((p) => p.invoiceLines),
+      visits: parsed.flatMap((p) => p.visits), absences: parsed.flatMap((p) => p.absences), invoiceLines: parsed.flatMap((p) => p.invoiceLines), monthTotals: parsed.flatMap((p) => p.monthTotals ?? []),
       rates: newestFirst.flatMap((p) => p.rates), clerks: [...new Set(parsed.flatMap((p) => p.clerks))],
       invoiceEmails: pick("invoiceEmails"), reportEmails: pick("reportEmails"), invoicePOs: pick("invoicePOs"), contactDetails: pick("contactDetails"), projectsTab: pick("projectsTab"),
     };

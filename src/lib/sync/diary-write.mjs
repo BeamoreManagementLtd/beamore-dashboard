@@ -148,6 +148,11 @@ export async function writeDiary(admin, d, label) {
     const p = perInvoice.get(i.number);
     must(await admin.from("invoices").update({ days_building: p.b, days_me: p.me, ...(i.project_id || !p.project ? {} : { project_id: p.project }) }).eq("id", i.id), "invoice days");
   }
+  // each month's totals as the diary works them out (charged, clerks, profit; and the grey side's estimates)
+  if (d.monthTotals?.length) {
+    const now = new Date().toISOString();
+    await admin.from("diary_month_totals").upsert(d.monthTotals.map((t) => ({ ...t, read_at: now })), { onConflict: "month" });
+  }
 
   // ---- chase / invoice contacts from the "Invoice emails" tab: matched to a project by any part of the label after the
   // client ("Mott MacDonald - Sheffield - St Peters Batley"), otherwise to the client by its Xero name ("… - General")

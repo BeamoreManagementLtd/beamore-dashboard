@@ -35,7 +35,16 @@ export default async function Finance({ searchParams }: { searchParams: Promise<
   const pct = (a: number | null, b?: number) => (a != null && b ? `${((a / b) * 100).toFixed(1)}%` : "—");
   // next month from the diary's grey side, with overheads as in Xero's last month (Ronan, 18 Nov 2026)
   const overheads = month ? (gp(month) ?? 0) - Number(month.net_profit ?? 0) : 0;
-  const estimates = await Promise.all((await monthsToEstimate(db, month?.period)).map((m) => estimateMonth(db, m)));
+  // the fees and clerk costs as the diary itself works them out ("Estimated charged / subcontractors (grey side)"),
+  // which uses the diary's own rate for every site; worked out from rates and invoices only for a month it hasn't got
+  const { data: diaryTotals } = await db.from("diary_month_totals").select("*");
+  const diaryFor = (m: string) => (diaryTotals ?? []).find((t) => t.month === m);
+  const estimates = (await Promise.all((await monthsToEstimate(db, month?.period)).map((m) => estimateMonth(db, m)))).map((e) => {
+    const d = diaryFor(e.month);
+    return d?.planned_charged != null && d.planned_subcontractors != null
+      ? { ...e, fees: Number(d.planned_charged), clerks: Number(d.planned_subcontractors), days: Number(d.planned_client_days ?? e.days), unpricedDays: 0, unpriced: [], fromDiary: true }
+      : { ...e, fromDiary: false };
+  });
   const monthName = (m: string) => new Date(m + "T00:00:00Z").toLocaleDateString("en-GB", { month: "long", year: "numeric", timeZone: "UTC" });
   // drafts waiting in Xero (Ronan, 18 Nov 2026: "how many invoices are still in draft")
   const [{ data: drafts }, { data: held }] = await Promise.all([
@@ -44,6 +53,11 @@ export default async function Finance({ searchParams }: { searchParams: Promise<
   ]);
   const heldSet = new Set((held ?? []).map((h) => h.contact));
   const draftTotal = (drafts ?? []).reduce((n, d) => n + Number(d.subtotal ?? 0), 0);
+  // the last Xero month: its invoices still in draft aren't in Xero's sales yet, so the month looks low (October 2026:
+  // £21,205 of drafts; Xero £288,338 against £308,912 charged in the diary, Ronan 18 Nov)
+  const inMonth = (drafts ?? []).filter((d) => month && d.issued?.startsWith(month.period));
+  const monthDraftTotal = inMonth.reduce((n, d) => n + Number(d.subtotal ?? 0), 0);
+  const monthDiary = month ? diaryFor(`${month.period}-01`) : undefined;
 
   return (
     <>
@@ -126,13 +140,13 @@ export default async function Finance({ searchParams }: { searchParams: Promise<
           <div className="tiles">
             <div className="tile r"><span className="label">Cash at bank</span><span className="big">{gbp(latest?.cash)}</span></div>
             <div className="tile r"><span className="label">Owed to Beamore</span><span className="big">{gbp(latest?.receivables)}</span><span className="sub">{gbp(latest?.receivables_overdue)} overdue</span></div>
-            <div className="tile r"><span className="label">Fees invoiced ({month?.period ?? "month"})</span><span className="big">{gbp(month?.sales)}</span></div>
+            <div className="tile r"><span className="label">Fees invoiced ({month?.period ?? "month"})</span><span className="big">{gbp(month?.sales)}</span>{monthDraftTotal ? <span className="sub neg">+ {gbp(monthDraftTotal)} still in draft</span> : null}</div>
             <div className="tile r"><span className="label">Gross profit ({month?.period ?? "month"})</span><span className="big">{gbp(gp(month))}</span><span className="sub">{pct(gp(month), month?.sales)}</span></div>
             {estimates[0] && (() => {
               const e = estimates[0], egp = e.fees - e.clerks, enp = egp - overheads, short = monthName(e.month).split(" ")[0];
               return (
                 <>
-                  <div className="tile r"><span className="label">Estimated gross profit ({short})</span><span className="big">{gbp(egp)}</span><span className="sub">{pct(egp, e.fees)} of {gbp(e.fees)} fees, from the diary</span></div>
+                  <div className="tile r"><span className="label">Estimated gross profit ({short})</span><span className="big">{gbp(egp)}</span><span className="sub">{pct(egp, e.fees)} of {gbp(e.fees)} fees{e.fromDiary ? ", as the diary" : ", from the diary"}</span></div>
                   <div className="tile r"><span className="label">Estimated net profit ({short})</span><span className={`big${enp < 0 ? " neg" : ""}`}>{gbp(enp)}</span><span className="sub">after {gbp(overheads)} overheads</span></div>
                 </>
               );
@@ -151,16 +165,33 @@ export default async function Finance({ searchParams }: { searchParams: Promise<
                 <tr><td>Net profit</td><td className="num">{gbp(month?.net_profit)}</td><td className="num">{gbp(fytd?.net_profit)}</td></tr>
               </tbody>
             </table>
+            {month && (monthDraftTotal > 0 || monthDiary?.charged != null) && (
+              <>
+                <h3 style={{ marginTop: 14 }}>{month.period} with the invoices still in draft</h3>
+                <p className="small muted">Xero only counts approved invoices, so a month looks low while some of its invoices are still drafts{monthDiary?.charged != null ? `; the diary says ${gbp(monthDiary.charged)} was charged that month` : ""}.</p>
+                <table>
+                  <tbody>
+                    <tr><td>Fees invoiced (Xero)</td><td className="num">{gbp(month.sales)}</td></tr>
+                    <tr><td>Still in draft, dated {month.period} ({inMonth.length})</td><td className="num">{gbp(monthDraftTotal)}</td></tr>
+                    <tr><td>Fees with the drafts</td><td className="num"><b>{gbp(Number(month.sales) + monthDraftTotal)}</b>{monthDiary?.charged != null ? <span className="muted small"> (diary {gbp(monthDiary.charged)})</span> : null}</td></tr>
+                    <tr><td>Gross profit with the drafts</td><td className="num"><b>{gbp((gp(month) ?? 0) + monthDraftTotal)}</b> <span className="muted small">{pct((gp(month) ?? 0) + monthDraftTotal, Number(month.sales) + monthDraftTotal)}</span>{monthDiary?.profit != null ? <span className="muted small"> (diary {gbp(monthDiary.profit)})</span> : null}</td></tr>
+                    <tr><td>Net profit with the drafts</td><td className="num"><b>{gbp(Number(month.net_profit) + monthDraftTotal)}</b></td></tr>
+                  </tbody>
+                </table>
+              </>
+            )}
           </section>
           {estimates.map((e) => {
             const net = e.fees - e.clerks - overheads;
             return (
               <section className="panel" key={e.month}>
                 <h2>Estimated net profit, {monthName(e.month)}</h2>
-                <p className="small muted">From the grey (planned) side of the diary: {e.days} days at each job&apos;s day rate (the rate kept for the job, else its last invoice less VAT), less what each planned day costs in clerks, less overheads as in Xero for {month?.period}. An estimate: the real figure follows what&apos;s charged on the salmon side and invoiced.</p>
+                <p className="small muted">{e.fromDiary
+                  ? <>The diary&apos;s own figures for the grey (planned) side: &ldquo;Estimated charged&rdquo; and &ldquo;Estimated subcontractors&rdquo; ({e.days} days), less overheads as in Xero for {month?.period}. Updated every time the diary is read.</>
+                  : <>From the grey (planned) side of the diary: {e.days} days at each job&apos;s day rate (the rate kept for the job, else its last invoice less VAT), less what each planned day costs in clerks, less overheads as in Xero for {month?.period}.</>} An estimate: the real figure follows what&apos;s charged on the salmon side and invoiced.</p>
                 <table>
                   <tbody>
-                    <tr><td>Fees ({e.days - e.unpricedDays} planned days priced)</td><td className="num">{gbp(e.fees)}</td></tr>
+                    <tr><td>Fees ({e.fromDiary ? `${e.days} planned days` : `${e.days - e.unpricedDays} planned days priced`})</td><td className="num">{gbp(e.fees)}</td></tr>
                     <tr><td>Clerk costs</td><td className="num">−{gbp(e.clerks)}</td></tr>
                     <tr><td>Gross profit</td><td className="num">{gbp(e.fees - e.clerks)} <span className="muted small">{pct(e.fees - e.clerks, e.fees)}</span></td></tr>
                     <tr><td>Overheads (as {month?.period})</td><td className="num">−{gbp(overheads)}</td></tr>

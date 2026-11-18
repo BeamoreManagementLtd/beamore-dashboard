@@ -32,7 +32,7 @@ const iso = (d) => d.toISOString().slice(0, 10);
 const kindOf = (site) => (/m&e/i.test(site) ? "me" : "building");
 
 export function parseDiary(wb, { year = 2026, fileLabel = "Diary 2026.xlsx" } = {}) {
-  const visits = [], absences = [], invoiceLines = [], clerks = new Set();
+  const visits = [], absences = [], invoiceLines = [], monthTotals = [], clerks = new Set();
   for (let m = 0; m < 12; m++) {
     const ws = wb.getWorksheet(MONTHS[m]);
     if (!ws) continue;
@@ -96,6 +96,18 @@ export function parseDiary(wb, { year = 2026, fileLabel = "Diary 2026.xlsx" } = 
         if (/^[A-Z0-9]+-\d+/i.test(number) && site && d) invoiceLines.push({ month: MONTHS[m], number: number.split(/\s/)[0], site, kind: kindOf(site), days: d, rate: num(row.getCell(invCol + 2)) });
       }
     }
+
+    // the month's own totals, worked out in the sheet beside the invoice table (Ronan, 18 Nov 2026: the Finance estimate
+    // should be the diary's "Estimated charged (grey side)" etc., not one worked out again from rates)
+    const LABELS = { "estimated charged (grey side)": "planned_charged", "estimated subcontractors (grey side)": "planned_subcontractors",
+      "estimated profit": "planned_profit", "estimated client days (grey side)": "planned_client_days", "estimated subby days (grey side)": "planned_clerk_days",
+      "total charged": "charged", "total subcontractors": "subcontractors", "profit": "profit" };
+    const t = {};
+    for (let r = 1; r <= ws.rowCount; r++) ws.getRow(r).eachCell((c, col) => {
+      const k = LABELS[str(c).toLowerCase()];
+      if (k && !(k in t)) { const n = num(ws.getRow(r).getCell(col + 1)); if (n != null) t[k] = n; }
+    });
+    if (Object.keys(t).length) monthTotals.push({ month: `${year}-${String(m + 1).padStart(2, "0")}-01`, ...t });
   }
 
   // "Invoice emails" tab: who invoices and chasers go to (decision 14). Rows without an email are section headings.
@@ -161,5 +173,5 @@ export function parseDiary(wb, { year = 2026, fileLabel = "Diary 2026.xlsx" } = 
       });
     }
   }
-  return { visits, absences, invoiceLines, rates, invoiceEmails, reportEmails, invoicePOs, contactDetails, projectsTab, clerks: [...clerks] };
+  return { visits, absences, invoiceLines, monthTotals, rates, invoiceEmails, reportEmails, invoicePOs, contactDetails, projectsTab, clerks: [...clerks] };
 }
