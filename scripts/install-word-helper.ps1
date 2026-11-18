@@ -84,7 +84,14 @@ Write-Host "Test PDF made."
 Remove-Item -LiteralPath $docx, $pdf -ErrorAction SilentlyContinue
 
 Step "5. Setting up the task (every 2 minutes, while this user is signed in)"
-$action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$Helper`" -Once"
+# started through a tiny Windows Script Host file so no PowerShell window ever appears: "-WindowStyle Hidden" alone
+# still flashes a window every run (Ronan, 18 Nov 2026: windows popping up on the server)
+$Launcher = Join-Path $Dir "run-hidden.vbs"
+Set-Content -LiteralPath $Launcher -Encoding ASCII -Value @"
+' Starts the Beamore Word helper with no window (set up by install-word-helper.ps1)
+CreateObject("WScript.Shell").Run "powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File ""$Helper"" -Once", 0, True
+"@
+$action = New-ScheduledTaskAction -Execute "wscript.exe" -Argument "//B //Nologo `"$Launcher`""
 $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes 2)
 $settings = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 30) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
 $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive -RunLevel Limited
