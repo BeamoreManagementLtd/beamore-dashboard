@@ -125,6 +125,8 @@ export async function recordReportFiles(admin: SupabaseClient, g: Drive, files: 
   return rows.length;
 }
 
+/** Missing reports before this week (a Monday) are no longer counted or chased. */
+export const MISSING_FROM = "2026-11-02";
 export type Cell = { state: "sent" | "in" | "missing" | "due" | "none" | "hol" | "hold"; files: { id: string; name: string }[]; overdue?: number; dueOn?: string; label?: string };
 export type TrackerRow = { key: string; projectId: string; name: string; kind: "building" | "me" | "monthly"; clerk: string | null; clerkId: string | null; elsewhere: string | null; frequency: string | null; cells: Cell[] };
 
@@ -232,7 +234,10 @@ export async function buildTracker(db: SupabaseClient, today: string, h: Set<str
     }
   }
   rows.sort((a, b) => a.name.localeCompare(b.name));
-  const missing = rows.flatMap((r) => r.cells.map((c, k) => ({ r, c, week: cols[k] })).filter((x) => x.c.state === "missing"))
+  // reports missing from before the week of 2 November 2026 are written off (Ronan, 18 Nov 2026: "remove them all...
+  // anything that's missing from the 2nd of November onwards, keep that"): shown blank, not missing, and never chased
+  rows.forEach((r) => r.cells.forEach((c, k) => { if (c.state === "missing" && cols[k] < MISSING_FROM) r.cells[k] = { state: "none", files: [], label: "Written off" }; }));
+  const missing =rows.flatMap((r) => r.cells.map((c, k) => ({ r, c, week: cols[k] })).filter((x) => x.c.state === "missing"))
     .sort((a, b) => (b.c.overdue ?? 0) - (a.c.overdue ?? 0));
   const noFrequency = ps.filter((p) => p.stage === "live" && !p.reporting_frequency && !p.reports_elsewhere).map((p) => ({ id: p.id, name: p.display_name ?? p.name }));
   return { cols, rows, missing, noFrequency };

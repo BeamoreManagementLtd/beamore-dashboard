@@ -3,7 +3,7 @@ import { requireProfile } from "@/lib/auth";
 import { createClient } from "@/lib/supabase/server";
 import { today } from "@/lib/format";
 import { loadHolidays } from "@/lib/reports/days";
-import { buildTracker, type Cell } from "@/lib/reports/tracker";
+import { buildTracker, MISSING_FROM, type Cell } from "@/lib/reports/tracker";
 import { setReporting, setChasing, finishJob } from "./actions";
 
 export const dynamic = "force-dynamic";
@@ -63,7 +63,7 @@ export default async function ReportTracker({ searchParams }: { searchParams: Pr
         <div className="tile"><span className="label">Last week ({short(lastWeek)}): due</span><span className="big">{tr.rows.filter((r) => !["none", "hol", "hold"].includes(r.cells.at(-2)!.state)).length}</span></div>
         <div className="tile"><span className="label">Last week: in and sent</span><span className="big" style={{ color: "var(--good)" }}>{count("sent", lastWeek)}</span></div>
         <div className="tile"><span className="label">Last week: in, not sent</span><span className="big" style={{ color: "var(--warn)" }}>{count("in", lastWeek)}</span></div>
-        <div className={`tile ${tr.missing.length ? "alert" : ""}`}><span className="label">Missing now (8 weeks)</span><span className="big" style={{ color: "var(--bad)" }}>{tr.missing.length}</span><span className="sub">{count("due", thisWeek)} more due this week</span></div>
+        <div className={`tile ${tr.missing.length ? "alert" : ""}`}><span className="label">Missing now (since {short(MISSING_FROM)})</span><span className="big" style={{ color: "var(--bad)" }}>{tr.missing.length}</span><span className="sub">{count("due", thisWeek)} more due this week</span></div>
       </div>
 
       <section className="panel">
