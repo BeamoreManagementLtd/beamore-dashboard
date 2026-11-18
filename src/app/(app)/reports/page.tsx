@@ -59,7 +59,11 @@ export default async function Reports({ searchParams }: { searchParams: Promise<
   const jobKey = (r: typeof rows[number]) => r.project_id ?? r.project_folder_name ?? r.id;
   const jobRank = new Map<string, number>();
   [...filtered].sort(urgent).forEach((r, k) => { if (!jobRank.has(jobKey(r))) jobRank.set(jobKey(r), k); });
-  const shown = filtered.sort((a, b) => jobRank.get(jobKey(a))! - jobRank.get(jobKey(b))!
+  // for now, Darren at Arcadis's jobs always at the very top, above older reports (Ronan, 18 Nov 2026: "until we get the
+  // issue of trying to get reports out quicker"): Ilkley and Brunswick Primary School. Take out when no longer needed.
+  const FIRST = new Set(["a3c42693-a734-4b24-ae31-1f2bb2c88c3c", "f55a3ed1-e81d-4c95-88bc-2edd3b935c53"]);
+  const arcadis = (r: typeof rows[number]) => (r.project_id && FIRST.has(r.project_id) ? 0 : 1);
+  const shown = filtered.sort((a, b) => arcadis(a) - arcadis(b) || jobRank.get(jobKey(a))! - jobRank.get(jobKey(b))!
     || (a.visit_date ?? a.uploaded_at).localeCompare(b.visit_date ?? b.uploaded_at) || a.uploaded_at.localeCompare(b.uploaded_at));
   const count = (c: string) => rows.filter((r) => r.colour === c).length;
   const checkers = [...new Set(rows.map((r) => r.checker_id).filter(Boolean))] as string[];
@@ -166,7 +170,7 @@ export default async function Reports({ searchParams }: { searchParams: Promise<
               return (
                 <tr key={r.id} style={first && k ? { borderTop: "2px solid var(--line)" } : undefined}>
                   <td title={r.colour}>{r.colour === "red" ? "🔴" : r.colour === "orange" ? "🟠" : "🟢"}</td>
-                  <td>{first ? <><b>{p?.name ?? r.project_folder_name}</b>{more > 1 ? <span className="muted small"> · {more} reports</span> : null}</> : <span className="muted small">↳ same job</span>}<span className="two">{r.folder_name}</span></td>
+                  <td>{first ? <><b>{p?.name ?? r.project_folder_name}</b>{more > 1 ? <span className="muted small"> · {more} reports</span> : null}{arcadis(r) === 0 ? <span className="pill warn small" title="Darren at Arcadis: kept at the top for now"> Arcadis: send first</span> : null}</> : <span className="muted small">↳ same job</span>}<span className="two">{r.folder_name}</span></td>
                   <td className="small"><Link href={`/reports/${r.id}`}>{r.file_name}</Link></td>
                   <td className="small">{(r.clerks as unknown as { name?: string } | null)?.name ?? "—"}</td>
                   <td className="small">{fd(r.visit_date)}</td>
