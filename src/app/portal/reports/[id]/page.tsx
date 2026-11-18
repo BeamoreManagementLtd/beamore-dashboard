@@ -4,6 +4,7 @@ import { createServiceClient } from "@/lib/supabase/server";
 import { requirePortalUser } from "@/lib/portal/auth";
 import { fmtDate } from "@/lib/portal/data";
 import { AiNote } from "../feedback";
+import { OFFICE_ONLY as OFFICE } from "@/lib/reports/clerk-view";
 
 export const dynamic = "force-dynamic";
 
@@ -12,8 +13,6 @@ type Fixes = {
   spelling?: { find: string; replace: string }[]; shrunk?: number; rotated?: number; stretched?: number; enlarged?: number; uniform?: number;
   renamed?: string | null; score_parts?: Part[];
 };
-// points meant for the office (who's checking it, whether it's fit to send), not for the clerk
-const OFFICE = /\b(checker|the office|office pc|fit to send|before (it is |it's )?sent|before sending|send it|invoice|fee|rate|ronan|judy|an[eé]l)\b/i;
 const n1 = (n: number) => (Math.round(n * 10) / 10).toString();
 
 /** One report's AI feedback for its clerk: what was fixed, what the check noticed, how each part scored. */

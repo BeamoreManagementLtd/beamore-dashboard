@@ -359,16 +359,104 @@ export async function checkOne(admin: SupabaseClient, id: string) {
   // made straight into the clerk's own text, not left as red tracked changes: the report should look as if the clerk
   // wrote it that way; the dashboard lists every correction (Ronan, 18 Nov 2026)
   acceptOwnRevisions(r);
+  const { issues, words, prog, hs, trk, monthlyTracker, parts, clerkPoints } = await judgeReport({
+    r, ai, kind: rep.kind, monthly: isMonthly(rep), appendix: !!appendix, usual, reused, ourClient, endClient, stats, rawBytes: raw.length,
+    sideways: sideways.length, wasUniform: uniform.wasUniform, rotated: rotated.length, nameFixed, template, skipped: spelt.skipped, heldBack,
+    findTrackerFile: async () => {
+      const since = new Date(Date.now() - 21 * 864e5).toISOString();
+      const tf = await g.json<{ files: { name: string }[] }>("files", { q: `'${rep.folder_id}' in parents and trashed = false and modifiedTime > '${since}' and (name contains 'tracker' or name contains 'defect' or name contains 'defects' or name contains 'issues') and (mimeType = 'application/pdf' or mimeType contains 'spreadsheet' or mimeType contains 'excel')`, fields: "files(name)", pageSize: "5", supportsAllDrives: "true", includeItemsFromAllDrives: "true" });
+      return tf.files[0]?.name ?? null;
+    },
+    monthlyGap: async () => {
+      const last = await lastDiaryOfMonth(admin, { id, project_id: rep.project_id, kind: rep.kind, file_name: rep.renamed_from ?? rep.file_name, uploaded_at: rep.uploaded_at });
+      if (!last) return null;
+      const gap = compareTrackers(trackerItems(r), trackerItems(await readReport(Buffer.from(await g.download(last.drive_file_id)))), r.paragraphs.map((x) => x.text));
+      return { against: last.file_name, month: last.month, missing: gap.missing, behind: gap.behind, text: trackerGapText(gap, last.file_name), details: gap.details };
+    },
+  });
+  for (const i of issues) i.near = nearText(r, i.p);
+  const out = await saveReport(r);
+
+  // only if the clerk hasn't changed it while we were checking
+  const now = await g.json<{ headRevisionId: string }>(`files/${rep.drive_file_id}`, { fields: "headRevisionId", supportsAllDrives: "true" });
+  if (now.headRevisionId !== meta.headRevisionId) {
+    // another check of the same report (the 15-minute job and a manual run together) has just saved it: that one stands
+    const { data: latest } = await admin.from("reports").select("checked_revision,status").eq("id", id).single();
+    if (latest?.checked_revision === now.headRevisionId) {
+      if (latest.status !== "ready") await admin.from("reports").update({ status: "ready" }).eq("id", id);
+      return;
+    }
+    await admin.from("reports").update({ status: "new", modified_at: new Date().toISOString() }).eq("id", id);
+    return;
+  }
+  // the checked version is saved over the clerk's own file, where it is, and renamed to the folder's pattern (Ronan,
+  // 16 Nov 2026). A copy in "Checked (dashboard)" from before then is put in the bin: this replaces it.
+  // characters Windows can't have in a file name (e.g. "09:11:26") become dots, or the file never reaches the office PC
+  // and Word can't make its PDF (16 Nov 2026)
+  const checkedName = (renamedTo ?? (rep.checked_name && rep.checked_file_id === rep.drive_file_id ? rep.checked_name : rep.file_name)).replace(/[:*?"<>|]/g, ".");
+  await g.replaceContent(rep.drive_file_id, out, DOCX);
+  if (checkedName !== rep.file_name) await g.rename(rep.drive_file_id, checkedName).catch(() => undefined);
+  if (rep.checked_file_id && rep.checked_file_id !== rep.drive_file_id) await g.binOriginalReport(rep.checked_file_id).catch(() => undefined);
+  const after = await g.json<{ headRevisionId: string }>(`files/${rep.drive_file_id}`, { fields: "headRevisionId", supportsAllDrives: "true" });
+  await admin.from("reports").update({
+    checked_file_id: rep.drive_file_id, checked_folder_id: rep.folder_id, checked_name: checkedName, file_name: checkedName,
+    original_revision_id: sourceRev, renamed_from: checkedName !== rep.file_name ? rep.file_name : rep.renamed_from ?? null,
+  }).eq("id", id);
+  const visitFromName = /(\d{1,2})[.\-_ ](\d{1,2})[.\-_ ](\d{2,4})/.exec(rep.file_name);
+  const nameDate = visitFromName ? `${visitFromName[3].length === 2 ? `20${visitFromName[3]}` : visitFromName[3]}-${visitFromName[2].padStart(2, "0")}-${visitFromName[1].padStart(2, "0")}` : null;
+  const applied = ai.spelling.filter((s) => !spelt.skipped.includes(s)).map((s) => ({ find: s.find, replace: s.replace }));
+  await admin.from("reports").update({
+    status: "ready", ai_summary: ai.summary, issues, spelling_fixed: spelt.applied,
+    photos: { count: stats.count, blurry: stats.blurry, smallOnPage: stats.smallOnPage, stretched: stats.stretched, shrunk: shrunk.changed, rotated: rotated.length, reused, usual, uncaptioned: uncaptioned(r) },
+    photo_hashes: hashes, photo_count: stats.count,
+    fixes: { spelling: applied, rotated: rotated.length, shrunk: shrunk.changed, stretched: shapes.stretched, enlarged: shapes.enlarged, uniform: uniform.changed, mixed: !uniform.wasUniform, side_cm: uniform.side ? +(uniform.side / 360000).toFixed(1) : null, renamed: nameFixed, words, programme: prog ?? null, standards: ai.standards ?? null, health_safety: hs, tracker: trk, monthly_tracker: monthlyTracker,
+      score_by: "parts", score_parts: parts, template, pages_state: issues.some((i) => i.near) ? "waiting" : "none" },
+    // lateness is shown on its own on the Reports page
+    score: scoreTotal(parts),
+    clerk_points: clerkPoints,
+    size_before: raw.length, size_after: out.length, checked_revision: after.headRevisionId, checked_at: new Date().toISOString(),
+    // the date written in the report wins; otherwise the one already worked out from its name or the diary stays
+    ...(ai.visit_date && /^\d{4}-\d{2}-\d{2}$/.test(ai.visit_date) && rep.visit_date_source !== "manual" ? { visit_date: ai.visit_date, visit_date_source: "report" }
+      : !rep.visit_date && nameDate && !Number.isNaN(Date.parse(nameDate)) ? { visit_date: nameDate, visit_date_source: "name" } : {}),
+    report_number: ai.report_number, clerk_name: ai.clerk_name,
+    // no clerk from the job: the one named in the report ("Antony Larkins" is Tony Larkins), so it's counted and linked
+    // the report names the job's other clerk (its M&E clerk, say): credited to them
+    ...(rep.clerk_id && ai.clerk_name && p ? await (async () => { const ids = [p.clerk_id, p.clerk_me_id].filter((x): x is string => !!x && x !== rep.clerk_id); if (!ids.length) return {}; const { data: others } = await admin.from("clerks").select("id,name").in("id", ids); const c = clerkForName(ai.clerk_name, others ?? []); return c ? { clerk_id: c.id, kind: c.id === p.clerk_me_id ? "me" : "building" } : {}; })() : {}),
+    ...(!rep.clerk_id && ai.clerk_name ? await (async () => { const { data: all } = await admin.from("clerks").select("id,name"); const c = clerkForName(ai.clerk_name, all ?? []); return c ? { clerk_id: c.id } : {}; })() : {}),
+    text_snapshot: r.paragraphs.map((x) => x.text).filter((x) => x.trim()).join("\n").slice(0, 20000),
+    modified_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+  }).eq("id", id);
+  if (monthlyTracker?.text) await askToUpdateMonthlyTracker(admin, { id, clerk_id: rep.clerk_id, file_name: rep.file_name }, monthlyTracker).catch(() => undefined);
+  if (ai.date_on_report === "none" || ai.date_on_report === "week_commencing")
+    await askForVisitDates(admin, { id, clerk_id: rep.clerk_id, file_name: rep.file_name }, ai.date_on_report).catch(() => undefined);
+}
+
+export type MonthlyTracker = { against: string; month: string; missing: string[]; behind: string[]; text: string | null; details: { no: string; item: string; why: "missing" | "behind"; closed: string }[] };
+type Report = Awaited<ReturnType<typeof readReport>>;
+type Stats = Awaited<ReturnType<typeof photoStats>>;
+type Ai = Awaited<ReturnType<typeof checkReport>>;
+
+/**
+ * What the check makes of a report once the AI has read it: the points raised, the mark for each part and the
+ * friendly suggestions for the clerk. Shared by the office's check (checkOne) and the clerk's own check before
+ * uploading (precheck.ts, Ronan 18 Nov 2026), so both judge a report the same way. Changes nothing in the file.
+ */
+export async function judgeReport(x: {
+  r: Report; ai: Ai; kind: string; monthly: boolean; appendix: boolean; usual: number | null; reused: number; ourClient: string | null; endClient: string | null;
+  stats: Stats; rawBytes: number; sideways: number; wasUniform: boolean; rotated: number; nameFixed: string | null; template: TemplateCheck | null;
+  skipped: { find: string; replace: string }[]; heldBack: { find: string; replace: string; p: number | null }[];
+  findTrackerFile: () => Promise<string | null>; monthlyGap: () => Promise<MonthlyTracker | null>;
+}) {
+  const { r, ai, monthly, appendix, usual, stats, ourClient, endClient } = x;
   const rank = { high: 0, medium: 1, low: 2 } as const;
   // not enough photos or not enough written, against the benchmark clerks' reports (weekly diaries: 35-57 photos,
   // 1,800-5,000 words); monthly reports aren't judged on this
   const words = r.paragraphs.reduce((n, p) => n + (p.text.match(/[A-Za-z]{2,}/g) ?? []).length, 0);
-  const monthly = isMonthly(rep);
-  const min = rep.kind === "me" ? { photos: 12, words: 800 } : { photos: 20, words: 1200 };
+  const min = x.kind === "me" ? { photos: 12, words: 800 } : { photos: 20, words: 1200 };
   const extra: Issue[] = [];
   // with an appendix, the photos and much of the writing are in it (Tom Hunt's St Michael's reports)
-  if (!monthly && !appendix && stats.count < min.photos) extra.push({ severity: "medium", kind: "photos", text: `Only ${stats.count} photo${stats.count === 1 ? "" : "s"}: good reports have ${rep.kind === "me" ? "20 or more" : "35-50"}${usual ? ` (this clerk usually has about ${usual} here)` : ""}`, p: null });
-  if (!monthly && !appendix && words < min.words) extra.push({ severity: "medium", kind: "vague", text: `Not much written (about ${words} words): good reports describe each area in detail, typically ${rep.kind === "me" ? "1,000+" : "1,800-5,000"} words`, p: null });
+  if (!monthly && !appendix && stats.count < min.photos) extra.push({ severity: "medium", kind: "photos", text: `Only ${stats.count} photo${stats.count === 1 ? "" : "s"}: good reports have ${x.kind === "me" ? "20 or more" : "35-50"}${usual ? ` (this clerk usually has about ${usual} here)` : ""}`, p: null });
+  if (!monthly && !appendix && words < min.words) extra.push({ severity: "medium", kind: "vague", text: `Not much written (about ${words} words): good reports describe each area in detail, typically ${x.kind === "me" ? "1,000+" : "1,800-5,000"} words`, p: null });
   // progress vs programme, the Beamore way (Ronan's "Site Diaries" email, Aug 2024): raised even if the AI didn't list it
   const prog = ai.programme;
   const progGaps = programmeGaps(prog);
@@ -406,11 +494,7 @@ export async function checkOne(admin: SupabaseClient, id: string) {
   // in the last three weeks: it counts as the report's tracker (its contents aren't checked)
   let trackerFile: string | null = null;
   if (!trk.tables) {
-    try {
-      const since = new Date(Date.now() - 21 * 864e5).toISOString();
-      const tf = await g.json<{ files: { name: string }[] }>("files", { q: `'${rep.folder_id}' in parents and trashed = false and modifiedTime > '${since}' and (name contains 'tracker' or name contains 'defect' or name contains 'defects' or name contains 'issues') and (mimeType = 'application/pdf' or mimeType contains 'spreadsheet' or mimeType contains 'excel')`, fields: "files(name)", pageSize: "5", supportsAllDrives: "true", includeItemsFromAllDrives: "true" });
-      trackerFile = tf.files[0]?.name ?? null;
-    } catch { trackerFile = null; }
+    trackerFile = await x.findTrackerFile().catch(() => null);
     if (trackerFile) {
       if (ai.standards) (ai.standards as Record<string, boolean>).tracker = true;
       ai.issues = ai.issues.filter((i) => !/\b(no|missing|without (a|an))\b.{0,30}\b(issues?|defects?) (tracker|log)\b/i.test(i.text));
@@ -428,105 +512,45 @@ export async function checkOne(admin: SupabaseClient, id: string) {
   ].filter(Boolean);
   if (trkProblems.length) extra.push({ severity: "medium", kind: "other", text: `Issues tracker: ${trkProblems.join("; ")}`, p: null });
   // a monthly report's tracker brought up to date with the last weekly diary of the month (Ronan, 17 Nov 2026)
-  let monthlyTracker: { against: string; month: string; missing: string[]; behind: string[]; text: string | null; details: { no: string; item: string; why: "missing" | "behind"; closed: string }[] } | null = null;
+  let monthlyTracker: MonthlyTracker | null = null;
   if (monthly) {
-    try {
-      const last = await lastDiaryOfMonth(admin, { id, project_id: rep.project_id, kind: rep.kind, file_name: rep.renamed_from ?? rep.file_name, uploaded_at: rep.uploaded_at });
-      if (last) {
-        const gap = compareTrackers(trackerItems(r), trackerItems(await readReport(Buffer.from(await g.download(last.drive_file_id)))), r.paragraphs.map((x) => x.text));
-        const text = trackerGapText(gap, last.file_name);
-        monthlyTracker = { against: last.file_name, month: last.month, missing: gap.missing, behind: gap.behind, text, details: gap.details };
-        if (text) extra.push({ severity: "medium", kind: "other", text, p: null });
-      }
-    } catch { /* a check that can't be done is left out, never holds the report up */ }
+    monthlyTracker = await x.monthlyGap().catch(() => null);
+    if (monthlyTracker?.text) extra.push({ severity: "medium", kind: "other", text: monthlyTracker.text, p: null });
   }
-  if (sideways.length) extra.push({ severity: "low", kind: "photos", text: `${sideways.length} photo${sideways.length === 1 ? "" : "s"} may be on ${sideways.length === 1 ? "its" : "their"} side: please check and turn by hand if so (not changed automatically)`, p: null });
+  if (x.sideways) extra.push({ severity: "low", kind: "photos", text: `${x.sideways} photo${x.sideways === 1 ? "" : "s"} may be on ${x.sideways === 1 ? "its" : "their"} side: please check and turn by hand if so (not changed automatically)`, p: null });
   // the date issued to the Lead Consultant is filled in by the office when it's sent (Ronan, 15 Nov 2026)
   const notOurs = (i: Issue) => /date issued to (the )?lead consultant|issued to lead consultant/i.test(i.text) || (i.kind === "photos" && /caption/i.test(i.text) && !/fewer|only \d+ photo/i.test(i.text)) || /beamore'?s diary|in the diary for this job|diary (says|shows)/i.test(i.text);
   const issues: Issue[] = [...extra, ...ai.issues.filter((i) => !notOurs(i))].sort((a, b) => rank[a.severity] - rank[b.severity]);
-  if (spelt.skipped.length) issues.push({ severity: "low", kind: "other", text: `Spelling not changed automatically (please fix by hand): ${spelt.skipped.slice(0, 8).map((s) => `${s.find} → ${s.replace}`).join(", ")}`, p: null });
+  if (x.skipped.length) issues.push({ severity: "low", kind: "other", text: `Spelling not changed automatically (please fix by hand): ${x.skipped.slice(0, 8).map((s) => `${s.find} → ${s.replace}`).join(", ")}`, p: null });
   // suggested rewordings that change more than spelling: left for the checker to decide, never made automatically
-  if (heldBack.length) issues.push({ severity: "low", kind: "other", text: `Suggested wording changes, not made (check and change by hand only if right): ${heldBack.slice(0, 8).map((s) => `"${s.find}" → "${s.replace}"`).join("; ")}`, p: heldBack[0]?.p ?? null });
+  if (x.heldBack.length) issues.push({ severity: "low", kind: "other", text: `Suggested wording changes, not made (check and change by hand only if right): ${x.heldBack.slice(0, 8).map((s) => `"${s.find}" → "${s.replace}"`).join("; ")}`, p: x.heldBack[0]?.p ?? null });
   // the points are listed on the dashboard with their page number, not put in the Word file as comments (Ronan, 16 Nov
   // 2026): a few words from each place are kept, and the office PC's Word helper looks up the page they fall on
-  if (template) for (const t of templateIssues(template)) issues.push({ ...t, kind: "template", p: null });
-  for (const i of issues) i.near = nearText(r, i.p);
-  const out = await saveReport(r);
-
-  // only if the clerk hasn't changed it while we were checking
-  const now = await g.json<{ headRevisionId: string }>(`files/${rep.drive_file_id}`, { fields: "headRevisionId", supportsAllDrives: "true" });
-  if (now.headRevisionId !== meta.headRevisionId) {
-    // another check of the same report (the 15-minute job and a manual run together) has just saved it: that one stands
-    const { data: latest } = await admin.from("reports").select("checked_revision,status").eq("id", id).single();
-    if (latest?.checked_revision === now.headRevisionId) {
-      if (latest.status !== "ready") await admin.from("reports").update({ status: "ready" }).eq("id", id);
-      return;
-    }
-    await admin.from("reports").update({ status: "new", modified_at: new Date().toISOString() }).eq("id", id);
-    return;
-  }
-  // the checked version is saved over the clerk's own file, where it is, and renamed to the folder's pattern (Ronan,
-  // 16 Nov 2026). A copy in "Checked (dashboard)" from before then is put in the bin: this replaces it.
-  // characters Windows can't have in a file name (e.g. "09:11:26") become dots, or the file never reaches the office PC
-  // and Word can't make its PDF (16 Nov 2026)
-  const checkedName = (renamedTo ?? (rep.checked_name && rep.checked_file_id === rep.drive_file_id ? rep.checked_name : rep.file_name)).replace(/[:*?"<>|]/g, ".");
-  await g.replaceContent(rep.drive_file_id, out, DOCX);
-  if (checkedName !== rep.file_name) await g.rename(rep.drive_file_id, checkedName).catch(() => undefined);
-  if (rep.checked_file_id && rep.checked_file_id !== rep.drive_file_id) await g.binOriginalReport(rep.checked_file_id).catch(() => undefined);
-  const after = await g.json<{ headRevisionId: string }>(`files/${rep.drive_file_id}`, { fields: "headRevisionId", supportsAllDrives: "true" });
-  await admin.from("reports").update({
-    checked_file_id: rep.drive_file_id, checked_folder_id: rep.folder_id, checked_name: checkedName, file_name: checkedName,
-    original_revision_id: sourceRev, renamed_from: checkedName !== rep.file_name ? rep.file_name : rep.renamed_from ?? null,
-  }).eq("id", id);
-  const visitFromName = /(\d{1,2})[.\-_ ](\d{1,2})[.\-_ ](\d{2,4})/.exec(rep.file_name);
-  const nameDate = visitFromName ? `${visitFromName[3].length === 2 ? `20${visitFromName[3]}` : visitFromName[3]}-${visitFromName[2].padStart(2, "0")}-${visitFromName[1].padStart(2, "0")}` : null;
-  const applied = ai.spelling.filter((s) => !spelt.skipped.includes(s)).map((s) => ({ find: s.find, replace: s.replace }));
+  if (x.template) for (const t of templateIssues(x.template)) issues.push({ ...t, kind: "template", p: null });
   // the report's mark, from the report as the clerk sent it, before any corrections (Ronan, 16 Nov 2026)
   const parts = scoreParts({
-    quality: Number.isFinite(ai.quality) ? ai.quality : null, qualityWhy: ai.quality_why || null,
-    photos: { count: stats.count, expected: monthly || appendix ? 0 : rep.kind === "me" ? 20 : 35, mixed: !uniform.wasUniform, stretched: stats.stretched, small: stats.smallOnPage, blurry: stats.blurry, sideways: sideways.length, reused },
-    spelling: ai.spelling.length, spellingExamples: ai.spelling.slice(0, 4).map((s) => `"${s.find}" → "${s.replace}"`), words,
-    hs: early ? null : hs, programme: prog ?? null, programmeGaps: progGaps.length, programmeTips: progGaps, standards: ai.standards ?? null,
-    standardsMissed: STANDARD_KEYS.filter((k) => ai.standards?.[k] === false).map((k) => STANDARDS[k].label),
-    tracker: trk.tables ? trkProblems.length : trackerFile ? 0 : null, trackerProblems: trkProblems, trackerExpected: !early, renamed: !!nameFixed, renamedTo: nameFixed,
+    quality: Number.isFinite(x.ai.quality) ? x.ai.quality : null, qualityWhy: x.ai.quality_why || null,
+    photos: { count: x.stats.count, expected: monthly || x.appendix ? 0 : x.kind === "me" ? 20 : 35, mixed: !x.wasUniform, stretched: x.stats.stretched, small: x.stats.smallOnPage, blurry: x.stats.blurry, sideways: x.sideways, reused: x.reused },
+    spelling: x.ai.spelling.length, spellingExamples: x.ai.spelling.slice(0, 4).map((s) => `"${s.find}" → "${s.replace}"`), words,
+    hs: early ? null : hs, programme: prog ?? null, programmeGaps: progGaps.length, programmeTips: progGaps, standards: x.ai.standards ?? null,
+    standardsMissed: STANDARD_KEYS.filter((k) => x.ai.standards?.[k] === false).map((k) => STANDARDS[k].label),
+    tracker: trk.tables ? trkProblems.length : trackerFile ? 0 : null, trackerProblems: trkProblems, trackerExpected: !early, renamed: !!x.nameFixed, renamedTo: x.nameFixed,
   });
-  await admin.from("reports").update({
-    status: "ready", ai_summary: ai.summary, issues, spelling_fixed: spelt.applied,
-    photos: { count: stats.count, blurry: stats.blurry, smallOnPage: stats.smallOnPage, stretched: stats.stretched, shrunk: shrunk.changed, rotated: rotated.length, reused, usual, uncaptioned: uncaptioned(r) },
-    photo_hashes: hashes, photo_count: stats.count,
-    fixes: { spelling: applied, rotated: rotated.length, shrunk: shrunk.changed, stretched: shapes.stretched, enlarged: shapes.enlarged, uniform: uniform.changed, mixed: !uniform.wasUniform, side_cm: uniform.side ? +(uniform.side / 360000).toFixed(1) : null, renamed: nameFixed, words, programme: prog ?? null, standards: ai.standards ?? null, health_safety: hs, tracker: trk, monthly_tracker: monthlyTracker,
-      score_by: "parts", score_parts: parts, template, pages_state: issues.some((i) => i.near) ? "waiting" : "none" },
-    // lateness is shown on its own on the Reports page
-    score: scoreTotal(parts),
-    clerk_points: [
-      // worded as friendly suggestions, not orders (Ronan, 15 Nov 2026: "steer them in the right direction")
-      ...(nameFixed ? [`If you could name the file the same way as the others in the folder, e.g. "${nameFixed.replace(/\.docx?$/i, "")}", it keeps everything easy to find`] : []),
-      ...(!uniform.wasUniform ? ["Keeping all the photos the same size (about 6 cm wide: 6 x 4.5 cm landscape, 4.5 x 6 cm portrait, two to a line) makes the report look really tidy"] : []),
-      ...(rotated.length ? ["A quick check that photos are the right way up before inserting them would help"] : []),
-      ...(stats.stretched ? ["A handy tip: resizing photos from a corner (or holding Shift) stops them stretching out of shape"] : []),
-      ...(raw.length > 10_000_000 ? [`The file came in at ${(raw.length / 1e6).toFixed(0)} MB, so it's worth shrinking the photos before inserting them (in Word: Picture Format > Compress Pictures)`] : []),
-      ...(!early && (hsGone.length || hsThin.length >= 3) ? [`It would be great to see all ${hs.length} health and safety items at the start of the report filled in, even briefly, rather than taken out or left as "N/A". This time it was ${hs.filter((h) => h.status !== "ok").map((h) => h.label).join(", ")}`] : []),
-      ...(trkProblems.length ? [`On the issues tracker: it works best as a simple record of each issue and which report to read about it in (so no photos), with every item red, orange or green. When you close one, add the date, turn it green and add a line in the comments saying why it's closed, e.g. "certificate received 12/11/26" or "remedial work seen complete on 12/11/26", rather than leaving the earlier progress note as the last word`] : []),
-      ...(monthlyTracker?.text ? [`It would help to bring the monthly report's issues tracker up to date with the last diary of the month (${monthlyTracker.against.replace(/\.docx?$/i, "")}), so it shows the same open and closed items`] : []),
-      ...(prog && (prog.verdict === "weak" || prog.verdict === "missing") ? [`On the ${prog.dfe ? "progress vs programme section" : "progress summary"}, it would help to ${progGaps.join("; ") || "follow the approach below"}`] : []),
-      ...(template && templatePoint(template) ? [templatePoint(template)!] : []),
-      ...(ai.clerk_points ?? []),
-    ].slice(0, 8),
-    size_before: raw.length, size_after: out.length, checked_revision: after.headRevisionId, checked_at: new Date().toISOString(),
-    // the date written in the report wins; otherwise the one already worked out from its name or the diary stays
-    ...(ai.visit_date && /^\d{4}-\d{2}-\d{2}$/.test(ai.visit_date) && rep.visit_date_source !== "manual" ? { visit_date: ai.visit_date, visit_date_source: "report" }
-      : !rep.visit_date && nameDate && !Number.isNaN(Date.parse(nameDate)) ? { visit_date: nameDate, visit_date_source: "name" } : {}),
-    report_number: ai.report_number, clerk_name: ai.clerk_name,
-    // no clerk from the job: the one named in the report ("Antony Larkins" is Tony Larkins), so it's counted and linked
-    // the report names the job's other clerk (its M&E clerk, say): credited to them
-    ...(rep.clerk_id && ai.clerk_name && p ? await (async () => { const ids = [p.clerk_id, p.clerk_me_id].filter((x): x is string => !!x && x !== rep.clerk_id); if (!ids.length) return {}; const { data: others } = await admin.from("clerks").select("id,name").in("id", ids); const c = clerkForName(ai.clerk_name, others ?? []); return c ? { clerk_id: c.id, kind: c.id === p.clerk_me_id ? "me" : "building" } : {}; })() : {}),
-    ...(!rep.clerk_id && ai.clerk_name ? await (async () => { const { data: all } = await admin.from("clerks").select("id,name"); const c = clerkForName(ai.clerk_name, all ?? []); return c ? { clerk_id: c.id } : {}; })() : {}),
-    text_snapshot: r.paragraphs.map((x) => x.text).filter((x) => x.trim()).join("\n").slice(0, 20000),
-    modified_at: new Date().toISOString(), updated_at: new Date().toISOString(),
-  }).eq("id", id);
-  if (monthlyTracker?.text) await askToUpdateMonthlyTracker(admin, { id, clerk_id: rep.clerk_id, file_name: rep.file_name }, monthlyTracker).catch(() => undefined);
-  if (ai.date_on_report === "none" || ai.date_on_report === "week_commencing")
-    await askForVisitDates(admin, { id, clerk_id: rep.clerk_id, file_name: rep.file_name }, ai.date_on_report).catch(() => undefined);
+  const clerkPoints = [
+    // worded as friendly suggestions, not orders (Ronan, 15 Nov 2026: "steer them in the right direction")
+    ...(x.nameFixed ? [`If you could name the file the same way as the others in the folder, e.g. "${x.nameFixed.replace(/\.docx?$/i, "")}", it keeps everything easy to find`] : []),
+    ...(!x.wasUniform ? ["Keeping all the photos the same size (about 6 cm wide: 6 x 4.5 cm landscape, 4.5 x 6 cm portrait, two to a line) makes the report look really tidy"] : []),
+    ...(x.rotated ? ["A quick check that photos are the right way up before inserting them would help"] : []),
+    ...(x.stats.stretched ? ["A handy tip: resizing photos from a corner (or holding Shift) stops them stretching out of shape"] : []),
+    ...(x.rawBytes > 10_000_000 ? [`The file came in at ${(x.rawBytes / 1e6).toFixed(0)} MB, so it's worth shrinking the photos before inserting them (in Word: Picture Format > Compress Pictures)`] : []),
+    ...(!early && (hsGone.length || hsThin.length >= 3) ? [`It would be great to see all ${hs.length} health and safety items at the start of the report filled in, even briefly, rather than taken out or left as "N/A". This time it was ${hs.filter((h) => h.status !== "ok").map((h) => h.label).join(", ")}`] : []),
+    ...(trkProblems.length ? [`On the issues tracker: it works best as a simple record of each issue and which report to read about it in (so no photos), with every item red, orange or green. When you close one, add the date, turn it green and add a line in the comments saying why it's closed, e.g. "certificate received 12/11/26" or "remedial work seen complete on 12/11/26", rather than leaving the earlier progress note as the last word`] : []),
+    ...(monthlyTracker?.text ? [`It would help to bring the monthly report's issues tracker up to date with the last diary of the month (${monthlyTracker.against.replace(/\.docx?$/i, "")}), so it shows the same open and closed items`] : []),
+    ...(prog && (prog.verdict === "weak" || prog.verdict === "missing") ? [`On the ${prog.dfe ? "progress vs programme section" : "progress summary"}, it would help to ${progGaps.join("; ") || "follow the approach below"}`] : []),
+    ...(x.template && templatePoint(x.template) ? [templatePoint(x.template)!] : []),
+    ...(x.ai.clerk_points ?? []),
+  ].slice(0, 8);
+  return { issues, words, prog, hs, trk, trkProblems, monthlyTracker, trackerFile, early, parts, clerkPoints };
 }
 
 /**
