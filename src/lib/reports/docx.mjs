@@ -233,6 +233,32 @@ export function issuesTracker(r) {
   return out;
 }
 
+/**
+ * Where the front page ends in document.xml: the first page break, section break or page Word last drew (Ronan, 18 Nov
+ * 2026: "don't change anything on the very first page in the photograph. Don't resize any of the photos on that bit").
+ * Photos before this point are left exactly as they are. 0 when there's no sign of where page one ends, or when what
+ * comes before it has so many pictures it can't be just a cover.
+ */
+export function frontPageEnd(xml) {
+  const body = xml.lastIndexOf("<w:sectPr"); // the document's own last section, not a break
+  const marks = [/<w:br\b[^>]*w:type="page"/g, /<w:lastRenderedPageBreak\s*\/>/g, /<w:pageBreakBefore(?:\s+w:val="(?:1|true|on)")?\s*\/>/g, /<w:sectPr\b/g]
+    .map((re) => [...xml.matchAll(re)].map((m) => m.index).find((i) => i !== body && i > 0) ?? Infinity);
+  let end = Math.min(...marks);
+  if (!Number.isFinite(end)) return 0;
+  // a paragraph that starts on a new page: the break comes before that paragraph
+  if (marks[2] === end) end = xml.lastIndexOf("<w:p", end);
+  // the DfE site visit diary's first page is the report itself, with ordinary progress photos (not a cover)
+  if (/Site Visit Diary/i.test(xml.slice(0, end).replace(/<[^>]+>/g, ""))) return 0;
+  return (xml.slice(0, end).match(/<w:drawing>/g) ?? []).length > 10 ? 0 : end;
+}
+
+/** The pictures on the front page (their files), which are never resized, cropped or made smaller. */
+export function frontPagePaths(r, rels) {
+  const relPath = new Map([...rels.matchAll(/<Relationship\b[^>]*Id="([^"]+)"[^>]*Target="([^"]+)"/g)].map((m) => [m[1], `word/${m[2].replace(/^\.?\//, "")}`]));
+  const end = frontPageEnd(r.xml);
+  return new Set([...r.xml.slice(0, end).matchAll(/<a:blip\b[^>]*r:embed="([^"]+)"/g)].map((m) => relPath.get(m[1])).filter(Boolean));
+}
+
 /** The photo's pixel shape the way round it's shown on the page (w/h, or h/w when it's stored turned on its side). */
 export const pixelShape = (pixels, shownShape) => (Math.abs(Math.log(pixels / shownShape)) <= Math.abs(Math.log(1 / pixels / shownShape)) ? pixels : 1 / pixels);
 
@@ -266,7 +292,8 @@ export async function photoStats(r, sharp) {
 /** Makes photos with more detail than the page needs smaller: 300 dots per inch at the size shown (looks the same). */
 export async function shrinkPhotos(r, sharp, stats) {
   let before = 0, after = 0, changed = 0;
-  for (const p of stats.list.filter((x) => x.large)) {
+  const front = frontPagePaths(r, await r.zip.file("word/_rels/document.xml.rels")?.async("string") ?? "");
+  for (const p of stats.list.filter((x) => x.large && !front.has(x.path))) {
     const buf = await r.zip.file(p.path).async("nodebuffer");
     const target = p.shownCm ? Math.max(600, Math.round((p.shownCm / 2.54) * 300)) : 1600;
     const box = p.width >= p.height ? { width: target } : { height: target };
@@ -536,10 +563,11 @@ export async function fixPhotoShapes(r, stats) {
   const byPath = new Map(stats.list.map((p) => [p.path, p]));
   let stretched = 0, enlarged = 0;
   const xml = r.xml;
+  const front = frontPageEnd(xml);
   let out = "", last = 0;
   for (const m of xml.matchAll(/<w:drawing>[\s\S]*?<\/w:drawing>/g)) {
     let d = m[0];
-    const ph = byPath.get(relPath.get(/<a:blip\b[^>]*r:embed="([^"]+)"/.exec(d)?.[1] ?? "") ?? "");
+    const ph = m.index < front ? null : byPath.get(relPath.get(/<a:blip\b[^>]*r:embed="([^"]+)"/.exec(d)?.[1] ?? "") ?? "");
     const ext = /<wp:extent cx="(\d+)" cy="(\d+)"/.exec(d);
     if (ph && ext && ph.width && ph.height && !/<a:srcRect\b[^>]*(l|t|r|b)="\d+"/.test(d)) {
       let cx = +ext[1], cy = +ext[2];
@@ -587,7 +615,8 @@ export function uniformPhotos(r, stats, rels) {
     return ph && ext && +ext[1] >= 540_000 && +ext[1] <= 3_600_000 && Math.min(ph.width, ph.height) >= 200;
   };
   const drawings = [...xml.matchAll(/<w:drawing>[\s\S]*?<\/w:drawing>/g)].map((m) => ({ m, ph: byPath.get(relPath.get(/<a:blip\b[^>]*r:embed="([^"]+)"/.exec(m[0])?.[1] ?? "") ?? "") }));
-  const photos = drawings.filter((x) => isPhoto(x.m[0], x.ph));
+  const front = frontPageEnd(xml);
+  const photos = drawings.filter((x) => x.m.index >= front && isPhoto(x.m[0], x.ph));
   if (photos.length < 2) return { side: null, changed: 0, wasUniform: true };
   // the size: 6 cm, unless the usual photo panel is too narrow for two of those side by side
   const widths = new Map();
