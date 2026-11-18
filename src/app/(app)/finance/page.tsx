@@ -2,6 +2,7 @@ import { requireDirector } from "@/lib/auth";
 import { createClient } from "@/lib/supabase/server";
 import { gbp, fdt } from "@/lib/format";
 import { syncNow, syncDiaryNow, syncGmailNow, setupTracking } from "./actions";
+import { OwedBreakdown } from "./owed";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300; // "Read diary now" / "Read Gmail now" can take a minute or two
@@ -116,6 +117,7 @@ export default async function Finance({ searchParams }: { searchParams: Promise<
             <div className="tile r"><span className="label">Fees invoiced ({month?.period ?? "month"})</span><span className="big">{gbp(month?.sales)}</span></div>
             <div className="tile r"><span className="label">Gross profit ({month?.period ?? "month"})</span><span className="big">{gbp(gp(month))}</span><span className="sub">{pct(gp(month), month?.sales)}</span></div>
           </div>
+          <OwedBreakdown />
           <section className="panel">
             <h2>Month and financial year to date</h2>
             <table>
