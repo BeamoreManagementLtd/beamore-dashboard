@@ -37,8 +37,12 @@ export async function precheckOne(admin: SupabaseClient, id: string) {
   const endClient = ((p?.details ?? {}) as { end_client?: string }).end_client ?? null;
   const clerkIds = [p?.clerk_id, p?.clerk_me_id].filter(Boolean) as string[];
   const { data: clerks } = clerkIds.length ? await admin.from("clerks").select("id,name").in("id", clerkIds) : { data: [] };
-  const { data: earlier } = pc.project_id ? await admin.from("reports").select("id,file_name,folder_id,folder_name,report_number,visit_date,text_snapshot,photo_hashes,photo_count,drive_file_id,original_revision_id,uploaded_at")
-    .eq("project_id", pc.project_id).eq("kind", pc.kind).not("checked_at", "is", null).order("uploaded_at", { ascending: false }).limit(8) : { data: [] };
+  const { data: found } = pc.project_id ? await admin.from("reports").select("id,file_name,renamed_from,folder_id,folder_name,report_number,visit_date,text_snapshot,photo_hashes,photo_count,drive_file_id,original_revision_id,uploaded_at")
+    .eq("project_id", pc.project_id).eq("kind", pc.kind).not("checked_at", "is", null).order("uploaded_at", { ascending: false }).limit(9) : { data: [] };
+  // the same report already in Drive (checked again here, say) isn't its own previous report: its photos would all
+  // look reused
+  const same = (n: string | null) => !!n && n.replace(/\.docx?$/i, "").trim().toLowerCase() === pc.file_name.replace(/\.docx?$/i, "").trim().toLowerCase();
+  const earlier = (found ?? []).filter((e) => !same(e.file_name) && !same(e.renamed_from)).slice(0, 8);
   const prev = earlier?.[0] ?? null;
   const counts = (earlier ?? []).slice(0, 5).map((e) => e.photo_count).filter((n): n is number => typeof n === "number");
   const usual = counts.length >= 2 ? Math.round(counts.reduce((a, b) => a + b, 0) / counts.length) : null;
