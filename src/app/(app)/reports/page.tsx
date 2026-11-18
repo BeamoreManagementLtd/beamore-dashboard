@@ -107,7 +107,7 @@ export default async function Reports({ searchParams }: { searchParams: Promise<
   // clerks getting their reports in on time, last three months (Ronan, 17 Nov 2026): due clerkDays working days after
   // the visit; days late = working days past that. Monthly reports have no visit date and don't count.
   const { data: q3 } = await db.from("reports").select("id,clerk_id,clerk_name,visit_date,uploaded_at,file_name,clerks(name)")
-    .not("visit_date", "is", null).gte("uploaded_at", addDays(t, -92)).order("uploaded_at", { ascending: false });
+    .not("visit_date", "is", null).neq("status", "ignored").gte("uploaded_at", addDays(t, -92)).order("uploaded_at", { ascending: false });
   const punctual = new Map<string, { id: string | null; n: number; onTime: number; lateDays: number; worst: number; recentN: number; recentOn: number; lastLate: { file: string; days: number; up: string } | null }>();
   const monthAgo = addDays(t, -30);
   for (const r of q3 ?? []) {
