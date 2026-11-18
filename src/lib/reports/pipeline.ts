@@ -99,6 +99,8 @@ const DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.doc
 /** The box in the report for the date it goes to the TA (DfE diaries / site visit reports), most specific first. */
 const TA_DATE_LABELS = ["Date issued to Lead Consultant (TA)", "Date issued to Lead Consultant", "Date issued to TA", "Date issued to the TA", "Date sent to TA", "Issue Date", "Date of issue", "Date issued"];
 const SETTLE_MS = 30 * 60 * 1000;
+const STUCK = "The check stopped part-way";
+
 /** A report's name with order, punctuation and "No"/"Nr" set aside, so a renamed copy matches the clerk's original. */
 const sameName = (name: string) => name.replace(/\.(docx?|pdf)$/i, "").toLowerCase().replace(/\s*\(\d+\)\s*$/, "").replace(/(\s+copy)+$/, "")
   .split(/[^a-z0-9]+/).filter((w) => w && !/^(no|nr|number|rev[a-z]?)$/.test(w)).map((w) => w.replace(/^0+(?=\d)/, "")).sort().join(" ");
@@ -246,6 +248,16 @@ export async function scanReports(admin: SupabaseClient) {
 /** 2. Checks reports the clerks have finished with, oldest first, within the time given. */
 export async function checkWaiting(admin: SupabaseClient, budgetMs = 200_000) {
   const t0 = Date.now();
+  // a check that stopped part-way (out of time, or the server was restarted) leaves the report on "checking" for
+  // good (Hexham Road 37 sat there from 17 Nov, Ronan 18 Nov 2026): after 20 minutes it's tried once more, and if it
+  // stops again it's marked failed so someone looks at it
+  const { data: stuck } = await admin.from("reports").select("id,error").eq("status", "checking").lt("updated_at", new Date(Date.now() - 20 * 60_000).toISOString());
+  for (const r of stuck ?? []) {
+    const again = r.error?.startsWith(STUCK);
+    await admin.from("reports").update(again
+      ? { status: "failed", error: "The check stopped part-way twice, probably because the report is too big to check in the time allowed. Check it by hand, or press Check again.", updated_at: new Date().toISOString() }
+      : { status: "new", error: `${STUCK} on ${new Date().toLocaleDateString("en-GB", { day: "numeric", month: "short" })}; trying it again.`, updated_at: new Date().toISOString() }).eq("id", r.id);
+  }
   const { data: waiting } = await admin.from("reports").select("id").eq("status", "new").lt("modified_at", new Date(Date.now() - SETTLE_MS).toISOString()).order("uploaded_at").limit(25);
   let checked = 0, failed = 0;
   for (const w of waiting ?? []) {
@@ -259,7 +271,10 @@ export async function checkWaiting(admin: SupabaseClient, budgetMs = 200_000) {
 }
 
 export async function checkOne(admin: SupabaseClient, id: string) {
-  const { data: rep } = await admin.from("reports").update({ status: "checking", error: null }).eq("id", id).select("*").single();
+  // a second try after a check that stopped part-way keeps that note, so a second stop can be told apart
+  const { data: before } = await admin.from("reports").select("error").eq("id", id).maybeSingle();
+  const retry = !!before?.error?.startsWith(STUCK);
+  const { data: rep } = await admin.from("reports").update({ status: "checking", error: retry ? before!.error : null, updated_at: new Date().toISOString() }).eq("id", id).select("*").single();
   if (!rep) throw new Error("No such report");
   const g = await driveClient(admin);
   const meta = await g.json<{ headRevisionId: string; modifiedTime: string; size: string }>(`files/${rep.drive_file_id}`, { fields: "headRevisionId,modifiedTime,size", supportsAllDrives: "true" });
@@ -419,7 +434,7 @@ export async function checkOne(admin: SupabaseClient, id: string) {
   const nameDate = visitFromName ? `${visitFromName[3].length === 2 ? `20${visitFromName[3]}` : visitFromName[3]}-${visitFromName[2].padStart(2, "0")}-${visitFromName[1].padStart(2, "0")}` : null;
   const applied = ai.spelling.filter((s) => !spelt.skipped.includes(s)).map((s) => ({ find: s.find, replace: s.replace }));
   await admin.from("reports").update({
-    status: "ready", ai_summary: ai.summary, issues, spelling_fixed: spelt.applied,
+    status: "ready", error: null, ai_summary: ai.summary, issues, spelling_fixed: spelt.applied,
     photos: { count: stats.count, blurry: stats.blurry, smallOnPage: stats.smallOnPage, stretched: stats.stretched, shrunk: shrunk.changed, rotated: rotated.length, reused, usual, uncaptioned: uncaptioned(r) },
     photo_hashes: hashes, photo_count: stats.count,
     fixes: { spelling: applied, rotated: rotated.length, shrunk: shrunk.changed, stretched: shapes.stretched, enlarged: shapes.enlarged, uniform: uniform.changed, mixed: !uniform.wasUniform, side_cm: uniform.side ? +(uniform.side / 360000).toFixed(1) : null, renamed: nameFixed, words, programme: prog ?? null, standards: ai.standards ?? null, health_safety: hs, tracker: trk, monthly_tracker: monthlyTracker,
