@@ -165,7 +165,7 @@ ${STANDARD}
  - programme: DfE report whose progress vs programme box falls short of the method above (missing or a few lines = high; weak = medium). For other clients, a missing or thin progress summary = medium
  - other: unticked tick boxes, layout problems
  Severity: high = must be fixed or looked at before it goes; medium = should be fixed; low = minor.
-Give the paragraph number when an issue is about one place. Don't repeat spelling fixes as issues.
+When an issue is about one place, put that paragraph's number in "p". Never write paragraph numbers in any wording (issues, summary, clerk points, notes): the [n] markers are only for you, the reader sees pages and has never heard of them, so "p193" or "paragraphs 31/32" means nothing to them. Refer to other places by quoting a few of their words or naming the section or box, e.g. the "Existing Sports hall, work completed..." entry appears twice in the Services boxes. Don't repeat spelling fixes as issues.
 3. rotate: attached photos (labelled Photo 1, 2...) that are on their side or upside down.
 4. clerk_points: what this clerk could do better next time, judged against the standard above: specific, no more than 5. They go in an email from the office to an experienced professional, so word them as friendly, encouraging suggestions that steer ("it would help to...", "worth adding..."), never orders, criticism or "you must"; never mention other clerks, other people or anyone else's reports; not about spelling, and not repeating the best practices or the progress section (those are added separately).
 4c. quality: your score out of 100 for the QUALITY OF THE INFORMATION in the report as the clerk wrote it, the way an experienced director would judge it: how complete, specific and useful the observations are (where, what, who, what's in place), accuracy and consistency, follow-up of earlier items, and whether it's clear what the clerk saw for themselves. Spelling, photos, the health and safety items, the progress section, the best practices, the issues tracker and the file name are all marked separately, so leave them out of this score. Don't simply count issues: a thorough, useful report with some slips is still a good report. Start from 100 (a perfect report) and come down only for what's actually wrong (Ronan, 16 Nov 2026: "if it's a perfect score, it's 100 out of 100; if there's a little bit wrong, it's a 92 out of 100"): 100 nothing wrong; 90-99 a little wrong (a few minor slips); 80-89 some things to put right; 70-79 several gaps or one important one; 50-69 a lot missing or wrong; below 50 poor or largely empty.
@@ -192,5 +192,29 @@ Give the paragraph number when an issue is about one place. Don't repeat spellin
   if (res.stop_reason === "refusal") throw new Error("The AI declined to check this report");
   const text = res.content.find((b) => b.type === "text");
   if (!text || text.type !== "text") throw new Error("The AI returned no answer");
-  return JSON.parse(text.text) as Check;
+  return withoutParagraphNumbers(JSON.parse(text.text) as Check, input.paragraphs);
+}
+
+/**
+ * The check reads the report as numbered paragraphs ([n], one per Word paragraph and table cell, so a 30-page report
+ * runs to hundreds), and sometimes still writes those numbers into its wording ("p193", "paragraphs 31/32"), which
+ * mean nothing to the reader (Ronan, 18 Nov 2026, East Coast College report 15). Any that slip through become a few
+ * quoted words from that paragraph. Only a lower-case "p" counts, and no leading zero: "P05" is the report's own code.
+ */
+export function withoutParagraphNumbers(c: Check, paragraphs: { i: number; text: string }[]): Check {
+  const words = (i: number) => {
+    for (let k = i; k < Math.min(paragraphs.length, i + 4); k++) {
+      const t = (paragraphs[k]?.text ?? "").split(/[\t\n]/).map((x) => x.trim()).find((x) => /[A-Za-z]{3}/.test(x));
+      if (t) { const w = t.split(/\s+/); return `"${w.slice(0, 6).join(" ")}${w.length > 6 ? "..." : ""}"`; }
+    }
+    return null;
+  };
+  const fix = (t: string) => t
+    .replace(/\s*\((?:p|[Pp]ara(?:graph)?s?)\.?\s?([1-9]\d{0,3})\)/g, (_m, n) => { const w = words(+n); return w ? ` (${w})` : ""; })
+    .replace(/\b(?:p|[Pp]ara(?:graph)?s?)\.?\s?([1-9]\d{0,3})\b/g, (_m, n) => words(+n) ?? "another part of the report");
+  return {
+    ...c, summary: fix(c.summary), quality_why: c.quality_why ? fix(c.quality_why) : c.quality_why,
+    issues: c.issues.map((i) => ({ ...i, text: fix(i.text) })), clerk_points: c.clerk_points.map(fix),
+    programme: { ...c.programme, note: fix(c.programme.note) },
+  };
 }
