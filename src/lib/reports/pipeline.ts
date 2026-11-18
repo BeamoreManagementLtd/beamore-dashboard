@@ -99,6 +99,9 @@ const DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.doc
 /** The box in the report for the date it goes to the TA (DfE diaries / site visit reports), most specific first. */
 const TA_DATE_LABELS = ["Date issued to Lead Consultant (TA)", "Date issued to Lead Consultant", "Date issued to TA", "Date issued to the TA", "Date sent to TA", "Issue Date", "Date of issue", "Date issued"];
 const SETTLE_MS = 30 * 60 * 1000;
+/** A report's name with order, punctuation and "No"/"Nr" set aside, so a renamed copy matches the clerk's original. */
+const sameName = (name: string) => name.replace(/\.(docx?|pdf)$/i, "").toLowerCase().replace(/\s*\(\d+\)\s*$/, "").replace(/(\s+copy)+$/, "")
+  .split(/[^a-z0-9]+/).filter((w) => w && !/^(no|nr|number|rev[a-z]?)$/.test(w)).map((w) => w.replace(/^0+(?=\d)/, "")).sort().join(" ");
 const base = (name: string) => name.replace(/\.(docx?|pdf)$/i, "").toLowerCase().replace(/\s*\(\d+\)\s*$/, "").replace(/(\s+copy)+$/, "").replace(/[^a-z0-9]/g, "");
 
 type DriveFile = { id: string; name: string; parents?: string[]; createdTime: string; modifiedTime: string };
@@ -186,7 +189,17 @@ export async function scanReports(admin: SupabaseClient) {
     const clerkFor = p ? (kind === "me" ? p.clerk_me_id ?? p.clerk_id : p.clerk_id) : null;
     const theirs = diary.filter((v) => v.clerk_id === clerkFor || v.kind === (kind === "me" ? "me" : "building"));
     const vd = visitDateFor({ file_name: f.name, uploaded_at: f.createdTime }, (theirs.length ? theirs : diary).map((v) => v.visit_date as string));
+    // the same report uploaded again by the clerk after it was done and sent (Harry's Castle Hill October monthly, sent by
+    // Anél on 2 Nov as "18 - DfE Monthly report…", came back under his own name on 17 Nov and showed as late, Ronan 18 Nov
+    // 2026): set aside with a note rather than checked and chased again
+    const key = sameName(f.name);
+    const { data: done } = await admin.from("reports").select("id,file_name,renamed_from,checked_name,status,done_at,pdf_file_id").eq("folder_id", rf.id).in("status", ["done", "sent"]);
+    const twin = (done ?? []).find((d) => [d.file_name, d.renamed_from, d.checked_name].some((n) => n && sameName(n) === key));
     await admin.from("reports").insert({
+      ...(twin ? {
+        status: "ignored", pdf_file_id: twin.pdf_file_id, done_at: twin.done_at,
+        error: `The same report as "${twin.file_name}", already ${twin.status === "sent" ? "sent" : "done"}${twin.done_at ? ` on ${new Date(twin.done_at).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}` : ""}: the clerk seems to have uploaded it again. If they've changed something that needs to go out, Check again.`,
+      } : {}),
       drive_file_id: f.id, file_name: f.name, folder_id: rf.id, folder_name: rf.name.trim(), project_folder_id: pf.id, project_folder_name: pf.name,
       ...vd,
       project_id: p?.id ?? null, kind, clerk_id: p ? (kind === "me" ? p.clerk_me_id ?? p.clerk_id : p.clerk_id) : null,
