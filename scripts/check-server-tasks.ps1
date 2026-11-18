@@ -15,7 +15,7 @@ Write-Host "== PowerShell / script processes running now (and what started them)
 $all = Get-CimInstance Win32_Process
 $all | Where-Object { $_.Name -match "powershell|pwsh|cmd\.exe|node|python|wscript|conhost" } | ForEach-Object {
   $parent = $all | Where-Object ProcessId -eq $_.ParentProcessId | Select-Object -First 1
-  [pscustomobject]@{ Process = $_.Name; Started = $_.CreationDate; Parent = $(if ($parent) { $parent.Name } else { "?" }); Command = ($_.CommandLine ?? "").Substring(0, [Math]::Min(140, ($_.CommandLine ?? "").Length)) }
+  [pscustomobject]@{ Process = $_.Name; Started = $_.CreationDate; Parent = $(if ($parent) { $parent.Name } else { "?" }); Command = $(if ($_.CommandLine) { $_.CommandLine.Substring(0, [Math]::Min(140, $_.CommandLine.Length)) } else { "" }) }
 } | Sort-Object Started -Descending | Select-Object -First 25 | Format-Table -AutoSize -Wrap
 Write-Host ""
 Write-Host "Nothing was changed. Send Claude a photo or copy of this window." -ForegroundColor Green
