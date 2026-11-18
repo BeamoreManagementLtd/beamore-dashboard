@@ -356,7 +356,9 @@ export async function checkOne(admin: SupabaseClient, id: string) {
   const heldBack = (ai.spelling ?? []).filter((s) => !isSpellingSlip(s.find, s.replace));
   ai.spelling = (ai.spelling ?? []).filter((s) => isSpellingSlip(s.find, s.replace));
   const spelt = trackSpelling(r, ai.spelling);
-  void acceptOwnRevisions;
+  // made straight into the clerk's own text, not left as red tracked changes: the report should look as if the clerk
+  // wrote it that way; the dashboard lists every correction (Ronan, 18 Nov 2026)
+  acceptOwnRevisions(r);
   const rank = { high: 0, medium: 1, low: 2 } as const;
   // not enough photos or not enough written, against the benchmark clerks' reports (weekly diaries: 35-57 photos,
   // 1,800-5,000 words); monthly reports aren't judged on this
@@ -728,8 +730,9 @@ async function sendIfPdfReady(admin: SupabaseClient, reportId: string) {
     if (rep.checked_file_id && rep.checked_folder_id) {
       try {
         const checked = Buffer.from(await g.download(rep.checked_file_id));
-        // comments out, but the tracked spelling corrections stay in so the clerk sees them (Ronan, 16 Nov 2026)
-        await g.replaceContent(rep.drive_file_id, await cleanCopy(checked, { keepChanges: true }), DOCX);
+        // a clean file: comments out and any tracked changes made part of the text, so it reads as the clerk's own
+        // (Ronan, 18 Nov 2026: "no red writing or any fixes"; the corrections are listed on the dashboard)
+        await g.replaceContent(rep.drive_file_id, await cleanCopy(checked), DOCX);
         if (rep.checked_name && rep.checked_name !== rep.file_name) await g.rename(rep.drive_file_id, rep.checked_name).catch(() => undefined);
         if (rep.checked_file_id !== rep.drive_file_id) await g.binOriginalReport(rep.checked_file_id);
         await admin.from("reports").update({ original_trashed_at: new Date().toISOString(), file_name: rep.checked_name ?? rep.file_name, checked_file_id: null }).eq("id", reportId);

@@ -22,7 +22,7 @@ export function feedbackEmail(r: FeedbackReport, o: { first: string; job: string
   const parts = (f.score_parts ?? []).filter((x) => x.of > 0);
   const points = (r.clerk_points ?? []).filter((t) => !OFFICE.test(t));
   const fixed = [
-    f.spelling?.length ? `${f.spelling.length} spelling or typing slip${f.spelling.length === 1 ? "" : "s"} corrected (shown as tracked changes in the Word file)` : "",
+    f.spelling?.length ? `${f.spelling.length} spelling or typing slip${f.spelling.length === 1 ? "" : "s"} corrected` : "",
     f.uniform ? `${f.uniform} photo${f.uniform === 1 ? "" : "s"} set to the same size as the others` : "",
     f.stretched ? `${f.stretched} stretched photo${f.stretched === 1 ? "" : "s"} put back to the right shape` : "",
     f.enlarged ? `${f.enlarged} small photo${f.enlarged === 1 ? "" : "s"} made bigger` : "",

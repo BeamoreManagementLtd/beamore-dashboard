@@ -24,8 +24,8 @@ function clerkNote(r: Record<string, unknown>, sender: string) {
   // what was put right goes back to the clerk (Ronan, 15 Nov 2026), worded gently: "steer them in the right
   // direction rather than saying do this or else"
   const fixed = [
-    // every correction, so the clerk can see each mistake (Ronan, 16 Nov 2026); they're also tracked changes in their file
-    f.spelling?.length ? `${f.spelling.length} spelling/grammar correction${f.spelling.length === 1 ? "" : "s"} (shown as tracked changes in your file): ${f.spelling.slice(0, 25).map((s) => `"${s.find}" → "${s.replace}"`).join(", ")}${f.spelling.length > 25 ? ` and ${f.spelling.length - 25} more` : ""}` : null,
+    // every correction, so the clerk can see each mistake (Ronan, 16 Nov 2026); made straight into the text, no tracked changes (18 Nov 2026)
+    f.spelling?.length ? `${f.spelling.length} spelling/grammar correction${f.spelling.length === 1 ? "" : "s"}: ${f.spelling.map((s) => `"${s.find}" → "${s.replace}"`).join(", ")}` : null,
     f.renamed ? `the file name, to match the other reports in the folder (now "${f.renamed}")` : null,
     f.mixed ? `the photos, now all the same size (about ${f.side_cm ?? 6} cm wide)` : null,
     f.stretched ? `${f.stretched} photo${f.stretched === 1 ? "" : "s"} that had stretched out of shape` : null,
@@ -155,7 +155,7 @@ export default async function ReportPage({ params, searchParams }: { params: Pro
           ))}</tbody></table>}
           {pagesState === "waiting" && issues.some((i) => i.near) && <p className="small muted">Page numbers come from Word on the office PC, usually within a few minutes of the check. Until then, search in Word for the words shown (Ctrl+F).</p>}
           {r.checked_at && <p className="small muted">
-            {r.spelling_fixed} spelling fix{r.spelling_fixed === 1 ? "" : "es"} made as tracked changes in the Word file (and listed under What was changed). The points above aren&apos;t put in the file.
+            {r.spelling_fixed} spelling fix{r.spelling_fixed === 1 ? "" : "es"} made straight into the Word file, with no tracked changes, so it reads as the clerk wrote it (each one is listed under What was changed). The points above aren&apos;t put in the file.
             {" "}Photos: {photos.count ?? 0}{photos.blurry ? `, ${photos.blurry} low detail` : ""}{photos.smallOnPage ? `, ${photos.smallOnPage} shown small` : ""}{photos.stretched ? `, ${photos.stretched} stretched` : ""}{photos.shrunk ? `; ${photos.shrunk} made smaller` : ""}.
             {" "}File {mb(r.size_before)} → {mb(r.size_after)}. Checked {fdt(r.checked_at)}.</p>}
           {/* edit it in the project folder on your own computer (Ronan, 16 Nov 2026): no download or open-in-Drive
@@ -167,9 +167,9 @@ export default async function ReportPage({ params, searchParams }: { params: Pro
             {r.folder_id && <p className="small" style={{ margin: "6px 0 0" }}><a href={`https://drive.google.com/drive/folders/${r.folder_id}`} target="_blank" rel="noreferrer">See the folder in Google Drive</a> <span className="muted">(to find it; edit it from the project folder on your computer)</span></p>}
           </div>}
           {r.main_folder && (inPlace
-            ? <p className="small muted">Checked in the clerk&apos;s own file, in its folder{r.renamed_from ? ` (renamed from ${r.renamed_from})` : ""}. The version the clerk uploaded is kept in Drive (File information → Manage versions), and Check again starts from it. When it&apos;s sent, the tracked spelling changes stay in the file so the clerk can see them.</p>
+            ? <p className="small muted">Checked in the clerk&apos;s own file, in its folder{r.renamed_from ? ` (renamed from ${r.renamed_from})` : ""}. The version the clerk uploaded is kept in Drive (File information → Manage versions), and Check again starts from it. Spelling is corrected straight into the text (no red tracked changes); every correction is listed here.</p>
             : <p className="small muted">The clerk&apos;s original is left as it was until the report is sent: <span style={{ fontFamily: "monospace" }}>{r.folder_name}\{r.renamed_from ?? r.file_name}</span>{r.original_trashed_at ? ` (overwritten with the checked version when it was sent, ${fdt(r.original_trashed_at)}; Drive keeps the old version under File information → Manage versions)` : ". When it's sent, the checked version (tracked spelling changes kept, comments taken out) is written over it."}</p>)}
-          <p className="small muted">Open the report in Word from the project folder and go through the points above page by page (spelling is already fixed as tracked changes: reject any you don&apos;t want), make any changes, save, then approve and send here. The PDF has the changes accepted and no comments; the clerk&apos;s file keeps the tracked spelling changes so they can see them.</p>
+          <p className="small muted">Open the report in Word from the project folder and go through the points above page by page (spelling is already corrected in the text: the list under What was changed shows each one, so you can put any back by hand), make any changes, save, then approve and send here. The PDF and the clerk&apos;s file are both clean: no tracked changes or comments.</p>
         </section>
 
         <section className="panel">
@@ -203,7 +203,7 @@ export default async function ReportPage({ params, searchParams }: { params: Pro
               const f = (r.fixes ?? {}) as { spelling?: { find: string; replace: string }[]; rotated?: number; shrunk?: number; stretched?: number; enlarged?: number; uniform?: number; side_cm?: number | null; renamed?: string | null };
               return (
                 <ul className="plain small">
-                  {!!f.spelling?.length && <li><b>Spelling and grammar ({f.spelling.length}):</b> {f.spelling.slice(0, 25).map((s) => `${s.find} → ${s.replace}`).join("; ")}</li>}
+                  {!!f.spelling?.length && <li><b>Spelling and grammar ({f.spelling.length}):</b> {f.spelling.map((s) => `${s.find} → ${s.replace}`).join("; ")}</li>}
                   {!!f.uniform && <li><b>Photos all made the same size:</b> {f.uniform} photos, {f.side_cm} cm wide, keeping landscape and portrait (odd shapes trimmed a little from the middle; undo a crop in Word with Crop &gt; Reset)</li>}
                   {!!f.renamed && <li><b>Renamed to match the other reports in the folder:</b> {f.renamed}</li>}
                   {!!f.stretched && <li><b>Stretched photos put back in proportion:</b> {f.stretched}</li>}
