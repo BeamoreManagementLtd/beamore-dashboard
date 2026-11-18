@@ -211,7 +211,13 @@ export function withoutParagraphNumbers(c: Check, paragraphs: { i: number; text:
   };
   const fix = (t: string) => t
     .replace(/\s*\((?:p|[Pp]ara(?:graph)?s?)\.?\s?([1-9]\d{0,3})\)/g, (_m, n) => { const w = words(+n); return w ? ` (${w})` : ""; })
-    .replace(/\b(?:p|[Pp]ara(?:graph)?s?)\.?\s?([1-9]\d{0,3})\b/g, (_m, n) => words(+n) ?? "another part of the report");
+    // "paragraphs 166 and 169", "paras 31/32", "paragraphs 172-181": every number in the run is swapped
+    .replace(/\b(?:p|[Pp]ara(?:graph)?s?)\.?\s?([1-9]\d{0,3})((?:\s*(?:,|\/|-|–|and|&|to)\s*[1-9]\d{0,3}\b)*)\b/g, (_m, n, rest: string) => {
+      const ns = [+n, ...(rest.match(/\d+/g) ?? []).map(Number)];
+      const ws = ns.map(words).filter((w): w is string => !!w);
+      if (!ws.length) return "another part of the report";
+      return /^\s*(-|–|to)/.test(rest) && ws.length === 2 ? ws[0] + " to " + ws[1] : ws.length > 1 ? ws.slice(0, -1).join(", ") + " and " + ws[ws.length - 1] : ws[0];
+    });
   return {
     ...c, summary: fix(c.summary), quality_why: c.quality_why ? fix(c.quality_why) : c.quality_why,
     issues: c.issues.map((i) => ({ ...i, text: fix(i.text) })), clerk_points: c.clerk_points.map(fix),
