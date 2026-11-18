@@ -128,6 +128,15 @@ export default async function Finance({ searchParams }: { searchParams: Promise<
             <div className="tile r"><span className="label">Owed to Beamore</span><span className="big">{gbp(latest?.receivables)}</span><span className="sub">{gbp(latest?.receivables_overdue)} overdue</span></div>
             <div className="tile r"><span className="label">Fees invoiced ({month?.period ?? "month"})</span><span className="big">{gbp(month?.sales)}</span></div>
             <div className="tile r"><span className="label">Gross profit ({month?.period ?? "month"})</span><span className="big">{gbp(gp(month))}</span><span className="sub">{pct(gp(month), month?.sales)}</span></div>
+            {estimates[0] && (() => {
+              const e = estimates[0], egp = e.fees - e.clerks, enp = egp - overheads, short = monthName(e.month).split(" ")[0];
+              return (
+                <>
+                  <div className="tile r"><span className="label">Estimated gross profit ({short})</span><span className="big">{gbp(egp)}</span><span className="sub">{pct(egp, e.fees)} of {gbp(e.fees)} fees, from the diary</span></div>
+                  <div className="tile r"><span className="label">Estimated net profit ({short})</span><span className={`big${enp < 0 ? " neg" : ""}`}>{gbp(enp)}</span><span className="sub">after {gbp(overheads)} overheads</span></div>
+                </>
+              );
+            })()}
           </div>
           <OwedBreakdown />
           <section className="panel">
