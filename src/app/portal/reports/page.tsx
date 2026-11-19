@@ -5,6 +5,7 @@ import { fmtDate } from "@/lib/portal/data";
 import { AiNote, AiSwitch } from "./feedback";
 import { ScoreGraph } from "./score-graph";
 import { PrecheckBox } from "./precheck-box";
+import { reportExamples, EXAMPLE_KINDS, type ExampleKind } from "@/lib/reports/top-examples";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300; // the check before uploading runs straight after the upload (about two minutes)
@@ -24,9 +25,10 @@ export default async function YourReports() {
       .eq("clerk_id", me.clerk.id).not("checked_at", "is", null).gte("uploaded_at", new Date(Date.now() - 183 * 864e5).toISOString()).order("uploaded_at", { ascending: false }).limit(80)
     : { data: [] };
   // checking a report before it goes in Google Drive (Ronan, 18 Nov 2026): open to every clerk, on their current jobs
-  const [{ data: jobs }, { data: checks }] = await Promise.all([
+  const [{ data: jobs }, { data: checks }, examples] = await Promise.all([
     db.from("projects").select("id,name,display_name").or(`clerk_id.eq.${me.clerk.id},clerk_me_id.eq.${me.clerk.id}`).in("stage", ["won_arranging", "won_preparing", "live", "on_hold"]).order("name"),
     db.from("report_prechecks").select("id,file_name,status,score,created_at,projects(name,display_name)").eq("clerk_id", me.clerk.id).order("created_at", { ascending: false }).limit(10),
+    reportExamples(db),
   ]);
   return (
     <>
@@ -52,6 +54,27 @@ export default async function YourReports() {
           </table>
         )}
       </section>
+      {/* Ronan, 19 Nov 2026: the best reports so far, to download and see what a top report looks like */}
+      {!!examples.length && (
+        <section className="card">
+          <h2>See what a top report looks like</h2>
+          <p className="muted small">The best-scoring reports the team has sent so far, of each kind. Download one and see how it&apos;s done; the notes say what earned the marks. These are client reports: please keep them to yourself.</p>
+          {(Object.keys(EXAMPLE_KINDS) as ExampleKind[]).filter((k) => examples.some((e) => e.kind === k)).map((k) => (
+            <div key={k} style={{ marginTop: 12 }}>
+              <h3 style={{ margin: "8px 0" }}>{EXAMPLE_KINDS[k]}</h3>
+              {examples.filter((e) => e.kind === k).map((e) => (
+                <div key={e.id} style={{ borderTop: "1px solid var(--line, #ddd)", padding: "8px 0" }}>
+                  <div style={{ display: "flex", gap: 12, justifyContent: "space-between", alignItems: "baseline", flexWrap: "wrap" }}>
+                    <span><b>{e.project}</b>{e.number ? ` · No. ${e.number.replace(/^(no\.?|r)\s*/i, "")}` : ""} · {e.clerk}{e.date ? ` · ${fmtDate(e.date)}` : ""} · <b>{Math.round(e.score)}/100</b></span>
+                    <a className="btn" href={`/portal/reports/example/${e.id}`}>Download PDF</a>
+                  </div>
+                  {!!e.why.length && <ul className="small" style={{ margin: "6px 0 0 18px" }}>{e.why.map((w) => <li key={w}>{w}</li>)}</ul>}
+                </div>
+              ))}
+            </div>
+          ))}
+        </section>
+      )}
       <section className="card">
         <h2>AI feedback on your sent reports</h2>
         <AiNote />
