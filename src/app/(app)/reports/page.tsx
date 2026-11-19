@@ -11,7 +11,6 @@ import { STANDARDS, STANDARD_KEYS, standardsShare, type StandardKey, type Standa
 export const dynamic = "force-dynamic";
 export const maxDuration = 120;
 
-type Turn = { month: string; clerk: string; reports: number; avg_days: number; over_two_days: number; review_required: number; total_days: number; timed: number };
 type Issue = { severity: "high" | "medium" | "low"; text: string };
 const OPEN = ["new", "checking", "ready", "failed", "approved", "sending"];
 const STATUS: Record<string, [string, string]> = {
@@ -27,13 +26,15 @@ export default async function Reports({ searchParams }: { searchParams: Promise<
   const t = today();
   const h = await loadHolidays();
   const monthStart = /^\d{4}-\d{2}$/.test(month ?? "") ? `${month}-01` : `${t.slice(0, 7)}-01`;
-  const [{ data: open }, { data: settings }, { data: staff }, { data: doneMonth }, { data: lastRun }, { data: turn }, { data: recentVisits }, { data: recentReports }] = await Promise.all([
+  const [{ data: open }, { data: settings }, { data: staff }, { data: doneMonth }, { data: lastRun }, { data: best }, { data: worst }, { data: recentVisits }, { data: recentReports }] = await Promise.all([
     db.from("reports").select("id,file_name,folder_name,project_id,project_folder_name,kind,visit_date,uploaded_at,status,issues,score,fixes,checker_id,error,clerks(name),projects(name)").in("status", OPEN).order("uploaded_at"),
     db.from("report_settings").select("clerk_days,team_days").eq("id", 1).single(),
     db.from("profiles").select("id,full_name,email").order("full_name"),
     db.from("reports").select("id,clerk_id,clerk_name,visit_date,uploaded_at,done_at,sent_at,sent_by,status,issues,spelling_fixed,score,fixes,clerks(name)").in("status", ["sent", "done", ...OPEN]).gte("uploaded_at", monthStart),
     db.from("sync_runs").select("finished_at,ok,message").eq("source", "report-check").order("started_at", { ascending: false }).limit(1),
-    db.from("report_turnaround").select("*").gte("month", new Date(Date.UTC(+t.slice(0, 4), +t.slice(5, 7) - 6, 1)).toISOString().slice(0, 10)),
+    // top and bottom 20 reports to date (Ronan, 19 Nov 2026), only those marked out of 100 the current way
+    db.from("reports").select(RANKED).not("score", "is", null).neq("status", "ignored").eq("fixes->>score_by", "parts").order("score", { ascending: false }).order("visit_date", { ascending: false, nullsFirst: false }).limit(20),
+    db.from("reports").select(RANKED).not("score", "is", null).neq("status", "ignored").eq("fixes->>score_by", "parts").order("score", { ascending: true }).order("visit_date", { ascending: false, nullsFirst: false }).limit(20),
     db.from("diary_visits").select("project_id,visit_date,projects(name,stage)").eq("side", "charged").gte("visit_date", addDays(t, -14)).lte("visit_date", addDays(t, -2)),
     db.from("reports").select("project_id,uploaded_at").gte("uploaded_at", addDays(t, -16)),
   ]);
@@ -133,7 +134,6 @@ export default async function Reports({ searchParams }: { searchParams: Promise<
     byChecker.set(k, x);
   }
   const monthLabel = (d: string) => new Date(d + "T00:00:00Z").toLocaleDateString("en-GB", { month: "long", year: "numeric", timeZone: "UTC" });
-  const tr = ((turn ?? []) as Turn[]).filter((x) => x.month === monthStart).sort((x, y) => y.avg_days - x.avg_days);
 
   return (
     <>
@@ -272,13 +272,36 @@ export default async function Reports({ searchParams }: { searchParams: Promise<
         </section>
       </div>
 
-      {!!tr.length && (
-        <details className="panel"><summary>From the old turnaround spreadsheet ({monthLabel(monthStart)})</summary>
-          <table><thead><tr><th>Clerk</th><th className="num">Reports</th><th className="num">Average days</th><th className="num">Over 2 days</th><th className="num">Review required</th></tr></thead>
-            <tbody>{tr.map((x) => <tr key={x.clerk}><td>{x.clerk}</td><td className="num">{x.reports}</td><td className="num">{x.avg_days}</td><td className="num">{x.over_two_days}</td><td className="num">{x.review_required}</td></tr>)}</tbody></table>
-        </details>
-      )}
+      <div className="grid2">
+        <Ranked title="Top 20 reports to date" rows={best ?? []} />
+        <Ranked title="Bottom 20 reports to date" rows={worst ?? []} />
+      </div>
     </>
+  );
+}
+
+const RANKED = "id,score,report_number,visit_date,uploaded_at,file_name,clerk_name,project_folder_name,clerks(name),projects(name)";
+type RankedRow = { id: string; score: number | null; report_number: string | null; visit_date: string | null; uploaded_at: string; file_name: string; clerk_name: string | null; project_folder_name: string | null; clerks: unknown; projects: unknown };
+
+/** A simple list of reports by score: clerk, report number, project, date and score. */
+function Ranked({ title, rows }: { title: string; rows: RankedRow[] }) {
+  return (
+    <section className="panel">
+      <h3>{title}</h3>
+      {!rows.length ? <p className="empty">No scored reports yet.</p> : (
+        <table><thead><tr><th className="num">#</th><th>Clerk</th><th>Report</th><th>Project</th><th>Date</th><th className="num">Score</th></tr></thead>
+          <tbody>{rows.map((r, k) => (
+            <tr key={r.id}>
+              <td className="num muted">{k + 1}</td>
+              <td className="small">{(r.clerks as { name?: string } | null)?.name ?? r.clerk_name ?? "—"}</td>
+              <td className="small"><Link href={`/reports/${r.id}`} title={r.file_name}>{r.report_number ? `No. ${r.report_number.replace(/^(no\.?|r)\s*/i, "")}` : "open"}</Link></td>
+              <td className="small">{(r.projects as { name?: string } | null)?.name ?? r.project_folder_name ?? "—"}</td>
+              <td className="small">{fd(r.visit_date ?? r.uploaded_at)}</td>
+              <td className={`num ${(r.score ?? 0) >= 85 ? "pos" : (r.score ?? 0) < 70 ? "neg" : ""}`}><b>{r.score}</b></td>
+            </tr>
+          ))}</tbody></table>
+      )}
+    </section>
   );
 }
 
