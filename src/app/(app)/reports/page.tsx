@@ -26,15 +26,14 @@ export default async function Reports({ searchParams }: { searchParams: Promise<
   const t = today();
   const h = await loadHolidays();
   const monthStart = /^\d{4}-\d{2}$/.test(month ?? "") ? `${month}-01` : `${t.slice(0, 7)}-01`;
-  const [{ data: open }, { data: settings }, { data: staff }, { data: doneMonth }, { data: lastRun }, { data: best }, { data: worst }, { data: recentVisits }, { data: recentReports }] = await Promise.all([
+  const [{ data: open }, { data: settings }, { data: staff }, { data: doneMonth }, { data: lastRun }, { data: best }, { data: recentVisits }, { data: recentReports }] = await Promise.all([
     db.from("reports").select("id,file_name,folder_name,project_id,project_folder_name,kind,visit_date,uploaded_at,status,issues,score,fixes,checker_id,error,clerks(name),projects(name)").in("status", OPEN).order("uploaded_at"),
     db.from("report_settings").select("clerk_days,team_days").eq("id", 1).single(),
     db.from("profiles").select("id,full_name,email").order("full_name"),
     db.from("reports").select("id,clerk_id,clerk_name,visit_date,uploaded_at,done_at,sent_at,sent_by,status,issues,spelling_fixed,score,fixes,clerks(name)").in("status", ["sent", "done", ...OPEN]).gte("uploaded_at", monthStart),
     db.from("sync_runs").select("finished_at,ok,message").eq("source", "report-check").order("started_at", { ascending: false }).limit(1),
-    // top and bottom 20 reports to date (Ronan, 19 Nov 2026), only those marked out of 100 the current way
+    // top 20 reports of all time (Ronan, 19 Nov 2026), only those marked out of 100 the current way
     db.from("reports").select(RANKED).not("score", "is", null).neq("status", "ignored").eq("fixes->>score_by", "parts").order("score", { ascending: false }).order("visit_date", { ascending: false, nullsFirst: false }).limit(20),
-    db.from("reports").select(RANKED).not("score", "is", null).neq("status", "ignored").eq("fixes->>score_by", "parts").order("score", { ascending: true }).order("visit_date", { ascending: false, nullsFirst: false }).limit(20),
     db.from("diary_visits").select("project_id,visit_date,projects(name,stage)").eq("side", "charged").gte("visit_date", addDays(t, -14)).lte("visit_date", addDays(t, -2)),
     db.from("reports").select("project_id,uploaded_at").gte("uploaded_at", addDays(t, -16)),
   ]);
@@ -109,22 +108,26 @@ export default async function Reports({ searchParams }: { searchParams: Promise<
     if (r.visit_date) { const d = workingDaysBetween(r.visit_date, r.uploaded_at.slice(0, 10), h); x.days += d; x.timed++; if (d > clerkDays) x.late++; }
     byClerk.set(k, x);
   }
-  // clerks getting their reports in on time, last three months (Ronan, 17 Nov 2026): due clerkDays working days after
-  // the visit; days late = working days past that. Monthly reports have no visit date and don't count.
-  const { data: q3 } = await db.from("reports").select("id,clerk_id,clerk_name,visit_date,uploaded_at,file_name,clerks(name)")
-    .not("visit_date", "is", null).neq("status", "ignored").gte("uploaded_at", addDays(t, -92)).order("uploaded_at", { ascending: false });
-  const punctual = new Map<string, { id: string | null; n: number; onTime: number; lateDays: number; worst: number; recentN: number; recentOn: number; lastLate: { file: string; days: number; up: string } | null }>();
-  const monthAgo = addDays(t, -30);
-  for (const r of q3 ?? []) {
-    const k = (r.clerks as unknown as { name?: string } | null)?.name ?? r.clerk_name ?? "Unknown";
-    const x = punctual.get(k) ?? { id: r.clerk_id as string | null, n: 0, onTime: 0, lateDays: 0, worst: 0, recentN: 0, recentOn: 0, lastLate: null };
-    const late = Math.max(0, workingDaysBetween(r.visit_date!, r.uploaded_at.slice(0, 10), h) - clerkDays);
-    x.n++; if (!late) x.onTime++; x.lateDays += late; x.worst = Math.max(x.worst, late);
-    if (r.uploaded_at >= monthAgo) { x.recentN++; if (!late) x.recentOn++; }
-    if (late && !x.lastLate) x.lastLate = { file: r.file_name, days: late, up: r.uploaded_at };
-    punctual.set(k, x);
+  // per clerk, all time (Ronan, 19 Nov 2026: "keep it basic"): average working days from visit to upload, and average
+  // score per report (only reports marked out of 100 the current way). Monthly reports have no visit date: not timed.
+  // A clerk needs at least 3 reports to be ranked.
+  const all: { clerk_id: string | null; clerk_name: string | null; visit_date: string | null; uploaded_at: string; score: number | null; fixes: unknown; clerks: unknown }[] = [];
+  for (let from = 0; ; from += 1000) {
+    const { data } = await db.from("reports").select("clerk_id,clerk_name,visit_date,uploaded_at,score,fixes->score_by,clerks(name)").neq("status", "ignored").order("id").range(from, from + 999);
+    all.push(...((data ?? []) as unknown as typeof all).map((r) => ({ ...r, fixes: { score_by: (r as unknown as { score_by?: string }).score_by } })));
+    if (!data || data.length < 1000) break;
   }
-  const punctualRows = [...punctual].filter(([k]) => k !== "Unknown").sort((a, b) => a[1].onTime / a[1].n - b[1].onTime / b[1].n || b[1].lateDays - a[1].lateDays);
+  const perClerk = new Map<string, { id: string | null; days: number; timed: number; score: number; scored: number }>();
+  for (const r of all) {
+    const k = (r.clerks as { name?: string } | null)?.name ?? r.clerk_name;
+    if (!k) continue;
+    const x = perClerk.get(k) ?? { id: r.clerk_id, days: 0, timed: 0, score: 0, scored: 0 };
+    if (r.visit_date && r.visit_date <= r.uploaded_at.slice(0, 10)) { x.days += workingDaysBetween(r.visit_date, r.uploaded_at.slice(0, 10), h); x.timed++; }
+    if (typeof r.score === "number" && (r.fixes as { score_by?: string }).score_by === "parts") { x.score += r.score; x.scored++; }
+    perClerk.set(k, x);
+  }
+  const speed = [...perClerk].filter(([, x]) => x.timed >= 3).map(([k, x]) => ({ k, id: x.id, v: x.days / x.timed, n: x.timed })).sort((a, b) => a.v - b.v);
+  const points = [...perClerk].filter(([, x]) => x.scored >= 3).map(([k, x]) => ({ k, id: x.id, v: x.score / x.scored, n: x.scored })).sort((a, b) => b.v - a.v);
   const byChecker = new Map<string, { n: number; days: number; late: number }>();
   for (const r of dm.filter((x) => x.sent_at && x.sent_by)) {
     const k = name(r.sent_by) ?? "?";
@@ -222,28 +225,6 @@ export default async function Reports({ searchParams }: { searchParams: Promise<
         </section>
       )}
 
-      <section className="panel">
-        <h2>Clerks: reports in on time <span className="small muted">last 3 months</span></h2>
-        <p className="small muted">A report is due {clerkDays} working day{clerkDays === 1 ? "" : "s"} after the visit (weekends and bank holidays don&apos;t count). The visit date is the one written in the report, or from its file name, or the diary; monthly reports aren&apos;t counted. Least on time first. Office only.</p>
-        {!punctualRows.length ? <p className="empty">No dated reports yet.</p> : (
-          <table><thead><tr><th>Clerk</th><th className="num">Reports</th><th className="num">On time</th><th className="num" title="Working days late, averaged over the late ones">Average late</th><th className="num">Worst</th><th title="The last 30 days against the 3 months">Lately</th><th>Last late report</th></tr></thead>
-            <tbody>{punctualRows.map(([k, x]) => {
-              const share = x.onTime / x.n, lateN = x.n - x.onTime, recent = x.recentN ? x.recentOn / x.recentN : null;
-              return (
-                <tr key={k}>
-                  <td>{x.id ? <Link href={`/personnel/${x.id}`}>{k}</Link> : k}</td>
-                  <td className="num">{x.n}</td>
-                  <td className={`num ${share < 0.7 ? "neg" : share >= 0.9 ? "pos" : ""}`}>{Math.round(share * 100)}%</td>
-                  <td className="num">{lateN ? `${(x.lateDays / lateN).toFixed(1)} days` : "—"}</td>
-                  <td className={`num ${x.worst >= 5 ? "neg" : ""}`}>{x.worst ? `${x.worst} days` : "—"}</td>
-                  <td className="small">{recent === null ? <span className="muted">none lately</span> : recent > share + 0.1 ? <span className="pos">↑ better</span> : recent < share - 0.1 ? <span className="neg">↓ worse</span> : <span className="muted">→ steady</span>}</td>
-                  <td className="small">{x.lastLate ? <>{x.lastLate.days} day{x.lastLate.days === 1 ? "" : "s"} late, {fd(x.lastLate.up)}<span className="two muted">{x.lastLate.file.slice(0, 60)}</span></> : <span className="muted">none</span>}</td>
-                </tr>
-              );
-            })}</tbody></table>
-        )}
-      </section>
-
       <h2>{monthLabel(monthStart)}: how quickly reports get out</h2>
       <div className="grid2">
         <section className="panel">
@@ -272,16 +253,36 @@ export default async function Reports({ searchParams }: { searchParams: Promise<
         </section>
       </div>
 
+      <h2>Clerks to date</h2>
       <div className="grid2">
-        <Ranked title="Top 20 reports to date" rows={best ?? []} />
-        <Ranked title="Bottom 20 reports to date" rows={worst ?? []} />
+        <ClerkList title="Quickest to send reports in" unit="days" rows={speed.slice(0, 10)} fmt={(v) => `${v.toFixed(1)} days`} />
+        <ClerkList title="Slowest to send reports in" unit="days" rows={speed.slice(-10).reverse()} fmt={(v) => `${v.toFixed(1)} days`} bad />
+        <ClerkList title="Highest average score" unit="score" rows={points.slice(0, 10)} fmt={(v) => `${Math.round(v)}`} />
+        <ClerkList title="Lowest average score" unit="score" rows={points.slice(-10).reverse()} fmt={(v) => `${Math.round(v)}`} bad />
       </div>
+      <p className="small muted">Average working days from the visit to the report being uploaded, and average score out of 100 per report. Clerks with at least 3 reports.</p>
+      <Ranked title="Top 20 reports of all time" rows={best ?? []} />
     </>
   );
 }
 
 const RANKED = "id,score,report_number,visit_date,uploaded_at,file_name,clerk_name,project_folder_name,clerks(name),projects(name)";
 type RankedRow = { id: string; score: number | null; report_number: string | null; visit_date: string | null; uploaded_at: string; file_name: string; clerk_name: string | null; project_folder_name: string | null; clerks: unknown; projects: unknown };
+
+/** A short ranked list of clerks: name and one figure. */
+function ClerkList({ title, rows, fmt, bad }: { title: string; unit: string; rows: { k: string; id: string | null; v: number; n: number }[]; fmt: (v: number) => string; bad?: boolean }) {
+  return (
+    <section className="panel">
+      <h3>{title}</h3>
+      {!rows.length ? <p className="empty">Not enough reports yet.</p> : (
+        <table><tbody>{rows.map((r, k) => (
+          <tr key={r.k}><td className="num muted">{k + 1}</td><td>{r.id ? <Link href={`/personnel/${r.id}`}>{r.k}</Link> : r.k}</td>
+            <td className={`num ${bad ? "neg" : "pos"}`}><b>{fmt(r.v)}</b></td><td className="num small muted">{r.n} reports</td></tr>
+        ))}</tbody></table>
+      )}
+    </section>
+  );
+}
 
 /** A simple list of reports by score: clerk, report number, project, date and score. */
 function Ranked({ title, rows }: { title: string; rows: RankedRow[] }) {
