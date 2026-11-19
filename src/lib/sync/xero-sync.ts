@@ -154,6 +154,21 @@ export async function syncXero(admin: SupabaseClient) {
       },
       project: knownBy.get(i.InvoiceNumber)?.project_id ?? refProject(i.Reference) ?? fromLines.get(i.InvoiceNumber) ?? null,
     }));
+    // an invoice renumbered in Xero (GLDS-894 became PC-031, 19 Nov 2026) keeps its Xero ID: give our row the new
+    // number first, keeping its project, days and chase history, or the upsert by number would add it a second time
+    const xids = rows.map((r) => r.row.xero_invoice_id);
+    for (let i = 0; i < xids.length; i += 200) {
+      const { data: have } = await admin.from("invoices").select("id,number,xero_invoice_id").in("xero_invoice_id", xids.slice(i, i + 200));
+      for (const h of have ?? []) {
+        const now = rows.find((r) => r.row.xero_invoice_id === h.xero_invoice_id);
+        if (!now || now.row.number === h.number) continue;
+        const { error } = await admin.from("invoices").update({ number: now.row.number }).eq("id", h.id);
+        if (error) throw new Error(`invoices: renumbering ${h.number} to ${now.row.number}: ${error.message}`);
+        const old = knownBy.get(h.number);
+        if (old) knownBy.set(now.row.number, { ...old, number: now.row.number }); // not logged as a newly issued invoice
+        if (!now.project) now.project = old?.project_id ?? null;
+      }
+    }
     const withProject = rows.filter((r) => r.project).map((r) => ({ ...r.row, project_id: r.project }));
     const without = rows.filter((r) => !r.project).map((r) => r.row);
     for (const batch of [withProject, without])
