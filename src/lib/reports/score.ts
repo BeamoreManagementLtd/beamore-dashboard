@@ -16,7 +16,7 @@ type In = {
   spelling: number; spellingExamples?: string[]; words: number;
   /** the ten H&S items (null: not judged, e.g. the first reports on a job or the CQM monthly report) */
   hs: { label: string; status: string }[] | null;
-  programme: { dfe: boolean; verdict: string } | null; programmeGaps: number; programmeTips?: string[];
+  programme: { dfe: boolean; verdict: string; weekly_cqm?: boolean } | null; programmeGaps: number; programmeTips?: string[];
   standards: Record<string, boolean> | null; standardsMissed?: string[];
   /** tracker: kinds of problem found (photos in it, not coloured, closed without date/green/reason); null = no tracker */
   tracker: number | null; trackerProblems?: string[]; trackerExpected: boolean; renamed: boolean; renamedTo?: string | null;
@@ -82,7 +82,7 @@ export function scoreParts(x: In): ScorePart[] {
 
   const pv = x.programme?.verdict;
   const prog = programmeMark(pv, x.programmeGaps);
-  parts.push({ label: x.programme && !x.programme.dfe ? "Progress summary" : "Progress vs programme", of: 10, got: prog, note: !pv || pv === "not_in_form" ? "not part of this report" : pv === "good" ? "done the Beamore way" : pv === "missing" ? "not done" : `${x.programmeGaps} thing${x.programmeGaps === 1 ? "" : "s"} short of the method`,
+  parts.push({ label: x.programme && !x.programme.dfe ? "Progress summary" : "Progress vs programme", of: 10, got: prog, note: x.programme?.weekly_cqm && pv === "not_in_form" ? "weekly CQM report: progress goes in the CQM monthly report" : !pv || pv === "not_in_form" ? "not part of this report" : pv === "good" ? "done the Beamore way" : pv === "missing" ? "not done" : `${x.programmeGaps} thing${x.programmeGaps === 1 ? "" : "s"} short of the method`,
     improve: prog < 10 ? ((x.programmeTips ?? []).join("; ") || "Follow the progress vs programme method") : undefined });
 
   const vals = Object.values(x.standards ?? {});

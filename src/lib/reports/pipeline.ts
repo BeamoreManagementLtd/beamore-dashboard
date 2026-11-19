@@ -61,6 +61,17 @@ export function isSpellingSlip(find: string, replace: string) {
   return true;
 }
 
+/**
+ * A weekly report on the DfE's CQM forms: "DfE Construction Quality Monitoring (CQM) Lead Site Inspection Report", the
+ * MEP / Discipline Specialist ones, or a form with a "CQM name" box. Not the CQM Monthly Report itself.
+ */
+export function isWeeklyCqm(paragraphs: string[], monthly: boolean) {
+  if (monthly) return false;
+  const top = paragraphs.slice(0, 40).join(" ");
+  if (/Monitoring\s*\(CQM\)\s*Monthly Report|^\s*CQM Monthly Report/im.test(paragraphs.slice(0, 5).join("\n"))) return false;
+  return /CQM|Construction Quality\s+Monitoring/i.test(top);
+}
+
 /** What a progress vs programme section is missing, against Ronan's method, in words for the checker and the clerk. */
 export function programmeGaps(p: Programme | null | undefined) {
   if (!p || p.verdict === "good" || p.verdict === "not_in_form") return [];
@@ -485,6 +496,15 @@ export async function judgeReport(x: {
   // with an appendix, the photos and much of the writing are in it (Tom Hunt's St Michael's reports)
   if (!monthly && !appendix && stats.count < min.photos) extra.push({ severity: "medium", kind: "photos", text: `Only ${stats.count} photo${stats.count === 1 ? "" : "s"}: good reports have ${x.kind === "me" ? "20 or more" : "35-50"}${usual ? ` (this clerk usually has about ${usual} here)` : ""}`, p: null });
   if (!monthly && !appendix && words < min.words) extra.push({ severity: "medium", kind: "vague", text: `Not much written (about ${words} words): good reports describe each area in detail, typically ${x.kind === "me" ? "1,000+" : "1,800-5,000"} words`, p: null });
+  // weekly CQM reports (the CQM Lead / MEP / Discipline Specialist Site Inspection Reports) don't have to comment on
+  // progress vs programme: that goes in the CQM monthly report (Ronan, 19 Nov 2026: "don't dock them down"). Done
+  // well, it still counts as done; otherwise it's treated as not part of the report and never raised or suggested.
+  if (ai.programme && isWeeklyCqm(r.paragraphs.map((p) => p.text), monthly)) {
+    if (ai.programme.verdict !== "good") ai.programme = { ...ai.programme, verdict: "not_in_form", note: "Weekly CQM report: progress vs programme goes in the CQM monthly report" };
+    (ai.programme as Programme & { weekly_cqm?: boolean }).weekly_cqm = true;
+    ai.issues = ai.issues.filter((i) => i.kind !== "programme");
+    ai.clerk_points = (ai.clerk_points ?? []).filter((t) => !/\bprogramme\b|progress (summary|section)/i.test(t));
+  }
   // progress vs programme, the Beamore way (Ronan's "Site Diaries" email, Aug 2024): raised even if the AI didn't list it
   const prog = ai.programme;
   const progGaps = programmeGaps(prog);
