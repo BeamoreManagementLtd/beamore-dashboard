@@ -1,7 +1,7 @@
 import type JSZip from "jszip";
 import type Sharp from "sharp";
 export type Report = {
-  zip: JSZip; xml: string; spans: { start: number; end: number }[]; paragraphs: { i: number; text: string }[];
+  zip: JSZip; xml: string; spans: { start: number; end: number }[]; paragraphs: { i: number; text: string; pic?: boolean }[];
   blanks: string[]; placeholders: { i: number; text: string }[]; shown: { path: string; cx: number; cy: number; cropped: boolean }[]; media: string[];
 };
 export type Photo = { path: string; bytes: number; width: number; height: number; used: number; stretched: boolean; shownCm: number; dpi: number | null; blurry: boolean; smallOnPage: boolean; large: boolean };

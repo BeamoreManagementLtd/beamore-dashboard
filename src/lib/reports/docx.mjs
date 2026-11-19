@@ -36,17 +36,22 @@ export function paragraphSpans(xml) {
 const textOf = (px) => unesc((px.match(/<w:t(?:\s[^>]*)?>[^<]*<\/w:t>|<w:tab\/>|<w:br\/>/g) ?? [])
   .map((t) => (t === "<w:tab/>" ? "\t" : t === "<w:br/>" ? "\n" : t.replace(/<[^>]+>/g, ""))).join(""));
 
+/** The paragraphs as text; pic marks one holding a picture (e.g. a weather app screenshot in the weather box). */
+const hasPic = (px) => /<w:drawing>|<w:pict>/.test(px);
+const parasOf = (xml, spans) => spans.map((s, i) => { const px = xml.slice(s.start, s.end); return hasPic(px) ? { i, text: textOf(px), pic: true } : { i, text: textOf(px) }; });
+
 /** Opens a report and reads what the checks need. */
 export async function readReport(buf) {
   const zip = await JSZip.loadAsync(buf);
   const xml = await zip.file("word/document.xml").async("string");
   const spans = paragraphSpans(xml);
-  const paragraphs = spans.map((s, i) => ({ i, text: textOf(xml.slice(s.start, s.end)) }));
+  const paragraphs = parasOf(xml, spans);
 
   // boxes left blank: a table row whose first cell is a label and whose next cell is empty, or "Label:" with nothing after
   const blanks = [];
   for (const row of xml.match(/<w:tr\b[\s\S]*?<\/w:tr>/g) ?? []) {
-    const cells = (row.match(/<w:tc\b[\s\S]*?<\/w:tc>/g) ?? []).map((c) => textOf(c).trim());
+    // a box holding a picture is filled in: some clerks put a screenshot of the weather from an app or website (Ronan, 19 Nov 2026)
+    const cells = (row.match(/<w:tc\b[\s\S]*?<\/w:tc>/g) ?? []).map((c) => textOf(c).trim() || (hasPic(c) ? "[picture]" : ""));
     for (let k = 0; k + 1 < cells.length; k += 2) {
       const label = cells[k], value = cells[k + 1];
       if (label && label.length <= 40 && /[a-z]/i.test(label) && !value && !/^(no|yes|n\/a|comments?|notes?)$/i.test(label)) blanks.push(label.replace(/:$/, ""));
@@ -711,7 +716,7 @@ export function acceptOwnRevisions(r) {
     .replace(/<w:del\b[^>]*>[\s\S]*?<\/w:del>/g, (m) => (m.slice(0, m.indexOf(">")).includes(mine) ? "" : m))
     .replace(/<w:ins\b([^>]*)>([\s\S]*?)<\/w:ins>/g, (m, attrs, inner) => (attrs.includes(mine) ? inner : m));
   r.spans = paragraphSpans(r.xml);
-  r.paragraphs = r.spans.map((s, i) => ({ i, text: textOf(r.xml.slice(s.start, s.end)) }));
+  r.paragraphs = parasOf(r.xml, r.spans);
 }
 
 /**
@@ -760,7 +765,7 @@ export async function dropOrphanComments(r) {
   r.xml = r.xml
     .replace(/<w:commentRange(?:Start|End)\b[^>]*\/>/g, (m) => (have.has(id(m)) ? m : ""))
     .replace(/<w:r\b[^>]*>(?:(?!<\/w:r>)[\s\S])*?<w:commentReference\b[^>]*\/>(?:(?!<\/w:r>)[\s\S])*?<\/w:r>/g, (m) => (have.has(id(m.slice(m.indexOf("<w:commentReference")))) ? m : ""));
-  if (r.xml.length !== before) { r.spans = paragraphSpans(r.xml); r.paragraphs = r.spans.map((s, i) => ({ i, text: textOf(r.xml.slice(s.start, s.end)) })); }
+  if (r.xml.length !== before) { r.spans = paragraphSpans(r.xml); r.paragraphs = parasOf(r.xml, r.spans); }
   return before - r.xml.length;
 }
 

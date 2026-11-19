@@ -116,7 +116,7 @@ ${STANDARD_KEYS.map((k) => { const s = STANDARDS[k] as { label: string; test: st
 export type CheckInput = {
   fileName: string; folder: string; project: string; projectNumbers: string[]; client: string | null;
   expectedClerks: string[]; diaryVisits: string[]; previous: { number: string | null; date: string | null; text: string } | null;
-  paragraphs: { i: number; text: string }[]; blanks: string[]; placeholders: { i: number; text: string }[];
+  paragraphs: { i: number; text: string; pic?: boolean }[]; blanks: string[]; placeholders: { i: number; text: string }[];
   photos: { count: number; blurry: number; smallOnPage: number; stretched: number; mb: number; usual: number | null; reused: number; uncaptioned: number };
   unticked: number; thumbnails: Buffer[]; today: string;
   /** The report's appendix, a separate PDF the clerk keeps observations in (Tom Hunt's St Michael's field-note reports). */
@@ -129,8 +129,9 @@ export async function checkReport(input: CheckInput): Promise<Check> {
   // the report text, paragraph by paragraph (long reports are cut to keep it affordable)
   let body = "", n = 0;
   for (const p of input.paragraphs) {
-    if (!p.text.trim()) continue;
-    const line = `[${p.i}] ${p.text.replace(/\s+/g, " ").trim()}\n`;
+    // a picture is shown as [picture], so a weather app screenshot in the weather box reads as filled in (Ronan, 19 Nov 2026)
+    if (!p.text.trim() && !p.pic) continue;
+    const line = `[${p.i}] ${`${p.text.replace(/\s+/g, " ").trim()}${p.pic ? " [picture]" : ""}`.trim()}\n`;
     if (n + line.length > 60_000) { body += "[…the rest of the report is not shown…]\n"; break; }
     body += line; n += line.length;
   }
@@ -154,7 +155,7 @@ ${STANDARD}
  - dates: visit date doesn't match the file name or the heading, or a weekday doesn't match its date; a date in the future (never compare with Beamore's diary: its dates are only estimates for costing)
  - names: wrong project, school or client name; a different clerk than expected
  - numbering: report number not following on from the previous one
- - blank: important boxes left empty (visit date, CoW name, weather/attendance if the form asks) or placeholder text left in. On a DfE form, empty checklist boxes that don't apply at this stage are NOT an issue. Never raise "Date issued to Lead Consultant (TA)" being empty: the office fills that in when it sends the report
+ - blank: important boxes left empty (visit date, CoW name, weather/attendance if the form asks) or placeholder text left in. [picture] marks a picture in the report: a picture in the weather box (a screenshot of the forecast from a weather app or website) records the weather properly, so the weather is NOT blank, missing or vague and is never a fault. On a DfE form, empty checklist boxes that don't apply at this stage are NOT an issue. Never raise "Date issued to Lead Consultant (TA)" being empty: the office fills that in when it sends the report
  - layout (use kind "other", medium): for non-DfE reports only, a section the best reports have that this one is missing
  - copied: whole sections that look copied unchanged from the previous report
  - follow-up: problems raised in the previous report not mentioned again
@@ -169,7 +170,7 @@ When an issue is about one place, put that paragraph's number in "p". Never writ
 3. rotate: attached photos (labelled Photo 1, 2...) that are on their side or upside down.
 4. clerk_points: what this clerk could do better next time, judged against the standard above: specific, no more than 5. They go in an email from the office to an experienced professional, so word them as friendly, encouraging suggestions that steer ("it would help to...", "worth adding..."), never orders, criticism or "you must"; never mention other clerks, other people or anyone else's reports; not about spelling, and not repeating the best practices or the progress section (those are added separately).
 4c. quality: your score out of 100 for the QUALITY OF THE INFORMATION in the report as the clerk wrote it, the way an experienced director would judge it: how complete, specific and useful the observations are (where, what, who, what's in place), accuracy and consistency, follow-up of earlier items, and whether it's clear what the clerk saw for themselves. Spelling, photos, the health and safety items, the progress section, the best practices, the issues tracker and the file name are all marked separately, so leave them out of this score. Don't simply count issues: a thorough, useful report with some slips is still a good report. Start from 100 (a perfect report) and come down only for what's actually wrong (Ronan, 16 Nov 2026: "if it's a perfect score, it's 100 out of 100; if there's a little bit wrong, it's a 92 out of 100"): 100 nothing wrong; 90-99 a little wrong (a few minor slips); 80-89 some things to put right; 70-79 several gaps or one important one; 50-69 a lot missing or wrong; below 50 poor or largely empty.
-4b. standards: for each of the team's best practices, whether this report clearly meets it (for a DfE report, within the form's own boxes; true where the form has no place for it). Monthly reports can summarise the weekly diaries, so judge "people" and "follow_up" against what a monthly report would hold.
+4b. standards: for each of the team's best practices, whether this report clearly meets it (for a DfE report, within the form's own boxes; true where the form has no place for it). Monthly reports can summarise the weekly diaries, so judge "people" and "follow_up" against what a monthly report would hold. For "people", a picture in the weather box (a weather app or website screenshot) counts as recording the weather.
 5. programme: say whether it's a DfE report, then judge its progress reporting against the right standard above. For DfE be strict, item by item: no programme named, fewer than 8 activities, activities with no weeks ahead/behind, or a synopsis under 5-6 lines with no overall view, is "weak". Set percentages_shown but it isn't a fault.`;
   const content: Anthropic.ContentBlockParam[] = [
     { type: "text", text: `${facts}\n\n${input.previous ? `PREVIOUS REPORT (for comparison, start of it):\n${input.previous.text.slice(0, 8000)}\n\n` : ""}THIS REPORT:\n${body}` },
