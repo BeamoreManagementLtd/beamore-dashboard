@@ -770,7 +770,19 @@ async function sendIfPdfReady(admin: SupabaseClient, reportId: string) {
   if (!claimed?.length) return false;
   try {
     const pdf = Buffer.from(await g.download(pdfFile.id));
-    const sent = await sendReportEmail(admin, m.by, { to: m.to, cc: m.cc, subject: m.subject, body: m.body, fileName: rep.pdf_name, pdf, signature: true });
+    // clients who want the Word file as well as the PDF (Ronan, 19 Nov 2026: Cobalt for Woking "always include the
+    // word document"): set per project (details.report_word); the same clean copy the clerk's file becomes once sent
+    let word: { name: string; data: Buffer } | undefined;
+    if (rep.project_id) {
+      const { data: pj } = await admin.from("projects").select("details").eq("id", rep.project_id).single();
+      if ((pj?.details as { report_word?: boolean } | null)?.report_word) {
+        const data = await cleanCopy(Buffer.from(await g.download(rep.checked_file_id ?? rep.drive_file_id)));
+        // Gmail takes about 25 MB in all: too big together and it couldn't go at all
+        if (data.length + pdf.length > 24e6) throw new Error("The PDF and the Word file together are too big for one email (over 24 MB)");
+        word = { name: rep.checked_name ?? rep.file_name, data };
+      }
+    }
+    const sent = await sendReportEmail(admin, m.by, { to: m.to, cc: m.cc, subject: m.subject, body: m.body, fileName: rep.pdf_name, pdf, word, signature: true });
     const at = new Date().toISOString();
     await admin.from("reports").update({ status: "sent", pdf_file_id: pdfFile.id, sent_at: at, done_at: at, sent_by: m.by, sent_to: m.to, sent_cc: m.cc, gmail_message_id: sent.id, pending_email: null, updated_at: at }).eq("id", reportId);
     if (rep.project_id) await admin.from("project_events").insert({ project_id: rep.project_id, source: "team", kind: "Report sent", who: m.by_name ?? sent.from, body: `${rep.pdf_name} sent from ${sent.from} to ${m.to.join(", ")}${m.cc.length ? `, cc ${m.cc.join(", ")}` : ""}` });

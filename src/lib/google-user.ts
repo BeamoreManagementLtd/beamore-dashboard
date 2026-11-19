@@ -140,6 +140,8 @@ export function htmlToText(h: string) {
  */
 export async function sendReportEmail(admin: SupabaseClient, profileId: string, m: {
   to: string[]; cc: string[]; subject: string; body: string; fileName?: string; pdf?: Buffer;
+  /** the Word file too, for clients who want it (Cobalt for Woking, 19 Nov 2026) */
+  word?: { name: string; data: Buffer };
   /** put the sender's own Gmail signature under it (the report to the client's list) */
   signature?: boolean;
   /** an HTML version with pictures inside it (the examples in a note to a clerk) */
@@ -170,6 +172,7 @@ export async function sendReportEmail(admin: SupabaseClient, profileId: string, 
     "MIME-Version: 1.0", `Content-Type: multipart/mixed; boundary="${b}"`, "",
     ...bodyPart,
     ...(m.pdf && m.fileName ? [`--${b}`, `Content-Type: application/pdf; name="${m.fileName.replace(/"/g, "")}"`, `Content-Disposition: attachment; filename="${m.fileName.replace(/"/g, "")}"`, "Content-Transfer-Encoding: base64", "", wrap(m.pdf.toString("base64"))] : []),
+    ...(m.word ? [`--${b}`, `Content-Type: application/vnd.openxmlformats-officedocument.wordprocessingml.document; name="${m.word.name.replace(/"/g, "")}"`, `Content-Disposition: attachment; filename="${m.word.name.replace(/"/g, "")}"`, "Content-Transfer-Encoding: base64", "", wrap(m.word.data.toString("base64"))] : []),
     `--${b}--`, "",
   ].join(CRLF);
   const res = await fetch("https://gmail.googleapis.com/upload/gmail/v1/users/me/messages/send?uploadType=media", {
