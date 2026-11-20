@@ -6,6 +6,7 @@ import { fd, fdt, today } from "@/lib/format";
 import { loadHolidays, addWorkingDays, workingDaysBetween, rag } from "@/lib/reports/days";
 import { refreshReports } from "./actions";
 import { scoreTrend } from "@/lib/reports/trend";
+import { liveClaim, claimTime } from "@/lib/reports/claim";
 import { STANDARDS, STANDARD_KEYS, standardsShare, type StandardKey, type StandardsMet } from "@/lib/reports/standards";
 
 export const dynamic = "force-dynamic";
@@ -27,7 +28,7 @@ export default async function Reports({ searchParams }: { searchParams: Promise<
   const h = await loadHolidays();
   const monthStart = /^\d{4}-\d{2}$/.test(month ?? "") ? `${month}-01` : `${t.slice(0, 7)}-01`;
   const [{ data: open }, { data: settings }, { data: staff }, { data: doneMonth }, { data: lastRun }, { data: best }, { data: recentVisits }, { data: recentReports }] = await Promise.all([
-    db.from("reports").select("id,file_name,folder_name,project_id,project_folder_name,kind,visit_date,uploaded_at,status,issues,score,fixes,checker_id,error,clerks(name),projects(name)").in("status", OPEN).order("uploaded_at"),
+    db.from("reports").select("id,file_name,folder_name,project_id,project_folder_name,kind,visit_date,uploaded_at,status,issues,score,fixes,checker_id,claimed_by,claimed_at,error,clerks(name),projects(name)").in("status", OPEN).order("uploaded_at"),
     db.from("report_settings").select("clerk_days,team_days").eq("id", 1).single(),
     db.from("profiles").select("id,full_name,email").order("full_name"),
     db.from("reports").select("id,clerk_id,clerk_name,visit_date,uploaded_at,done_at,sent_at,sent_by,status,issues,spelling_fixed,score,fixes,clerks(name)").in("status", ["sent", "done", ...OPEN]).gte("uploaded_at", monthStart),
@@ -184,7 +185,7 @@ export default async function Reports({ searchParams }: { searchParams: Promise<
                     ? <b className={r.score >= 85 ? "pos" : r.score < 70 ? "neg" : ""}>{r.score}</b>
                     : <span className="muted" title="Scored the old way: open it and check again">{r.score}*</span>) : ""}</td>
                   <td><span className={`pill ${tone}`}>{st}</span>{r.status === "failed" && <span className="two small neg">{(r.error ?? "").slice(0, 60)}</span>}</td>
-                  <td className="small">{name(r.checker_id) ?? <span className="pill bad">None</span>}</td>
+                  <td className="small">{name(r.checker_id) ?? <span className="pill bad">None</span>}{(() => { const c = liveClaim(r); return c ? <span className="two"><span className="pill warn" title={`Being checked by ${name(c.by)} since ${claimTime(c.at)}: leave it to them`}>🔒 {c.by === me.id ? "You're" : `${name(c.by)} is`} checking</span></span> : null; })()}</td>
                 </tr>
               );
             })}</tbody>

@@ -23,6 +23,22 @@ export async function refreshReports() {
   }
 }
 
+/** "I'm checking this": marks the report as being checked by me for now (taking it over from anyone else). */
+export async function claimReport(reportId: string) {
+  const me = await requireProfile();
+  await createServiceClient().from("reports").update({ claimed_by: me.id, claimed_at: new Date().toISOString() }).eq("id", reportId);
+  revalidatePath(`/reports/${reportId}`);
+  revalidatePath("/reports");
+}
+
+/** "Stop checking": lets the report go back to whoever it's allocated to. */
+export async function releaseReport(reportId: string) {
+  await requireProfile();
+  await createServiceClient().from("reports").update({ claimed_by: null, claimed_at: null }).eq("id", reportId);
+  revalidatePath(`/reports/${reportId}`);
+  revalidatePath("/reports");
+}
+
 export async function assignChecker(reportId: string, form: FormData) {
   await requireProfile();
   const who = String(form.get("checker") ?? "") || null;
@@ -45,6 +61,7 @@ export async function setProjectChecker(projectId: string, form: FormData) {
 export async function sendReport(reportId: string, form: FormData) {
   const me = await requireProfile();
   const to = emails(form.get("to")), cc = emails(form.get("cc"));
+  await createServiceClient().from("reports").update({ claimed_by: me.id, claimed_at: new Date().toISOString() }).eq("id", reportId);
   try {
     await approveReport(createServiceClient(), reportId, { id: me.id, full_name: me.full_name }, { to, cc, subject: String(form.get("subject") ?? "").trim(), body: String(form.get("body") ?? "") });
   } catch (e) {
@@ -65,13 +82,13 @@ export async function setVisitDate(reportId: string, form: FormData) {
 
 export async function markDone(reportId: string) {
   const me = await requireProfile();
-  await createServiceClient().from("reports").update({ status: "done", done_at: new Date().toISOString(), sent_by: me.id, updated_at: new Date().toISOString() }).eq("id", reportId);
+  await createServiceClient().from("reports").update({ status: "done", done_at: new Date().toISOString(), sent_by: me.id, claimed_by: null, claimed_at: null, updated_at: new Date().toISOString() }).eq("id", reportId);
   redirect("/reports");
 }
 
 export async function ignoreReport(reportId: string) {
   await requireProfile();
-  await createServiceClient().from("reports").update({ status: "ignored", updated_at: new Date().toISOString() }).eq("id", reportId);
+  await createServiceClient().from("reports").update({ status: "ignored", claimed_by: null, claimed_at: null, updated_at: new Date().toISOString() }).eq("id", reportId);
   redirect("/reports");
 }
 

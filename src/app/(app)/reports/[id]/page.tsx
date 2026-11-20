@@ -8,7 +8,8 @@ import { userConnection } from "@/lib/google-user";
 import { EXAMPLES, PROGRAMME_METHOD, SUMMARY_METHOD } from "@/lib/reports/examples";
 import { STANDARDS, STANDARD_KEYS, tipFor, type StandardsMet } from "@/lib/reports/standards";
 import type { ScorePart } from "@/lib/reports/score";
-import { assignChecker, sendReport, markDone, ignoreReport, checkAgain, sendClerkEmail, setVisitDate } from "../actions";
+import { assignChecker, sendReport, markDone, ignoreReport, checkAgain, sendClerkEmail, setVisitDate, claimReport, releaseReport } from "../actions";
+import { liveClaim, claimTime, CLAIM_HOURS } from "@/lib/reports/claim";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -89,6 +90,7 @@ export default async function ReportPage({ params, searchParams }: { params: Pro
   const photos = (r.photos ?? {}) as { count?: number; blurry?: number; smallOnPage?: number; stretched?: number; shrunk?: number };
   const mb = (n: number | null) => (n ? `${(n / 1e6).toFixed(1)} MB` : "—");
   const open = ["new", "checking", "ready", "failed"].includes(r.status);
+  const claim = liveClaim(r);
   const nameOf = (pid: string | null) => (staff ?? []).find((s) => s.id === pid)?.full_name ?? null;
   const scoreParts = (((r.fixes ?? {}) as { score_parts?: ScorePart[] }).score_parts ?? []);
 
@@ -102,6 +104,23 @@ export default async function ReportPage({ params, searchParams }: { params: Pro
           ? <div className="tile" style={{ minWidth: 150, textAlign: "center" }} title="Marked on the report as the clerk sent it, before any corrections: see How the score was worked out"><span className="label">Report score</span><span className={`big ${r.score >= 85 ? "pos" : r.score < 70 ? "neg" : ""}`}>{r.score}<small className="muted">/100</small></span></div>
           : <div className="tile" style={{ minWidth: 150, textAlign: "center" }} title="Scored the old way, so it isn't comparable. It'll be re-checked."><span className="label">Report score</span><span className="big muted">{r.score}<small>/100</small></span><span className="small muted">old scoring</span></div>)}
       </div>
+      {/* someone else checking it for now (Ronan, 20 Nov 2026): "don't check that one, Andy K is checking it" */}
+      {open && (claim && claim.by !== me.id ? (
+        <div className="callout warn row" style={{ justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
+          <span><b>{nameOf(claim.by) ?? "Someone"} is checking this report</b> (since {claimTime(claim.at)}). Leave it to them?</span>
+          <form action={claimReport.bind(null, id)}><button className="btn small">Take it over</button></form>
+        </div>
+      ) : claim ? (
+        <div className="callout info row" style={{ justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
+          <span>You&apos;re checking this report (since {claimTime(claim.at)}): the others see it&apos;s yours for now.</span>
+          <form action={releaseReport.bind(null, id)}><button className="btn small">Stop checking</button></form>
+        </div>
+      ) : (
+        <div className="row" style={{ gap: 8, alignItems: "center", margin: "6px 0 12px" }}>
+          <form action={claimReport.bind(null, id)}><button className="btn">I&apos;m checking this</button></form>
+          <span className="small muted">Shows the others you&apos;re on it (for up to {CLAIM_HOURS} hours, or until it&apos;s sent), so nobody checks it twice.</span>
+        </div>
+      ))}
       {/* how the mark was made up (Ronan, 16 Nov 2026): information 40, then 10 each for the rest */}
       {!!scoreParts.length && (
         <section className="panel">
