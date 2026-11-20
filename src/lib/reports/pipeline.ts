@@ -530,8 +530,10 @@ export async function judgeReport(x: {
     ai.clerk_points = (ai.clerk_points ?? []).filter((t) => !upFront.test(t));
   }
   const hs = healthSafety(r, onDfeForm);
-  // the DfE CQM monthly report has a written H&S section rather than the ten rows, so it isn't checked this way
-  const cqm = /CQM|Construction Quality\s+Monitoring/i.test(r.paragraphs.slice(0, 40).map((p) => p.text).join(" "));
+  // the DfE CQM monthly report has a written H&S section rather than the ten rows, so it isn't checked this way. The
+  // weekly CQM site inspection reports (Lead, MEP, Discipline Specialist) have all ten rows and are checked like any
+  // other (Ronan, 20 Nov 2026: "H&S should still be on the CQM forms. All 10 items")
+  const cqmMonthly = monthly && /CQM|Construction Quality\s+Monitoring/i.test(r.paragraphs.slice(0, 40).map((p) => p.text).join(" "));
   // a job with an end client: a report naming either company is right, so the AI's "client name" point is dropped
   // (Pepys Court: the AI still raised it after being told, 17 Nov 2026)
   if (endClient) {
@@ -539,10 +541,12 @@ export async function judgeReport(x: {
     ai.issues = ai.issues.filter((i) => !(/\bclient\b/i.test(i.text) && names.some((n) => i.text.toLowerCase().includes(n))));
   }
   // the ten H&S rows are only looked for in the Word file: with an appendix they may be written there instead
-  const early = cqm || !!appendix || Number(/\d+/.exec(ai.report_number ?? "")?.[0] ?? 99) <= 2;
+  const early = cqmMonthly || !!appendix || Number(/\d+/.exec(ai.report_number ?? "")?.[0] ?? 99) <= 2;
   const hsGone = hs.filter((h) => h.status === "missing" || h.status === "empty"), hsThin = hs.filter((h) => h.status === "thin");
-  if (!early && hsGone.length) extra.push({ severity: hsGone.length >= 5 ? "high" : "medium", kind: "other", text: `Health and safety: ${hs.length - hsGone.length - hsThin.length} of the ${hs.length} standard items filled in properly. ${hsGone.map((h) => `${h.label} ${h.status === "missing" ? "deleted" : "left empty"}`).join("; ")}${hsThin.length ? `; only "N/A"/"none" for ${hsThin.map((h) => h.label).join(", ")}` : ""}`, p: null });
-  else if (!early && hsThin.length >= 3) extra.push({ severity: "low", kind: "other", text: `Health and safety: only "N/A"/"none" for ${hsThin.map((h) => h.label).join(", ")}`, p: null });
+  // "N/A" or "none" is a fair answer when nothing of that kind is going on, e.g. no excavations (Ronan, 20 Nov 2026):
+  // only an item taken out or left empty is raised
+  void hsThin;
+  if (!early && hsGone.length) extra.push({ severity: hsGone.length >= 5 ? "high" : "medium", kind: "other", text: `Health and safety: ${hs.length - hsGone.length} of the ${hs.length} standard items filled in. ${hsGone.map((h) => `${h.label} ${h.status === "missing" ? "deleted" : "left empty"}`).join("; ")}`, p: null });
   // the issues tracker: no photos in it, every item red/orange/green, closed items dated, green and explained
   const trk = issuesTracker(r);
   // the tracker kept as its own spreadsheet or PDF beside the report (Ronan, 17 Nov 2026: Damian's Excel tracker), updated
@@ -598,7 +602,7 @@ export async function judgeReport(x: {
     ...(x.rotated ? ["A quick check that photos are the right way up before inserting them would help"] : []),
     ...(x.stats.stretched ? ["A handy tip: resizing photos from a corner (or holding Shift) stops them stretching out of shape"] : []),
     ...(x.rawBytes > 10_000_000 ? [`The file came in at ${(x.rawBytes / 1e6).toFixed(0)} MB, so it's worth shrinking the photos before inserting them (in Word: Picture Format > Compress Pictures)`] : []),
-    ...(!early && (hsGone.length || hsThin.length >= 3) ? [`It would be great to see all ${hs.length} health and safety items at the start of the report filled in, even briefly, rather than taken out or left as "N/A". This time it was ${hs.filter((h) => h.status !== "ok").map((h) => h.label).join(", ")}`] : []),
+    ...(!early && hsGone.length ? [`It would be great to see all ${hs.length} health and safety items at the start of the report filled in, even briefly ("N/A" is fine where nothing of that kind is happening), rather than taken out or left empty. This time it was ${hsGone.map((h) => h.label).join(", ")}`] : []),
     ...(trkProblems.length ? [`On the issues tracker: it works best as a simple record of each issue and which report to read about it in (so no photos), with every item red, orange or green. When you close one, add the date, turn it green and add a line in the comments saying why it's closed, e.g. "certificate received 12/11/26" or "remedial work seen complete on 12/11/26", rather than leaving the earlier progress note as the last word`] : []),
     ...(monthlyTracker?.text ? [`It would help to bring the monthly report's issues tracker up to date with the last diary of the month (${monthlyTracker.against.replace(/\.docx?$/i, "")}), so it shows the same open and closed items`] : []),
     ...(prog && (prog.verdict === "weak" || prog.verdict === "missing") ? [`On the ${prog.dfe ? "progress vs programme section" : "progress summary"}, it would help to ${progGaps.join("; ") || "follow the approach below"}`] : []),

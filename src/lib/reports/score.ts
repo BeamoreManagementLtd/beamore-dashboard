@@ -75,9 +75,11 @@ export function scoreParts(x: In): ScorePart[] {
   else {
     const n = x.hs.length || 10, ok = x.hs.filter((h) => h.status === "ok").length, thin = x.hs.filter((h) => h.status === "thin");
     const gone = x.hs.filter((h) => h.status === "missing"), empty = x.hs.filter((h) => h.status === "empty");
-    const why = [gone.length ? `${list(gone.map((h) => h.label))} taken out` : "", empty.length ? `${list(empty.map((h) => h.label))} left empty` : "", thin.length ? `${list(thin.map((h) => h.label))} only "N/A" or "none"` : ""].filter(Boolean);
-    parts.push({ label: "Health and safety items", of: 10, got: r1(((ok + thin.length * 0.5) / n) * 10), note: `${ok} of ${n} filled in properly`,
-      improve: why.length ? `${why.join("; ")}. Fill in all ${n} at the start of every report` : undefined });
+    // "N/A" or "none" is fine when nothing of that kind is happening on site (Ronan, 20 Nov 2026: "there may not be any
+    // excavation"): it counts in full; only an item taken out or left empty loses marks
+    const why = [gone.length ? `${list(gone.map((h) => h.label))} taken out` : "", empty.length ? `${list(empty.map((h) => h.label))} left empty` : ""].filter(Boolean);
+    parts.push({ label: "Health and safety items", of: 10, got: r1(((ok + thin.length) / n) * 10), note: `${ok + thin.length} of ${n} filled in${thin.length ? ` (${thin.length} "N/A", which is fine)` : ""}`,
+      improve: why.length ? `${why.join("; ")}. Fill in all ${n} at the start of every report ("N/A" is fine where nothing of that kind is happening)` : undefined });
   }
 
   const pv = x.programme?.verdict;

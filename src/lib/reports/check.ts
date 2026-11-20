@@ -95,7 +95,7 @@ const SCHEMA = {
  */
 const STANDARD = `What good looks like at Beamore (from the best clerks' reports):
 - Every heading has specific observations: where (building, level, area, gridline), what was seen, who (which contractor or trade), and the control or action in place. e.g. "Heras panels and pedestrian barriers defined the route beside the cabins and separated it from the borehole and delivery areas."
-- Even "nothing to report" is specific: "Corridors and stairs clear. No trailing leads, ramps in use for level changes." Not just "N/A" or "OK".
+- Even "nothing to report" is specific: "Corridors and stairs clear. No trailing leads, ramps in use for level changes." Not just "N/A" or "OK". (The ten standard health and safety items are the exception: "N/A" is fine there when nothing of that kind is happening, e.g. no excavations, and is never a fault.)
 - Issues found say what needs doing and by whom, and urgent safety issues are flagged for the client straight away.
 - A weekly site diary is typically 1,800-5,000 words with 35-50 photos covering the areas described.
 - Visit date(s) stated, report numbered in sequence, CoW name filled in, standard boxes completed.
