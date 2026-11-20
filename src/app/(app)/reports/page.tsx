@@ -4,7 +4,7 @@ import { createClient } from "@/lib/supabase/server";
 import { Prechecks } from "./prechecks";
 import { fd, fdt, today } from "@/lib/format";
 import { loadHolidays, addWorkingDays, workingDaysBetween, rag } from "@/lib/reports/days";
-import { refreshReports } from "./actions";
+import { refreshReports, claimReport } from "./actions";
 import { scoreTrend } from "@/lib/reports/trend";
 import { liveClaim, claimTime } from "@/lib/reports/claim";
 import { STANDARDS, STANDARD_KEYS, standardsShare, type StandardKey, type StandardsMet } from "@/lib/reports/standards";
@@ -185,7 +185,8 @@ export default async function Reports({ searchParams }: { searchParams: Promise<
                     ? <b className={r.score >= 85 ? "pos" : r.score < 70 ? "neg" : ""}>{r.score}</b>
                     : <span className="muted" title="Scored the old way: open it and check again">{r.score}*</span>) : ""}</td>
                   <td><span className={`pill ${tone}`}>{st}</span>{r.status === "failed" && <span className="two small neg">{(r.error ?? "").slice(0, 60)}</span>}</td>
-                  <td className="small">{name(r.checker_id) ?? <span className="pill bad">None</span>}{(() => { const c = liveClaim(r); return c ? <span className="two"><span className="pill warn" title={`Being checked by ${name(c.by)} since ${claimTime(c.at)}: leave it to them`}>🔒 {c.by === me.id ? "You're" : `${name(c.by)} is`} checking</span></span> : null; })()}</td>
+                  <td className="small">{name(r.checker_id) ?? <span className="pill bad">None</span>}{(() => { const c = liveClaim(r); return c ? <span className="two"><span className="pill warn" title={`Being checked by ${name(c.by)} since ${claimTime(c.at)}: leave it to them`}>🔒 {c.by === me.id ? "You're" : `${name(c.by)} is`} checking</span></span>
+                    : ["new", "checking", "ready", "failed"].includes(r.status) ? <form action={claimReport.bind(null, r.id)} className="two"><button className="btn small" title="Shows the others you're checking this one, so nobody checks it twice">I&apos;m checking this</button></form> : null; })()}</td>
                 </tr>
               );
             })}</tbody>
