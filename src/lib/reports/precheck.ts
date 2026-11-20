@@ -46,7 +46,7 @@ export async function precheckOne(admin: SupabaseClient, id: string) {
   const prev = earlier?.[0] ?? null;
   const counts = (earlier ?? []).slice(0, 5).map((e) => e.photo_count).filter((n): n is number => typeof n === "number");
   const usual = counts.length >= 2 ? Math.round(counts.reduce((a, b) => a + b, 0) / counts.length) : null;
-  const hashes = await photoHashes(r, sharp, stats);
+  await photoHashes(r, sharp, stats); // fingerprints each photo (p.hash), for the template check
   // the job's template pictures (DfE logos and the like) aren't photos: not counted, not "reused", not "too small"
   const tpl = withoutTemplate(stats, (earlier ?? []).map((e) => e.photo_hashes as string[] | null));
   stats = tpl.stats;
