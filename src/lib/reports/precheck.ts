@@ -2,7 +2,7 @@ import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import sharp from "sharp";
 import { driveClient } from "@/lib/google";
-import { readReport, photoStats, photoHashes, reusedCount, uncaptioned, unticked, uniformPhotos, trackerItems } from "./docx.mjs";
+import { readReport, photoStats, photoHashes, reusedCount, withoutTemplate, uncaptioned, unticked, uniformPhotos, trackerItems } from "./docx.mjs";
 import { checkReport } from "./check";
 import { judgeReport, isSpellingSlip } from "./pipeline";
 import { scoreTotal } from "./score";
@@ -29,7 +29,7 @@ export async function precheckOne(admin: SupabaseClient, id: string) {
   const raw = Buffer.from(await blob.arrayBuffer());
   let r;
   try { r = await readReport(raw); } catch { throw new Error("This doesn't look like a Word (.docx) file. Please save it from Word as .docx and try again."); }
-  const stats = await photoStats(r, sharp);
+  let stats = await photoStats(r, sharp);
 
   // the job, as the office's check sees it
   const { data: p } = pc.project_id ? await admin.from("projects").select("id,name,display_name,dfe_project_number,po_number,clerk_id,clerk_me_id,details,clients(name)").eq("id", pc.project_id).single() : { data: null };
@@ -47,7 +47,10 @@ export async function precheckOne(admin: SupabaseClient, id: string) {
   const counts = (earlier ?? []).slice(0, 5).map((e) => e.photo_count).filter((n): n is number => typeof n === "number");
   const usual = counts.length >= 2 ? Math.round(counts.reduce((a, b) => a + b, 0) / counts.length) : null;
   const hashes = await photoHashes(r, sharp, stats);
-  const reused = reusedCount(hashes, prev?.photo_hashes ?? null);
+  // the job's template pictures (DfE logos and the like) aren't photos: not counted, not "reused", not "too small"
+  const tpl = withoutTemplate(stats, (earlier ?? []).map((e) => e.photo_hashes as string[] | null));
+  stats = tpl.stats;
+  const reused = reusedCount(tpl.hashes, prev?.photo_hashes ?? null);
   const used = stats.list.filter((x) => x.used);
   const picked = used.length <= 12 ? used : Array.from({ length: 12 }, (_, k) => used[Math.floor((k * used.length) / 12)]);
   const thumbs: Buffer[] = [];
@@ -72,7 +75,18 @@ export async function precheckOne(admin: SupabaseClient, id: string) {
     } catch { template = null; }
   }
 
+  // the clerk's earlier checks of this same report (same file name, the last 3 days), so it's marked against the same
+  // list each time
+  const { data: before3 } = await admin.from("report_prechecks").select("issues,fixes")
+    .eq("clerk_id", pc.clerk_id).eq("file_name", pc.file_name).eq("status", "done").neq("id", pc.id)
+    .gte("created_at", new Date(Date.now() - 3 * 864e5).toISOString()).order("created_at", { ascending: false }).limit(3);
+  const earlierChecks = (before3 ?? []).map((b) => {
+    const parts = (((b.fixes ?? {}) as { score_parts?: { label: string; got: number; of: number; improve?: string }[] }).score_parts ?? []);
+    const q = parts.find((x) => x.label === "Quality of the information");
+    return { quality: q ? Math.round((q.got / q.of) * 100) : null, why: q?.improve ?? null, points: ((b.issues ?? []) as { text: string }[]).map((i) => i.text).slice(0, 12) };
+  });
   const ai = await checkReport({
+    earlierChecks,
     fileName: pc.file_name, folder: folderName, project: p?.name ?? "",
     client: ourClient && endClient ? `${ourClient} (Beamore's client), working for the end client ${endClient}: the report may name either as the client, and both are correct, so don't raise it` : ourClient,
     projectNumbers: [p?.dfe_project_number, p?.po_number].filter((x): x is string => !!x && /\d/.test(x)),

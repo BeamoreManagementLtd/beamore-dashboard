@@ -120,6 +120,12 @@ export type CheckInput = {
   paragraphs: { i: number; text: string; pic?: boolean }[]; blanks: string[]; placeholders: { i: number; text: string }[];
   photos: { count: number; blurry: number; smallOnPage: number; stretched: number; mb: number; usual: number | null; reused: number; uncaptioned: number };
   unticked: number; thumbnails: Buffer[]; today: string;
+  /**
+   * Earlier checks of this same report, newest first, when the clerk runs it through "Check before uploading" again
+   * after fixing things (Alan Wilcox, 20 Nov 2026: "each time I fixed what it asked for it came back with something
+   * new... it feels like it's marking it fresh each time rather than against a set list").
+   */
+  earlierChecks?: { quality: number | null; why: string | null; points: string[] }[];
   /** The report's appendix, a separate PDF the clerk keeps observations in (Tom Hunt's St Michael's field-note reports). */
   appendix?: { name: string; pdf: Buffer } | null;
 };
@@ -153,13 +159,13 @@ ${STANDARD}
 
 1. Spelling, grammar and punctuation (these are put right automatically, so be thorough but safe): spelling mistakes, typos, doubled words, US spellings (e.g. "color"), plain grammar errors (e.g. "the works was", "it's" for "its", a missing word), a missing capital at the start of a sentence, double spaces, a space before a full stop or comma. Keep each fix to a word or short phrase. Never change technical terms, product names, codes, people's or company names, abbreviations, or the clerk's style. "find" must be copied exactly from that paragraph.
 2. Issues for the person checking it, most important first, and only real ones:
- - dates: visit date doesn't match the file name or the heading, or a weekday doesn't match its date; a date in the future (never compare with Beamore's diary: its dates are only estimates for costing)
+ - dates: visit date doesn't match the file name or the heading, or a weekday doesn't match its date; a date in the future (never compare with Beamore's diary: its dates are only estimates for costing). Something the clerk did after the visit, dated when they did it (an email sent, information asked for, a follow-up booked), is not a date slip: never raise it (Alan Wilcox, 20 Nov 2026)
  - names: wrong project, school or client name; a different clerk than expected
  - numbering: report number not following on from the previous one
  - blank: important boxes left empty (visit date, CoW name, weather/attendance if the form asks) or placeholder text left in. [picture] marks a picture in the report: a picture in the weather box (a screenshot of the forecast from a weather app or website) records the weather properly, so the weather is NOT blank, missing or vague and is never a fault. On a DfE form, empty checklist boxes that don't apply at this stage are NOT an issue. Never raise "Date issued to Lead Consultant (TA)" being empty: the office fills that in when it sends the report
  - layout (use kind "other", medium): for non-DfE reports only, a section the best reports have that this one is missing
  - copied: whole sections that look copied unchanged from the previous report
- - follow-up: problems raised in the previous report not mentioned again
+ - follow-up: problems raised in the previous report not mentioned again. An earlier item the report says wasn't looked at on this visit, with when it will be, IS mentioned: that's honest reporting, better than writing about something not seen, so never raise it and never take marks off for it, here or in the quality score (Alan Wilcox, 20 Nov 2026)
  - vague: observations with nothing specific (no location, no detail, no action)
  - (the ten standard health and safety items at the start are checked separately: don't raise deleted or empty H&S rows)
  - safety: health and safety concerns that may need escalating to the client straight away (high)
@@ -174,6 +180,7 @@ When an issue is about one place, put that paragraph's number in "p". Never writ
 4b. standards: for each of the team's best practices, whether this report clearly meets it (for a DfE report, within the form's own boxes; true where the form has no place for it). Monthly reports can summarise the weekly diaries, so judge "people" and "follow_up" against what a monthly report would hold. For "people", a picture in the weather box (a weather app or website screenshot) counts as recording the weather.
 5. programme: say whether it's a DfE report, then judge its progress reporting against the right standard above. For DfE be strict, item by item: no programme named, fewer than 8 activities, activities with no weeks ahead/behind, or a synopsis under 5-6 lines with no overall view, is "weak". Set percentages_shown but it isn't a fault.`;
   const content: Anthropic.ContentBlockParam[] = [
+    ...(input.earlierChecks?.length ? [{ type: "text" as const, text: `EARLIER CHECKS OF THIS SAME REPORT (the clerk has been fixing it and is checking it again; newest first):\n${input.earlierChecks.map((c, k) => `Check ${k + 1}: information scored ${c.quality ?? "?"}/100${c.why ? ` (${c.why})` : ""}${c.points.length ? `. Points raised: ${c.points.join(" | ")}` : ""}`).join("\n")}\n\nMark against the same yardstick as those checks, so the clerk can tell when the report is done: for each point raised before, judge whether it's now dealt with. Don't raise new points about parts those checks were happy with unless that part has changed for the worse, and don't move the goalposts with fresh minor suggestions: a new point only if it's a real problem that should have been raised before. Don't score the information lower than the last check unless something has got worse.` }] : []),
     { type: "text", text: `${facts}\n\n${input.previous ? `PREVIOUS REPORT (for comparison, start of it):\n${input.previous.text.slice(0, 8000)}\n\n` : ""}THIS REPORT:\n${body}` },
     // read together with its appendix (Ronan, 17 Nov 2026: Tom Hunt keeps his H&S and quality comments there)
     ...(input.appendix ? [

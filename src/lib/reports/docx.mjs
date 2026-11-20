@@ -306,8 +306,11 @@ export async function photoStats(r, sharp) {
     // what matters is detail for the size it's shown at: 150-300 dots per inch prints well
     const shownCm = Math.max(0, ...uses.map((u) => u.cx / 360000));
     const dpi = shownCm && w ? Math.round(w / (shownCm / 2.54)) : null;
+    // too small by its longer side: a portrait photo 4.5 cm wide and 6 cm tall is the right size (Alan Wilcox, 20 Nov
+    // 2026: all 16 of his portrait photos were called too small)
+    const longCm = Math.max(0, ...uses.map((u) => Math.max(u.cx, u.cy) / 360000));
     out.push({ path, bytes: buf.length, width: w, height: h, used: uses.length, stretched, shownCm: +shownCm.toFixed(1), dpi,
-      blurry: dpi !== null && dpi < 150, smallOnPage: !!shownCm && shownCm < 5,
+      blurry: dpi !== null && dpi < 150, smallOnPage: !!longCm && longCm < 5,
       // more detail than the page can show (or simply huge): worth making smaller
       large: (dpi !== null && dpi > 330 && buf.length > 150_000) || buf.length > 1_500_000 || Math.max(w, h) > 3000 });
   }
@@ -436,16 +439,48 @@ export async function photoHashes(r, sharp, stats) {
       const px = await sharp(await r.zip.file(p.path).async("nodebuffer"), { failOn: "none" }).rotate().resize(8, 8, { fit: "fill" }).greyscale().raw().toBuffer();
       const avg = px.reduce((a, b) => a + b, 0) / px.length;
       let bits = ""; for (const v of px) bits += v > avg ? "1" : "0";
-      out.push(BigInt(`0b${bits}`).toString(16).padStart(16, "0"));
+      const hash = BigInt(`0b${bits}`).toString(16).padStart(16, "0");
+      p.hash = hash;
+      out.push(hash);
     } catch { /* unreadable */ }
   }
   return out;
 }
-/** How many of these fingerprints (nearly) match one from the earlier report. */
+
+const hashDist = (a, b) => { let x = BigInt(`0x${a}`) ^ BigInt(`0x${b}`), n = 0; while (x) { n += Number(x & 1n); x >>= 1n; } return n; };
+
+/**
+ * Pictures that are part of the job's report template (the DfE logo on the front, the tracker page and the back page),
+ * not site photos: the same picture in two or more of the job's earlier reports, or a PNG that was also in the one
+ * earlier report there is. They aren't counted as photos, as reused, or as too small (Alan Wilcox, Sandbach 03, 20 Nov
+ * 2026: "50 photos, 6 reused" was 47 photos, none reused, plus 3 logos). Call after photoHashes (it uses p.hash).
+ * Returns the stats without them, the photos' own fingerprints, and how many were left out.
+ */
+export function withoutTemplate(stats, earlierHashLists) {
+  const lists = (earlierHashLists ?? []).filter((l) => Array.isArray(l) && l.length);
+  const inList = (h, l) => l.some((b) => hashDist(h, b) <= SAME_PICTURE);
+  const isTemplate = (p) => {
+    if (!p.used || !p.hash || !lists.length) return false;
+    const n = lists.filter((l) => inList(p.hash, l)).length;
+    return n >= 2 || (n === 1 && (lists.length === 1 ? /\.png$/i.test(p.path) : false));
+  };
+  const list = stats.list.map((p) => ({ ...p, template: isTemplate(p) }));
+  const used = list.filter((p) => p.used && !p.template);
+  return {
+    stats: { ...stats, list, count: used.length, blurry: used.filter((p) => p.blurry).length, smallOnPage: used.filter((p) => p.smallOnPage).length, stretched: used.filter((p) => p.stretched).length },
+    hashes: used.map((p) => p.hash).filter(Boolean),
+    template: list.filter((p) => p.template).length,
+  };
+}
+/**
+ * How many of these fingerprints match one from the earlier report. Near enough to be the same picture (resized or
+ * re-saved): 1 bit of 64 at most. 3 bits caught a fresh photo of the same view taken each week (Alan Wilcox, Sandbach 03,
+ * 20 Nov 2026: 3 new photos called reused).
+ */
+export const SAME_PICTURE = 1;
 export function reusedCount(now, before) {
   if (!now?.length || !before?.length) return 0;
-  const dist = (a, b) => { let x = BigInt(`0x${a}`) ^ BigInt(`0x${b}`), n = 0; while (x) { n += Number(x & 1n); x >>= 1n; } return n; };
-  return now.filter((h) => before.some((b) => dist(h, b) <= 3)).length;
+  return now.filter((h) => before.some((b) => hashDist(h, b) <= SAME_PICTURE)).length;
 }
 
 /** Photos with no words beside them (in their table cell, or their paragraph and the one after). */

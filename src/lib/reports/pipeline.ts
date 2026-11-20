@@ -5,7 +5,7 @@ import { driveClient } from "@/lib/google";
 import { visitDateFor } from "./visit-date.mjs";
 import { projectMatcher } from "@/lib/project-match";
 import { sendReportEmail } from "@/lib/google-user";
-import { readReport, photoStats, shrinkPhotos, trackSpelling, saveReport, setLabelValue, nearText, photoHashes, reusedCount, uncaptioned, unticked, rotatePhoto, fixPhotoShapes, uniformPhotos, healthSafety, issuesTracker, trackerItems, cleanCopy, acceptOwnRevisions, withoutOwnMarks } from "./docx.mjs";
+import { readReport, photoStats, shrinkPhotos, trackSpelling, saveReport, setLabelValue, nearText, photoHashes, reusedCount, withoutTemplate, uncaptioned, unticked, rotatePhoto, fixPhotoShapes, uniformPhotos, healthSafety, issuesTracker, trackerItems, cleanCopy, acceptOwnRevisions, withoutOwnMarks } from "./docx.mjs";
 import { isMonthly, lastDiaryOfMonth, compareTrackers, trackerGapText } from "./monthly";
 import { recordReportFiles } from "./tracker";
 import { clerkForName } from "./clerk-name";
@@ -303,7 +303,7 @@ export async function checkOne(admin: SupabaseClient, id: string) {
   if (!untouched && rep.checked_revision) raw = Buffer.from(await withoutOwnMarks(raw));
   if (!untouched) await g.keepRevision(rep.drive_file_id, sourceRev).catch(() => undefined);
   const r = await readReport(raw);
-  const stats = await photoStats(r, sharp);
+  let stats = await photoStats(r, sharp);
 
   // what the check needs to know about the job
   const { data: p } = rep.project_id ? await admin.from("projects").select("id,name,dfe_project_number,po_number,clerk_id,clerk_me_id,details,clients(name)").eq("id", rep.project_id).single() : { data: null };
@@ -321,7 +321,10 @@ export async function checkOne(admin: SupabaseClient, id: string) {
   const counts = (earlier ?? []).map((e) => e.photo_count).filter((n): n is number => typeof n === "number");
   const usual = counts.length >= 2 ? Math.round(counts.reduce((a, b) => a + b, 0) / counts.length) : null;
   const hashes = await photoHashes(r, sharp, stats);
-  const reused = reusedCount(hashes, prev?.photo_hashes ?? null);
+  // the job's template pictures (DfE logos and the like) aren't photos: not counted, not "reused", not "too small"
+  const tpl = withoutTemplate(stats, (earlier ?? []).map((e) => e.photo_hashes as string[] | null));
+  stats = tpl.stats;
+  const reused = reusedCount(tpl.hashes, prev?.photo_hashes ?? null);
   // up to 12 photos for the AI to look at (spread through the report), remembering which file each one is
   const used = stats.list.filter((x) => x.used);
   const picked = used.length <= 12 ? used : Array.from({ length: 12 }, (_, k) => used[Math.floor((k * used.length) / 12)]);
