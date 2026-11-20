@@ -226,16 +226,20 @@ export async function scanReports(admin: SupabaseClient) {
 
   // a PDF of the same name in the same folder: that report is done
   let done = 0;
-  const open = new Map<string, { id: string; bases: string[] }[]>();
-  for (const r of (await admin.from("reports").select("id,folder_id,checked_folder_id,file_name,checked_name").in("status", ["new", "checking", "ready", "failed"])).data ?? []) {
+  const open = new Map<string, { id: string; since: string; bases: string[] }[]>();
+  for (const r of (await admin.from("reports").select("id,folder_id,checked_folder_id,file_name,checked_name,checked_at,uploaded_at").in("status", ["new", "checking", "ready", "failed"])).data ?? []) {
     // a PDF made by hand from the clerk's file or from the checked copy, in the report folder or the checked folder
-    const entry = { id: r.id, bases: [base(r.file_name), ...(r.checked_name ? [base(r.checked_name)] : [])] };
+    const entry = { id: r.id, since: (r.checked_at ?? r.uploaded_at) as string, bases: [base(r.file_name), ...(r.checked_name ? [base(r.checked_name)] : [])] };
     for (const fid of [r.folder_id, r.checked_folder_id].filter(Boolean)) open.set(fid, [...(open.get(fid) ?? []), entry]);
   }
   for (const pdf of pdfs) {
     const hit = (open.get(pdf.parents?.[0] ?? "") ?? []).find((r) => r.bases.includes(base(pdf.name)));
-    if (!hit) continue;
-    await admin.from("reports").update({ status: "done", pdf_file_id: pdf.id, done_at: pdf.createdTime, updated_at: started }).eq("id", hit.id).neq("status", "sent");
+    if (!hit || pdf.createdTime < hit.since) continue; // (one made before the last check is old news)
+    // (Ronan, 20 Nov 2026: a report stays in the queue until someone approves and sends it, or says it went another way.
+    // A PDF turning up beside it, e.g. one the clerk made after fixing what the feedback asked for, used to mark it
+    // done, so it vanished from the queue before it had gone to the client.) Now it's only noted on the report.
+    const note = `A PDF of this report (${pdf.name}) was saved in its folder on ${new Date(pdf.createdTime).toLocaleDateString("en-GB", { day: "numeric", month: "short", timeZone: "Europe/London" })}. If it has already gone to the client, press "Already sent another way"; if not, Check again if it's changed, then send it as usual.`;
+    await admin.from("reports").update({ error: note, updated_at: started }).eq("id", hit.id).in("status", ["new", "ready", "failed"]).or(`error.is.null,error.like.The report has been changed since it was checked%`);
     done++;
   }
   // a job's checker given by email (Judy, before she'd signed in, 17 Nov 2026): their login once they have one

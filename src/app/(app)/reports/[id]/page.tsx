@@ -132,7 +132,13 @@ export default async function ReportPage({ params, searchParams }: { params: Pro
       )}
       {error && <p className="callout bad">{error}</p>}
       {clerk === "sent" && <p className="callout good">Sent to the clerk.</p>}
-      {r.error && r.status !== "failed" && <p className="callout bad">{r.error}</p>}
+      {/* the note says "Check again", so the button is right beside it (Ronan, 20 Nov 2026: "we don't know where the check again button is") */}
+      {r.error && r.status !== "failed" && (
+        <div className="callout bad row" style={{ justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
+          <span>{r.error}</span>
+          {open && <form action={checkAgain.bind(null, id)}><button className="btn small">Check again</button></form>}
+        </div>
+      )}
 
       <div className="grid2">
         <section className="panel">
@@ -267,6 +273,7 @@ export default async function ReportPage({ params, searchParams }: { params: Pro
             </form>
           )}
           <div className="row" style={{ gap: 8, marginTop: 10 }}>
+            <form action={checkAgain.bind(null, id)}><button className="btn small" title="Checks the report again as it is in Drive now (e.g. after the clerk has fixed it); changes made in Word here are kept">Check again</button></form>
             <form action={markDone.bind(null, id)}><button className="btn small">Already sent another way</button></form>
             <form action={ignoreReport.bind(null, id)}><button className="btn small">Not a report: skip it</button></form>
           </div>
