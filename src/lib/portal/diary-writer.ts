@@ -71,7 +71,16 @@ async function resolveSites(admin: SupabaseClient, clerkId: string, wordings: st
     const k = norm(w);
     if (alias.has(k) && exact.has(norm(alias.get(k)!))) out.set(w, exact.get(norm(alias.get(k)!))!);
     else if (exact.has(k)) out.set(w, exact.get(k)!);
-    else ask.push(w);
+    else {
+      // only one of the sites this clerk has charged to lately shares the wording's name: that's it (Keith Osorio,
+      // 21 Nov 2026: "Gosford Hill School, Oxford" and "Amwell, Buntingford" were held back because the diary also has
+      // Gosford(M&E) and Amwell(M&E) columns, though he has only ever charged to Gosford(Building) and Amwell)
+      const words = w.toLowerCase().split(/[^a-z0-9]+/).filter((x) => x.length > 3 && !/^(the|and|school|primary|academy|college|site|road|street|centre)$/.test(x));
+      const squash = (n: string) => n.toLowerCase().replace(/[^a-z0-9]/g, "");
+      const hits = clerkSites.filter((n) => words.some((x) => squash(n).includes(x)));
+      if (hits.length === 1) { out.set(w, hits[0]); learnt.push([w, hits[0]]); }
+      else ask.push(w);
+    }
   }
   if (ask.length) {
     // other candidates: rates names sharing a word with the wording (keeps the list short and relevant)
