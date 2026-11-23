@@ -8,8 +8,9 @@ import { userConnection } from "@/lib/google-user";
 import { EXAMPLES, PROGRAMME_METHOD, SUMMARY_METHOD } from "@/lib/reports/examples";
 import { STANDARDS, STANDARD_KEYS, tipFor, type StandardsMet } from "@/lib/reports/standards";
 import type { ScorePart } from "@/lib/reports/score";
-import { assignChecker, sendReport, markDone, ignoreReport, checkAgain, sendClerkEmail, setVisitDate, claimReport, releaseReport, makeCleanPdf, holdReport, releaseHold } from "../actions";
+import { assignChecker, sendReport, markDone, ignoreReport, checkAgain, sendClerkEmail, setVisitDate, claimReport, releaseReport, makeCleanPdf, holdReport, releaseHold, addRequests, requestDone, requestMissed, requestDrop } from "../actions";
 import { holdOf } from "@/lib/reports/hold";
+import { openRequests } from "@/lib/reports/requests";
 import { liveClaim, claimTime, CLAIM_HOURS } from "@/lib/reports/claim";
 
 export const dynamic = "force-dynamic";
@@ -18,7 +19,7 @@ export const maxDuration = 300;
 type Issue = { severity: "high" | "medium" | "low"; kind: string; text: string; near?: string | null; page?: number | null };
 
 /** A friendly note to the clerk: what had to be fixed in this report and what to do next time. */
-function clerkNote(r: Record<string, unknown>, sender: string) {
+function clerkNote(r: Record<string, unknown>, sender: string, reminders: string[] = []) {
   const clerk = ((r.clerks as { name?: string } | null)?.name ?? (r.clerk_name as string | null) ?? "").split(" ")[0];
   const f = (r.fixes ?? {}) as { spelling?: { find: string; replace: string }[]; rotated?: number; shrunk?: number; stretched?: number; enlarged?: number; uniform?: number; mixed?: boolean; side_cm?: number | null; renamed?: string | null };
   // things raised for the checker that a suggestion below already covers aren't repeated
@@ -64,6 +65,8 @@ function clerkNote(r: Record<string, unknown>, sender: string) {
     ...(summaryHelp ? ["", ...SUMMARY_METHOD] : []),
     // the best bits of everyone's reports this one doesn't do yet (standards.ts)
     ...(missed.length ? ["", "We're bringing together the best bits of everyone's reports so we all work the same way. A few ideas that would make yours even better:", ...missed.map((s) => `- ${tipFor(s, onDfeForm)}`)] : []),
+    // asked before and still not done (Ronan, 23 Nov 2026): a gentle reminder rather than asking again as if new
+    ...(reminders.length ? ["", "A reminder of what we asked before, which isn't in this report yet:", ...reminders.map((t) => `- ${t}`)] : []),
     "", "Thanks again. Any questions, just give me a shout.", "", "Kind regards,", sender,
   ].join("\n");
 }
@@ -78,10 +81,12 @@ export default async function ReportPage({ params, searchParams }: { params: Pro
   const { data: r } = await db.from("reports").select("*,projects(id,name),clerks(name,email)").eq("id", id).maybeSingle();
   if (!r) notFound();
   const admin = createServiceClient();
-  const [{ data: staff }, conn, draft] = await Promise.all([
+  const [{ data: staff }, conn, draft, requests] = await Promise.all([
     db.from("profiles").select("id,full_name,email").order("full_name"),
     userConnection(admin, me.id),
     draftFor(admin, id, { full_name: me.full_name, email: me.email }),
+    // asked of the clerk on this job and not done yet (Ronan, 23 Nov 2026)
+    openRequests(admin, { id, project_id: r.project_id, project_folder_name: r.project_folder_name, kind: r.kind }),
   ]);
   const p = r.projects as unknown as { id: string; name: string } | null;
   const issues = (r.issues ?? []) as Issue[];
@@ -93,6 +98,7 @@ export default async function ReportPage({ params, searchParams }: { params: Pro
   const open = ["new", "checking", "ready", "failed"].includes(r.status);
   const claim = liveClaim(r);
   const hold = holdOf(r);
+  const earlierAsks = requests.filter((q) => q.asked_on_report !== id);
   const nameOf = (pid: string | null) => (staff ?? []).find((s) => s.id === pid)?.full_name ?? null;
   const scoreParts = (((r.fixes ?? {}) as { score_parts?: ScorePart[] }).score_parts ?? []);
 
@@ -130,6 +136,34 @@ export default async function ReportPage({ params, searchParams }: { params: Pro
           <span className="small muted">Shows the others you&apos;re on it (for up to {CLAIM_HOURS} hours, or until it&apos;s sent), so nobody checks it twice.</span>
         </div>
       ))}
+      {/* asked of the clerk before, carried from report to report until done (Ronan, 23 Nov 2026: so whoever checks next
+          week knows it's already been asked and pushes back rather than asking again) */}
+      <section className="panel" id="asked">
+        <h2>Asked of the clerk <span className="small muted">carried on to this job&apos;s next reports until done</span></h2>
+        {!requests.length ? <p className="small muted">Nothing asked of the clerk on this job yet.</p> : (
+          <table><tbody>{requests.map((q) => {
+            const here = q.asked_on_report === id;
+            const missedHere = q.missed.some((m) => m.report === id);
+            return (
+              <tr key={q.id}>
+                <td><b>{q.text}</b>
+                  <span className="two small muted">Asked {fd(q.asked_at)} by {nameOf(q.asked_by) ?? "someone"}{here ? " on this report" : ""}</span>
+                  {!!q.missed.length && <span className="two small neg">Still not done on: {q.missed.map((m) => `${(m.file.match(/^\s*(\d+)/)?.[1] ? `No. ${m.file.match(/^\s*(\d+)/)![1]}` : m.file.slice(0, 30))} (${fd(m.at)})`).join(", ")}</span>}</td>
+                <td className="small" style={{ whiteSpace: "nowrap" }}>
+                  {!here && <form action={requestDone.bind(null, q.id, id)} style={{ display: "inline" }}><button className="btn small" title="The clerk has done it on this report: it stops showing">✓ Done</button></form>}{" "}
+                  {!here && !missedHere && <form action={requestMissed.bind(null, q.id, id)} style={{ display: "inline" }}><button className="btn small" title="Still not done on this report: noted, and it carries on to the next one">✗ Still not done</button></form>}{" "}
+                  <form action={requestDrop.bind(null, q.id, id)} style={{ display: "inline" }}><button className="btn small" title="No longer needed">Remove</button></form>
+                </td>
+              </tr>
+            );
+          })}</tbody></table>
+        )}
+        <form action={addRequests.bind(null, id)} className="form" style={{ marginTop: 10 }}>
+          <div className="field"><label htmlFor="ask">Ask the clerk for next week <span className="muted small">(one per line)</span></label>
+            <textarea id="ask" name="text" rows={2} placeholder="e.g. Start each report from last week's checked report, downloaded from the Drive" /></div>
+          <button className="btn small">Add</button>
+        </form>
+      </section>
       {/* how the mark was made up (Ronan, 16 Nov 2026): information 40, then 10 each for the rest */}
       {!!scoreParts.length && (
         <section className="panel">
@@ -258,7 +292,7 @@ export default async function ReportPage({ params, searchParams }: { params: Pro
               <form action={sendClerkEmail.bind(null, id)} className="form">
                 <div className="field"><label htmlFor="cto">To</label><input id="cto" name="to" defaultValue={(r.clerks as unknown as { email?: string } | null)?.email ?? ""} placeholder="the clerk's email" /></div>
                 <div className="field"><label htmlFor="csu">Subject</label><input id="csu" name="subject" defaultValue={`Your report: ${String(r.file_name).replace(/\.docx?$/i, "")}`} /></div>
-                <div className="field"><label htmlFor="cbo">Email</label><textarea id="cbo" name="body" rows={12} defaultValue={clerkNote(r, me.full_name ?? me.email)} /></div>
+                <div className="field"><label htmlFor="cbo">Email</label><textarea id="cbo" name="body" rows={12} defaultValue={clerkNote(r, me.full_name ?? me.email, earlierAsks.map((q) => q.text))} /></div>
                 {open && !hold && (
                   <label className="small" style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
                     <input type="checkbox" name="hold" /> Hold the report until they&apos;ve sent the changes
@@ -267,7 +301,7 @@ export default async function ReportPage({ params, searchParams }: { params: Pro
                 )}
                 <button className="btn">{r.clerk_email_sent_at ? "Send again" : "Send to the clerk"}</button>
               </form>
-            ) : <textarea readOnly rows={10} style={{ width: "100%" }} defaultValue={clerkNote(r, me.full_name ?? me.email)} />}
+            ) : <textarea readOnly rows={10} style={{ width: "100%" }} defaultValue={clerkNote(r, me.full_name ?? me.email, earlierAsks.map((q) => q.text))} />}
           </section>
         </div>
       )}

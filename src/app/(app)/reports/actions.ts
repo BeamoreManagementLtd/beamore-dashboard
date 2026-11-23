@@ -70,6 +70,50 @@ export async function sendReport(reportId: string, form: FormData) {
   redirect(`/reports?sent=${encodeURIComponent(reportId)}`);
 }
 
+// ---- asked of the clerk for next week, carried on the job's later reports (Ronan, 23 Nov 2026)
+/** Adds one request per line written. */
+export async function addRequests(reportId: string, form: FormData) {
+  const me = await requireProfile();
+  const lines = String(form.get("text") ?? "").split(/\r?\n/).map((t) => t.replace(/^[-*\u2022\s]+/, "").trim()).filter(Boolean).slice(0, 10);
+  if (!lines.length) return;
+  const admin = createServiceClient();
+  const { data: r } = await admin.from("reports").select("id,project_id,project_folder_name,kind,clerk_id,file_name").eq("id", reportId).single();
+  if (!r) return;
+  await admin.from("report_requests").insert(lines.map((text) => ({ project_id: r.project_id, project_folder_name: r.project_folder_name, kind: r.kind, clerk_id: r.clerk_id, asked_on_report: r.id, text: text.slice(0, 500), asked_by: me.id })));
+  if (r.project_id) await admin.from("project_events").insert({ project_id: r.project_id, source: "team", kind: "Asked of the clerk", who: me.full_name ?? me.email, body: `On ${r.file_name}: ${lines.join("; ")}` });
+  revalidatePath(`/reports/${reportId}`);
+  revalidatePath("/reports");
+}
+
+/** Done: the clerk has acted on it (on this report). */
+export async function requestDone(requestId: string, reportId: string) {
+  const me = await requireProfile();
+  await createServiceClient().from("report_requests").update({ status: "done", resolved_by: me.id, resolved_at: new Date().toISOString(), resolved_on_report: reportId }).eq("id", requestId);
+  revalidatePath(`/reports/${reportId}`);
+  revalidatePath("/reports");
+}
+
+/** Still not done on this report: noted against the request (once per report), so it's clear it's been asked before. */
+export async function requestMissed(requestId: string, reportId: string) {
+  const me = await requireProfile();
+  const admin = createServiceClient();
+  const [{ data: q }, { data: r }] = await Promise.all([
+    admin.from("report_requests").select("missed").eq("id", requestId).single(),
+    admin.from("reports").select("file_name").eq("id", reportId).single(),
+  ]);
+  const missed = ((q?.missed ?? []) as { report: string }[]).filter((m) => m.report !== reportId);
+  await admin.from("report_requests").update({ missed: [...missed, { report: reportId, file: r?.file_name ?? "", at: new Date().toISOString(), by: me.id }] }).eq("id", requestId);
+  revalidatePath(`/reports/${reportId}`);
+}
+
+/** No longer needed (asked by mistake, or not relevant to this job any more). */
+export async function requestDrop(requestId: string, reportId: string) {
+  const me = await requireProfile();
+  await createServiceClient().from("report_requests").update({ status: "dropped", resolved_by: me.id, resolved_at: new Date().toISOString() }).eq("id", requestId);
+  revalidatePath(`/reports/${reportId}`);
+  revalidatePath("/reports");
+}
+
 /** "Put on hold": sent back to the clerk for changes; nobody can send it until it's taken off hold. */
 export async function holdReport(reportId: string, form: FormData) {
   const me = await requireProfile();

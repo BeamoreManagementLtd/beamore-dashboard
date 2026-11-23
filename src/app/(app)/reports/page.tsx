@@ -9,6 +9,8 @@ import { refreshReports, claimReport } from "./actions";
 import { scoreTrend } from "@/lib/reports/trend";
 import { liveClaim, claimTime } from "@/lib/reports/claim";
 import { holdOf } from "@/lib/reports/hold";
+import { openRequestCounts, requestKey } from "@/lib/reports/requests";
+import { createServiceClient } from "@/lib/supabase/server";
 import { STANDARDS, STANDARD_KEYS, standardsShare, type StandardKey, type StandardsMet } from "@/lib/reports/standards";
 
 export const dynamic = "force-dynamic";
@@ -40,6 +42,9 @@ export default async function Reports({ searchParams }: { searchParams: Promise<
     db.from("diary_visits").select("project_id,visit_date,projects(name,stage)").eq("side", "charged").gte("visit_date", addDays(t, -14)).lte("visit_date", addDays(t, -2)),
     db.from("reports").select("project_id,uploaded_at").gte("uploaded_at", addDays(t, -16)),
   ]);
+  // asked of the clerk on earlier reports and not done yet, per job (Ronan, 23 Nov 2026)
+  const asks = await openRequestCounts(createServiceClient());
+  const askedBefore = (r: { id: string; project_id: string | null; project_folder_name: string | null; kind: string }) => asks.filter((q) => requestKey(q) === requestKey(r) && q.asked_on_report !== r.id).length;
   const { data: helper } = await db.from("sync_files").select("modified_time,file_id").eq("key", "word_helper").maybeSingle();
   const helperSeen = helper?.modified_time ?? null;
   const helperLate = (open ?? []).some((r) => r.status === "approved") && (!helperSeen || Date.now() - Date.parse(helperSeen) > 10 * 60_000);
@@ -185,7 +190,7 @@ export default async function Reports({ searchParams }: { searchParams: Promise<
                   <td className="small">{fd(r.visit_date)}</td>
                   <td className="small">{fd(r.uploaded_at)}{r.clerkLate ? <span className="two neg">{r.clerkLate} day{r.clerkLate === 1 ? "" : "s"} late</span> : null}</td>
                   <td className={`small ${r.colour === "red" ? "neg" : ""}`}>{fd(r.due)}</td>
-                  <td className="small">{r.high ? <span className="pill bad">{r.high} must check</span> : null} {r.issueCount ? `${r.issueCount}` : r.status === "ready" ? "none" : ""}</td>
+                  <td className="small">{(() => { const n = askedBefore(r); return n ? <Link href={`/reports/${r.id}#asked`} className="pill warn" title="Asked of the clerk on an earlier report and not marked done: check they've acted on it" style={{ marginRight: 4 }}>🔁 {n} asked before</Link> : null; })()}{r.high ? <span className="pill bad">{r.high} must check</span> : null} {r.issueCount ? `${r.issueCount}` : r.status === "ready" ? "none" : ""}</td>
                   <td className="num">{typeof r.score === "number" ? (((r.fixes ?? {}) as { score_by?: string }).score_by === "parts"
                     ? <b className={r.score >= 85 ? "pos" : r.score < 70 ? "neg" : ""}>{r.score}</b>
                     : <span className="muted" title="Scored the old way: open it and check again">{r.score}*</span>) : ""}</td>
