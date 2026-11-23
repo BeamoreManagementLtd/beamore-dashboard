@@ -2,6 +2,7 @@ import Link from "next/link";
 import { requireProfile } from "@/lib/auth";
 import { createClient } from "@/lib/supabase/server";
 import { Prechecks } from "./prechecks";
+import { HScroll } from "./hscroll";
 import { fd, fdt, today } from "@/lib/format";
 import { loadHolidays, addWorkingDays, workingDaysBetween, rag } from "@/lib/reports/days";
 import { refreshReports, claimReport } from "./actions";
@@ -167,7 +168,7 @@ export default async function Reports({ searchParams }: { searchParams: Promise<
 
       <section className="panel">
         {!shown.length ? <p className="empty">Nothing waiting.</p> : (
-          <div className="tbl-wrap scroll"><table>
+          <HScroll><table>
             <thead><tr><th /><th>Project</th><th>Report</th><th>Clerk</th><th>Visit</th><th>Uploaded</th><th>Due out</th><th>Issues</th><th className="num" title="The AI&apos;s overall score for the report, out of 100 (grey: scored the old way; check it again)">Score</th><th>Status</th><th>Checker</th></tr></thead>
             <tbody>{shown.map((r, k) => {
               const p = r.projects as unknown as { name?: string } | null;
@@ -194,7 +195,7 @@ export default async function Reports({ searchParams }: { searchParams: Promise<
                 </tr>
               );
             })}</tbody>
-          </table></div>
+          </table></HScroll>
         )}
       </section>
 
