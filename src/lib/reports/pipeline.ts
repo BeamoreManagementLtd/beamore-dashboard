@@ -242,6 +242,20 @@ export async function scanReports(admin: SupabaseClient) {
     await admin.from("reports").update({ error: note, updated_at: started }).eq("id", hit.id).in("status", ["new", "ready", "failed"]).or(`error.is.null,error.like.The report has been changed since it was checked%`);
     done++;
   }
+  // a waiting report whose Word file has been put in the bin (or deleted) comes off the list (Ronan, 23 Nov 2026: a stray
+  // copy of Appleby report 11, binned on 20 Nov, stayed in the queue: binning a file doesn't change its date, so the
+  // scan above never sees it)
+  const { data: waiting } = await admin.from("reports").select("id,drive_file_id").in("status", ["new", "ready", "failed"]);
+  for (let k = 0; k < (waiting ?? []).length; k += 10) {
+    await Promise.all((waiting ?? []).slice(k, k + 10).map(async (w) => {
+      let gone: string | null = null;
+      try {
+        const m = await g.json<{ trashed?: boolean }>(`files/${w.drive_file_id}`, { fields: "trashed", supportsAllDrives: "true" });
+        if (m.trashed) gone = "in the Drive bin";
+      } catch (e) { if (/\b404\b|not found/i.test(String(e))) gone = "no longer in Drive"; }
+      if (gone) await admin.from("reports").update({ status: "ignored", claimed_by: null, claimed_at: null, error: `Taken off the list: the Word file is ${gone}`, updated_at: started }).eq("id", w.id).in("status", ["new", "ready", "failed"]);
+    }));
+  }
   // a job's checker given by email (Judy, before she'd signed in, 17 Nov 2026): their login once they have one
   const { data: byEmail } = await admin.from("projects").select("id,report_checker_email").not("report_checker_email", "is", null).is("report_checker_id", null);
   for (const p of byEmail ?? []) {
