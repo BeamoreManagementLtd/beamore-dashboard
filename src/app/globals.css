@@ -254,3 +254,9 @@ form.chip .chip-x:hover{background:var(--bad-bg,#fde8e8);color:var(--bad,#b42318
 .dv-req{border-top:1px solid var(--line);padding:10px 0}
 .dv-req:first-of-type{border-top:0}
 .dv-req .field{min-width:130px}
+/* a long, wide table keeps its left-right scroll bar on screen (Ronan, 23 Nov 2026: Reports tab): it scrolls inside a
+   box no taller than the window, with the header row staying in view */
+.tbl-wrap.scroll{max-height:72vh;overflow:auto}
+.tbl-wrap.scroll thead th{position:sticky;top:0;background:var(--surface);z-index:1}
+.tbl-wrap.scroll::-webkit-scrollbar{height:12px;width:12px}
+.tbl-wrap.scroll::-webkit-scrollbar-thumb{background:#b9c0c8;border-radius:6px}

@@ -8,7 +8,8 @@ import { userConnection } from "@/lib/google-user";
 import { EXAMPLES, PROGRAMME_METHOD, SUMMARY_METHOD } from "@/lib/reports/examples";
 import { STANDARDS, STANDARD_KEYS, tipFor, type StandardsMet } from "@/lib/reports/standards";
 import type { ScorePart } from "@/lib/reports/score";
-import { assignChecker, sendReport, markDone, ignoreReport, checkAgain, sendClerkEmail, setVisitDate, claimReport, releaseReport, makeCleanPdf } from "../actions";
+import { assignChecker, sendReport, markDone, ignoreReport, checkAgain, sendClerkEmail, setVisitDate, claimReport, releaseReport, makeCleanPdf, holdReport, releaseHold } from "../actions";
+import { holdOf } from "@/lib/reports/hold";
 import { liveClaim, claimTime, CLAIM_HOURS } from "@/lib/reports/claim";
 
 export const dynamic = "force-dynamic";
@@ -91,6 +92,7 @@ export default async function ReportPage({ params, searchParams }: { params: Pro
   const mb = (n: number | null) => (n ? `${(n / 1e6).toFixed(1)} MB` : "—");
   const open = ["new", "checking", "ready", "failed"].includes(r.status);
   const claim = liveClaim(r);
+  const hold = holdOf(r);
   const nameOf = (pid: string | null) => (staff ?? []).find((s) => s.id === pid)?.full_name ?? null;
   const scoreParts = (((r.fixes ?? {}) as { score_parts?: ScorePart[] }).score_parts ?? []);
 
@@ -104,6 +106,13 @@ export default async function ReportPage({ params, searchParams }: { params: Pro
           ? <div className="tile" style={{ minWidth: 150, textAlign: "center" }} title="Marked on the report as the clerk sent it, before any corrections: see How the score was worked out"><span className="label">Report score</span><span className={`big ${r.score >= 85 ? "pos" : r.score < 70 ? "neg" : ""}`}>{r.score}<small className="muted">/100</small></span></div>
           : <div className="tile" style={{ minWidth: 150, textAlign: "center" }} title="Scored the old way, so it isn't comparable. It'll be re-checked."><span className="label">Report score</span><span className="big muted">{r.score}<small>/100</small></span><span className="small muted">old scoring</span></div>)}
       </div>
+      {/* on hold: sent back to the clerk for changes, so nobody sends it in the meantime (Ronan, 23 Nov 2026) */}
+      {hold && (
+        <div className={`callout ${hold.updated ? "info" : "warn"} row`} style={{ justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
+          <span>⏸ <b>On hold{hold.updated ? ": the clerk has updated it since" : ": waiting for the clerk"}</b> ({nameOf(hold.by) ?? "someone"}, {fdt(hold.at)}){hold.reason ? <>. {hold.reason}</> : null}. It can&apos;t be sent until it&apos;s taken off hold.</span>
+          <form action={releaseHold.bind(null, id)}><button className="btn small" title="Frees it to send, and checks the clerk's latest version again">Take off hold{open ? " and check again" : ""}</button></form>
+        </div>
+      )}
       {/* someone else checking it for now (Ronan, 20 Nov 2026): "don't check that one, Andy K is checking it" */}
       {open && (claim && claim.by !== me.id ? (
         <div className="callout warn row" style={{ justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
@@ -250,6 +259,12 @@ export default async function ReportPage({ params, searchParams }: { params: Pro
                 <div className="field"><label htmlFor="cto">To</label><input id="cto" name="to" defaultValue={(r.clerks as unknown as { email?: string } | null)?.email ?? ""} placeholder="the clerk's email" /></div>
                 <div className="field"><label htmlFor="csu">Subject</label><input id="csu" name="subject" defaultValue={`Your report: ${String(r.file_name).replace(/\.docx?$/i, "")}`} /></div>
                 <div className="field"><label htmlFor="cbo">Email</label><textarea id="cbo" name="body" rows={12} defaultValue={clerkNote(r, me.full_name ?? me.email)} /></div>
+                {open && !hold && (
+                  <label className="small" style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+                    <input type="checkbox" name="hold" /> Hold the report until they&apos;ve sent the changes
+                    <input name="hold_reason" placeholder="What's been asked for (optional)" style={{ flex: "1 1 220px" }} />
+                  </label>
+                )}
                 <button className="btn">{r.clerk_email_sent_at ? "Send again" : "Send to the clerk"}</button>
               </form>
             ) : <textarea readOnly rows={10} style={{ width: "100%" }} defaultValue={clerkNote(r, me.full_name ?? me.email)} />}
@@ -277,15 +292,21 @@ export default async function ReportPage({ params, searchParams }: { params: Pro
               <div className="field"><label htmlFor="cc">CC</label><input id="cc" name="cc" defaultValue={draft.cc.join("; ")} /></div>
               <div className="field"><label htmlFor="su">Subject</label><input id="su" name="subject" defaultValue={draft.subject} required /></div>
               <div className="field"><label htmlFor="bo">Email</label><textarea id="bo" name="body" rows={9} defaultValue={draft.body} /></div>
-              <button className="btn primary" disabled={r.status === "checking" || r.status === "approved"}>Approve and send</button>
+              <button className="btn primary" disabled={!!hold || r.status === "checking" || r.status === "approved"} title={hold ? "On hold: take it off hold first" : undefined}>Approve and send</button>
             </form>
           )}
           <div className="row" style={{ gap: 8, marginTop: 10 }}>
             <form action={checkAgain.bind(null, id)}><button className="btn small" title="Checks the report again as it is in Drive now (e.g. after the clerk has fixed it); changes made in Word here are kept">Check again</button></form>
             <form action={markDone.bind(null, id)}><button className="btn small">Already sent another way</button></form>
-            <form action={makeCleanPdf.bind(null, id)}><button className="btn small" title="The office PC makes the PDF in Word with the spelling fixes accepted (no red markup) and saves it beside the report. Nothing is emailed; the report is then marked done.">Make a clean PDF (no email)</button></form>
+            <form action={makeCleanPdf.bind(null, id)}><button className="btn small" disabled={!!hold} title="The office PC makes the PDF in Word with the spelling fixes accepted (no red markup) and saves it beside the report. Nothing is emailed; the report is then marked done.">Make a clean PDF (no email)</button></form>
             <form action={ignoreReport.bind(null, id)}><button className="btn small">Not a report: skip it</button></form>
           </div>
+          {!hold && (
+            <form action={holdReport.bind(null, id)} className="row" style={{ gap: 8, marginTop: 10, flexWrap: "wrap" }}>
+              <input name="reason" placeholder="What's been asked for, e.g. operative numbers and tracker dates" style={{ flex: "1 1 280px" }} />
+              <button className="btn small" title="Sent back to the clerk for changes: nobody can send it until it's taken off hold">⏸ Put on hold</button>
+            </form>
+          )}
         </section>
       )}
     </>

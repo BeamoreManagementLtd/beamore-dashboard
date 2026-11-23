@@ -7,6 +7,7 @@ import { loadHolidays, addWorkingDays, workingDaysBetween, rag } from "@/lib/rep
 import { refreshReports, claimReport } from "./actions";
 import { scoreTrend } from "@/lib/reports/trend";
 import { liveClaim, claimTime } from "@/lib/reports/claim";
+import { holdOf } from "@/lib/reports/hold";
 import { STANDARDS, STANDARD_KEYS, standardsShare, type StandardKey, type StandardsMet } from "@/lib/reports/standards";
 
 export const dynamic = "force-dynamic";
@@ -28,7 +29,7 @@ export default async function Reports({ searchParams }: { searchParams: Promise<
   const h = await loadHolidays();
   const monthStart = /^\d{4}-\d{2}$/.test(month ?? "") ? `${month}-01` : `${t.slice(0, 7)}-01`;
   const [{ data: open }, { data: settings }, { data: staff }, { data: doneMonth }, { data: lastRun }, { data: best }, { data: recentVisits }, { data: recentReports }] = await Promise.all([
-    db.from("reports").select("id,file_name,folder_name,project_id,project_folder_name,kind,visit_date,uploaded_at,status,issues,score,fixes,checker_id,claimed_by,claimed_at,error,clerks(name),projects(name)").in("status", OPEN).order("uploaded_at"),
+    db.from("reports").select("id,file_name,folder_name,project_id,project_folder_name,kind,visit_date,uploaded_at,status,issues,score,fixes,checker_id,claimed_by,claimed_at,hold_by,hold_at,hold_reason,modified_at,error,clerks(name),projects(name)").in("status", OPEN).order("uploaded_at"),
     db.from("report_settings").select("clerk_days,team_days").eq("id", 1).single(),
     db.from("profiles").select("id,full_name,email").order("full_name"),
     db.from("reports").select("id,clerk_id,clerk_name,visit_date,uploaded_at,done_at,sent_at,sent_by,status,issues,spelling_fixed,score,fixes,clerks(name)").in("status", ["sent", "done", ...OPEN]).gte("uploaded_at", monthStart),
@@ -50,10 +51,12 @@ export default async function Reports({ searchParams }: { searchParams: Promise<
     const due = addWorkingDays(up, teamDays, h);
     const clerkLate = r.visit_date ? Math.max(0, workingDaysBetween(r.visit_date, up, h) - clerkDays) : null;
     const issues = (r.issues ?? []) as Issue[];
-    return { ...r, due, colour: rag(due, t), clerkLate, high: issues.filter((i) => i.severity === "high").length, issueCount: issues.length };
+    // on hold waiting for the clerk: not late or due while it's with them (Ronan, 23 Nov 2026)
+    const hold = holdOf(r);
+    return { ...r, hold, due, colour: hold ? "hold" : rag(due, t), clerkLate, high: issues.filter((i) => i.severity === "high").length, issueCount: issues.length };
   });
   const mine = (r: { checker_id: string | null }) => r.checker_id === me.id;
-  const urgent = (a: typeof rows[number], b: typeof rows[number]) => ["red", "orange", "green"].indexOf(a.colour) - ["red", "orange", "green"].indexOf(b.colour) || a.due.localeCompare(b.due);
+  const urgent = (a: typeof rows[number], b: typeof rows[number]) => ["red", "orange", "green", "hold"].indexOf(a.colour) - ["red", "orange", "green", "hold"].indexOf(b.colour) || a.due.localeCompare(b.due);
   // grouped by job (Ronan, 18 Nov 2026): the job with the most urgent report first, then all its other reports straight
   // underneath, oldest first; then the next job
   const filtered = rows.filter((r) => (!who ? true : who === "me" ? mine(r) : who === "none" ? !r.checker_id : r.checker_id === who));
@@ -156,6 +159,7 @@ export default async function Reports({ searchParams }: { searchParams: Promise<
         <Link className={`tile ${count("red") ? "alert" : ""}`} href="/reports"><span className="label">🔴 Late: send now</span><span className="big">{count("red")}</span></Link>
         <Link className="tile" href="/reports"><span className="label">🟠 Due today</span><span className="big">{count("orange")}</span></Link>
         <Link className="tile" href="/reports"><span className="label">🟢 Fine for now</span><span className="big">{count("green")}</span></Link>
+        <Link className="tile" href="/reports"><span className="label">⏸ On hold (with the clerk)</span><span className="big">{count("hold")}</span></Link>
         <Link className="tile" href="/reports?who=me"><span className="label">Mine</span><span className="big">{rows.filter(mine).length}</span></Link>
         <Link className={`tile ${rows.some((r) => !r.checker_id) ? "alert" : ""}`} href="/reports?who=none"><span className="label">No checker</span><span className="big">{rows.filter((r) => !r.checker_id).length}</span></Link>
       </div>
@@ -163,7 +167,7 @@ export default async function Reports({ searchParams }: { searchParams: Promise<
 
       <section className="panel">
         {!shown.length ? <p className="empty">Nothing waiting.</p> : (
-          <div className="tbl-wrap"><table>
+          <div className="tbl-wrap scroll"><table>
             <thead><tr><th /><th>Project</th><th>Report</th><th>Clerk</th><th>Visit</th><th>Uploaded</th><th>Due out</th><th>Issues</th><th className="num" title="The AI&apos;s overall score for the report, out of 100 (grey: scored the old way; check it again)">Score</th><th>Status</th><th>Checker</th></tr></thead>
             <tbody>{shown.map((r, k) => {
               const p = r.projects as unknown as { name?: string } | null;
@@ -173,7 +177,7 @@ export default async function Reports({ searchParams }: { searchParams: Promise<
               const more = first ? shown.filter((x) => jobKey(x) === jobKey(r)).length : 0;
               return (
                 <tr key={r.id} style={first && k ? { borderTop: "2px solid var(--line)" } : undefined}>
-                  <td title={r.colour}>{r.colour === "red" ? "🔴" : r.colour === "orange" ? "🟠" : "🟢"}</td>
+                  <td title={r.colour}>{r.colour === "hold" ? "⏸" : r.colour === "red" ? "🔴" : r.colour === "orange" ? "🟠" : "🟢"}</td>
                   <td>{first ? <><b>{p?.name ?? r.project_folder_name}</b>{more > 1 ? <span className="muted small"> · {more} reports</span> : null}{arcadis(r) === 0 ? <span className="pill warn small" title="Darren at Arcadis: kept at the top for now"> Arcadis: send first</span> : null}</> : <span className="muted small">↳ same job</span>}<span className="two">{r.folder_name}</span></td>
                   <td className="small"><Link href={`/reports/${r.id}`}>{r.file_name}</Link></td>
                   <td className="small">{(r.clerks as unknown as { name?: string } | null)?.name ?? "—"}</td>
@@ -184,7 +188,7 @@ export default async function Reports({ searchParams }: { searchParams: Promise<
                   <td className="num">{typeof r.score === "number" ? (((r.fixes ?? {}) as { score_by?: string }).score_by === "parts"
                     ? <b className={r.score >= 85 ? "pos" : r.score < 70 ? "neg" : ""}>{r.score}</b>
                     : <span className="muted" title="Scored the old way: open it and check again">{r.score}*</span>) : ""}</td>
-                  <td><span className={`pill ${tone}`}>{st}</span>{r.status === "failed" && <span className="two small neg">{(r.error ?? "").slice(0, 60)}</span>}</td>
+                  <td>{r.hold ? <span className="pill warn" title={r.hold.reason ?? ""}>⏸ On hold{r.hold.updated ? ": clerk has updated it" : ": with the clerk"}</span> : <span className={`pill ${tone}`}>{st}</span>}{r.hold?.reason && <span className="two small muted">{name(r.hold.by) ?? ""}: {r.hold.reason.slice(0, 70)}</span>}{r.status === "failed" && <span className="two small neg">{(r.error ?? "").slice(0, 60)}</span>}</td>
                   <td className="small">{name(r.checker_id) ?? <span className="pill bad">None</span>}{(() => { const c = liveClaim(r); return c ? <span className="two"><span className="pill warn" title={`Being checked by ${name(c.by)} since ${claimTime(c.at)}: leave it to them`}>🔒 {c.by === me.id ? "You're" : `${name(c.by)} is`} checking</span></span>
                     : ["new", "checking", "ready", "failed"].includes(r.status) ? <form action={claimReport.bind(null, r.id)} className="two"><button className="btn small" title="Shows the others you're checking this one, so nobody checks it twice">I&apos;m checking this</button></form> : null; })()}</td>
                 </tr>

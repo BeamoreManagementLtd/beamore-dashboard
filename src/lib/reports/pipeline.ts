@@ -717,6 +717,7 @@ export async function approveReport(admin: SupabaseClient, reportId: string, who
   const { data: rep } = await admin.from("reports").select("*").eq("id", reportId).single();
   if (!rep) throw new Error("No such report");
   if (rep.status === "sent") throw new Error("Already sent");
+  if (rep.hold_at) throw new Error(`On hold: ${rep.hold_reason ?? "waiting for the clerk"}. Take it off hold first`);
   if (!rep.main_folder) throw new Error("Can't tell where this report is on the office PC; please make the PDF in Word by hand");
   if (!rep.checked_file_id) throw new Error("This report hasn't been checked yet");
   const pdfName = `${String(rep.checked_name ?? rep.file_name).replace(/\.docx?$/i, "")}.pdf`;

@@ -70,6 +70,32 @@ export async function sendReport(reportId: string, form: FormData) {
   redirect(`/reports?sent=${encodeURIComponent(reportId)}`);
 }
 
+/** "Put on hold": sent back to the clerk for changes; nobody can send it until it's taken off hold. */
+export async function holdReport(reportId: string, form: FormData) {
+  const me = await requireProfile();
+  const reason = String(form.get("reason") ?? "").trim().slice(0, 500) || "Waiting for the clerk's changes";
+  const admin = createServiceClient();
+  const { data: r } = await admin.from("reports").update({ hold_by: me.id, hold_at: new Date().toISOString(), hold_reason: reason }).eq("id", reportId).select("project_id,file_name").single();
+  if (r?.project_id) await admin.from("project_events").insert({ project_id: r.project_id, source: "team", kind: "Report on hold", who: me.full_name ?? me.email, body: `${r.file_name}: ${reason}` });
+  revalidatePath(`/reports/${reportId}`);
+  revalidatePath("/reports");
+}
+
+/** "Take off hold": free to send again, checked again first so the score and fixes are for the clerk's new version. */
+export async function releaseHold(reportId: string) {
+  const me = await requireProfile();
+  const admin = createServiceClient();
+  const { data: r } = await admin.from("reports").update({ hold_by: null, hold_at: null, hold_reason: null }).eq("id", reportId).select("project_id,file_name,status").single();
+  if (r?.project_id) await admin.from("project_events").insert({ project_id: r.project_id, source: "team", kind: "Report off hold", who: me.full_name ?? me.email, body: `${r.file_name}: taken off hold and checked again` });
+  if (r && ["ready", "failed"].includes(r.status)) {
+    try { await checkOne(admin, reportId); } catch (e) {
+      await admin.from("reports").update({ status: "failed", error: (e instanceof Error ? e.message : String(e)).slice(0, 500) }).eq("id", reportId);
+    }
+  }
+  revalidatePath(`/reports/${reportId}`);
+  revalidatePath("/reports");
+}
+
 /** "Make a clean PDF": the office PC makes the PDF (fixes accepted, no markup) and saves it beside the report; no email. */
 export async function makeCleanPdf(reportId: string) {
   const me = await requireProfile();
@@ -139,7 +165,9 @@ export async function sendClerkEmail(reportId: string, form: FormData) {
   } catch (e) {
     redirect(`/reports/${reportId}?error=${encodeURIComponent(e instanceof Error ? e.message : "Couldn't send")}`);
   }
-  const { data: r } = await admin.from("reports").update({ clerk_email_sent_at: new Date().toISOString(), clerk_email_sent_by: me.id }).eq("id", reportId).select("project_id,file_name").single();
+  // "hold the report until they've sent the changes" ticked: on hold in the same go
+  const hold = form.get("hold") === "on" ? { hold_by: me.id, hold_at: new Date().toISOString(), hold_reason: String(form.get("hold_reason") ?? "").trim().slice(0, 500) || `Feedback emailed to the clerk ${new Date().toLocaleDateString("en-GB", { day: "numeric", month: "short", timeZone: "Europe/London" })}: waiting for their changes` } : {};
+  const { data: r } = await admin.from("reports").update({ clerk_email_sent_at: new Date().toISOString(), clerk_email_sent_by: me.id, ...hold }).eq("id", reportId).select("project_id,file_name").single();
   if (r?.project_id) await admin.from("project_events").insert({ project_id: r.project_id, source: "team", kind: "Clerk feedback", who: me.full_name ?? me.email, body: `Feedback on ${r.file_name} emailed to ${to.join(", ")}` });
   redirect(`/reports/${reportId}?clerk=sent`);
 }
