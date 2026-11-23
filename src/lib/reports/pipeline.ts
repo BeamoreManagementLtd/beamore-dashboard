@@ -709,8 +709,11 @@ export function standardName(rep: { file_name: string; report_number: string | n
  *  c. the dashboard finds the PDF in Drive and emails it from the checker's own Gmail
  * The PDF has the Word file's name, which already follows the folder's pattern (renamed when it was checked).
  */
-export async function approveReport(admin: SupabaseClient, reportId: string, who: { id: string; full_name: string | null }, m: { to: string[]; cc: string[]; subject: string; body: string }) {
-  if (!m.to.length) throw new Error("Nobody to send it to: add the report list on the project's page");
+export async function approveReport(admin: SupabaseClient, reportId: string, who: { id: string; full_name: string | null }, m: { to: string[]; cc: string[]; subject: string; body: string; pdfOnly?: boolean }) {
+  // pdfOnly (Ronan, 23 Nov 2026): "Make a clean PDF": the office PC makes the PDF the same way (spelling fixes accepted,
+  // no red markup) and saves it next to the report, but nothing is emailed; the report is then done. For reports that
+  // go out another way (Brunswick 35's PDF was saved by hand from Word with the tracked changes showing).
+  if (!m.to.length && !m.pdfOnly) throw new Error("Nobody to send it to: add the report list on the project's page");
   const { data: rep } = await admin.from("reports").select("*").eq("id", reportId).single();
   if (!rep) throw new Error("No such report");
   if (rep.status === "sent") throw new Error("Already sent");
@@ -722,7 +725,8 @@ export async function approveReport(admin: SupabaseClient, reportId: string, who
   // it makes the PDF, so the PDF is asked for 90 seconds later. If the box isn't found, nothing changes.
   const today = new Date().toLocaleDateString("en-GB", { timeZone: "Europe/London" }); // dd/mm/yyyy
   let issued: string | null = null, rev: string | null = null;
-  try {
+  // a done report's PDF made again keeps the date it was first issued
+  if (!(m.pdfOnly && rep.status === "done")) try {
     const g = await driveClient(admin);
     const r = await readReport(Buffer.from(await g.download(rep.checked_file_id)));
     if (setLabelValue(r, TA_DATE_LABELS, today)) {
@@ -795,10 +799,17 @@ async function sendIfPdfReady(admin: SupabaseClient, reportId: string) {
   const found = await g.json<{ files: { id: string; size?: string }[] }>("files", { q, fields: "files(id,size)", orderBy: "modifiedTime desc", pageSize: "1", supportsAllDrives: "true", includeItemsFromAllDrives: "true" });
   const pdfFile = found.files[0];
   if (!pdfFile || !Number(pdfFile.size)) return false; // not uploaded yet
-  const m = rep.pending_email as { to: string[]; cc: string[]; subject: string; body: string; by: string; by_name: string | null };
+  const m = rep.pending_email as { to: string[]; cc: string[]; subject: string; body: string; by: string; by_name: string | null; pdfOnly?: boolean };
   // claim it, so two runs can't send it twice
   const { data: claimed } = await admin.from("reports").update({ status: "sending" }).eq("id", reportId).eq("status", "approved").select("id");
   if (!claimed?.length) return false;
+  if (m.pdfOnly) {
+    // just the PDF: nothing is emailed, and the report is done
+    const at = new Date().toISOString();
+    await admin.from("reports").update({ status: "done", pdf_file_id: pdfFile.id, done_at: rep.done_at ?? at, sent_by: rep.sent_by ?? m.by, pending_email: null, error: null, claimed_by: null, claimed_at: null, updated_at: at }).eq("id", reportId);
+    if (rep.project_id) await admin.from("project_events").insert({ project_id: rep.project_id, source: "team", kind: "Report PDF made", who: m.by_name ?? "Dashboard", body: `${rep.pdf_name}: clean PDF made in Word (not emailed)` });
+    return true;
+  }
   try {
     const pdf = Buffer.from(await g.download(pdfFile.id));
     // clients who want the Word file as well as the PDF (Ronan, 19 Nov 2026: Cobalt for Woking "always include the

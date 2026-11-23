@@ -8,7 +8,7 @@ import { userConnection } from "@/lib/google-user";
 import { EXAMPLES, PROGRAMME_METHOD, SUMMARY_METHOD } from "@/lib/reports/examples";
 import { STANDARDS, STANDARD_KEYS, tipFor, type StandardsMet } from "@/lib/reports/standards";
 import type { ScorePart } from "@/lib/reports/score";
-import { assignChecker, sendReport, markDone, ignoreReport, checkAgain, sendClerkEmail, setVisitDate, claimReport, releaseReport } from "../actions";
+import { assignChecker, sendReport, markDone, ignoreReport, checkAgain, sendClerkEmail, setVisitDate, claimReport, releaseReport, makeCleanPdf } from "../actions";
 import { liveClaim, claimTime, CLAIM_HOURS } from "@/lib/reports/claim";
 
 export const dynamic = "force-dynamic";
@@ -143,7 +143,7 @@ export default async function ReportPage({ params, searchParams }: { params: Pro
       <div className="grid2">
         <section className="panel">
           <h2>What the check found</h2>
-          {(r.status === "approved" || r.status === "sending") && <p className="callout info">Approved{r.approved_at ? ` ${fdt(r.approved_at)}` : ""}. {r.pdf_made_at ? "Word has made the PDF; it's being sent as soon as it reaches Drive." : <>Waiting for the office PC to make the PDF in Word{r.pdf_requested_at && Date.now() - Date.parse(r.pdf_requested_at) > 15 * 60_000 ? <b> (over 15 minutes: is the office PC on?)</b> : null}.</>}</p>}
+          {(r.status === "approved" || r.status === "sending") && <p className="callout info">Approved{r.approved_at ? ` ${fdt(r.approved_at)}` : ""}. {r.pdf_made_at ? ((r.pending_email as { pdfOnly?: boolean } | null)?.pdfOnly ? "Word has made the PDF; it's saved beside the report (not emailed)." : "Word has made the PDF; it's being sent as soon as it reaches Drive.") : <>Waiting for the office PC to make the PDF in Word{r.pdf_requested_at && Date.now() - Date.parse(r.pdf_requested_at) > 15 * 60_000 ? <b> (over 15 minutes: is the office PC on?)</b> : null}.</>}</p>}
           {r.status === "new" && <p className="muted">Waiting for the clerk to finish with it (30 minutes untouched), then it&apos;s checked automatically.</p>}
           {r.status === "checking" && <p className="muted">Being checked now…</p>}
           {r.status === "failed" && <><p className="callout bad">The check failed: {r.error}</p><form action={checkAgain.bind(null, id)}><button className="btn">Try the check again</button></form></>}
@@ -257,6 +257,14 @@ export default async function ReportPage({ params, searchParams }: { params: Pro
         </div>
       )}
 
+      {/* a done report whose PDF was made by hand (Brunswick 35 had the tracked changes showing): make it again, clean */}
+      {r.status === "done" && r.main_folder && (r.checked_file_id || r.drive_file_id) && (
+        <section className="panel">
+          <h2>PDF</h2>
+          <p className="small muted">If this report&apos;s PDF shows red markup (the spelling fixes as tracked changes), the office PC can make it again with the fixes accepted and save it over the old one, next to the report. Nothing is emailed.</p>
+          <form action={makeCleanPdf.bind(null, id)}><button className="btn">Make a clean PDF</button></form>
+        </section>
+      )}
       {open && (
         <section className="panel">
           <h2>Approve and send</h2>
@@ -275,6 +283,7 @@ export default async function ReportPage({ params, searchParams }: { params: Pro
           <div className="row" style={{ gap: 8, marginTop: 10 }}>
             <form action={checkAgain.bind(null, id)}><button className="btn small" title="Checks the report again as it is in Drive now (e.g. after the clerk has fixed it); changes made in Word here are kept">Check again</button></form>
             <form action={markDone.bind(null, id)}><button className="btn small">Already sent another way</button></form>
+            <form action={makeCleanPdf.bind(null, id)}><button className="btn small" title="The office PC makes the PDF in Word with the spelling fixes accepted (no red markup) and saves it beside the report. Nothing is emailed; the report is then marked done.">Make a clean PDF (no email)</button></form>
             <form action={ignoreReport.bind(null, id)}><button className="btn small">Not a report: skip it</button></form>
           </div>
         </section>

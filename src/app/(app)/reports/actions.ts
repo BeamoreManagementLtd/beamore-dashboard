@@ -70,6 +70,18 @@ export async function sendReport(reportId: string, form: FormData) {
   redirect(`/reports?sent=${encodeURIComponent(reportId)}`);
 }
 
+/** "Make a clean PDF": the office PC makes the PDF (fixes accepted, no markup) and saves it beside the report; no email. */
+export async function makeCleanPdf(reportId: string) {
+  const me = await requireProfile();
+  try {
+    await approveReport(createServiceClient(), reportId, { id: me.id, full_name: me.full_name }, { to: [], cc: [], subject: "", body: "", pdfOnly: true });
+  } catch (e) {
+    redirect(`/reports/${reportId}?error=${encodeURIComponent(e instanceof Error ? e.message : "Couldn't ask for the PDF")}`);
+  }
+  revalidatePath(`/reports/${reportId}`);
+  revalidatePath("/reports");
+}
+
 /** Correct a report's visit date by hand (Ronan, 17 Nov 2026); it then isn't replaced by the check. */
 export async function setVisitDate(reportId: string, form: FormData) {
   await requireProfile();
