@@ -378,6 +378,7 @@ export async function checkOne(admin: SupabaseClient, id: string) {
     fileName: rep.renamed_from ?? rep.file_name, folder: rep.folder_name ?? "", project: p?.name ?? rep.project_folder_name ?? "",
     client: ourClient && endClient ? `${ourClient} (Beamore's client), working for the end client ${endClient}: the report may name either as the client, and both are correct, so don't raise it` : ourClient,
     projectNumbers: [p?.dfe_project_number, p?.po_number].filter((x): x is string => !!x && /\d/.test(x)),
+    noProjectNumber: !!((p?.details ?? {}) as { no_project_number?: boolean }).no_project_number,
     // the diary's dates are only estimates for costing, so reports aren't checked against them (Ronan, 15 Nov 2026)
     expectedClerks: (clerks ?? []).map((c) => c.name), diaryVisits: [],
     previous: prev ? { number: prev.report_number, date: prev.visit_date, text: prev.text_snapshot ?? "" } : null,

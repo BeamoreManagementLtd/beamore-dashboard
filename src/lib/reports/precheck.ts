@@ -90,6 +90,7 @@ export async function precheckOne(admin: SupabaseClient, id: string) {
     fileName: pc.file_name, folder: folderName, project: p?.name ?? "",
     client: ourClient && endClient ? `${ourClient} (Beamore's client), working for the end client ${endClient}: the report may name either as the client, and both are correct, so don't raise it` : ourClient,
     projectNumbers: [p?.dfe_project_number, p?.po_number].filter((x): x is string => !!x && /\d/.test(x)),
+    noProjectNumber: !!((p?.details ?? {}) as { no_project_number?: boolean }).no_project_number,
     expectedClerks: (clerks ?? []).map((c) => c.name), diaryVisits: [],
     previous: prev ? { number: prev.report_number, date: prev.visit_date, text: prev.text_snapshot ?? "" } : null,
     paragraphs: r.paragraphs, blanks: r.blanks, placeholders: r.placeholders,

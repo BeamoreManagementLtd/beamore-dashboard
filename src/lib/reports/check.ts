@@ -116,6 +116,8 @@ ${STANDARD_KEYS.map((k) => { const s = STANDARDS[k] as { label: string; test: st
 
 export type CheckInput = {
   fileName: string; folder: string; project: string; projectNumbers: string[]; client: string | null;
+  /** The job has no project number or code at all (Ronan, 24 Nov 2026: Pepys Court): TBC or blank there is right. */
+  noProjectNumber?: boolean;
   expectedClerks: string[]; diaryVisits: string[]; previous: { number: string | null; date: string | null; text: string } | null;
   paragraphs: { i: number; text: string; pic?: boolean }[]; blanks: string[]; placeholders: { i: number; text: string }[];
   photos: { count: number; blurry: number; smallOnPage: number; stretched: number; mb: number; usual: number | null; reused: number; uncaptioned: number };
@@ -146,6 +148,7 @@ export async function checkReport(input: CheckInput): Promise<Check> {
     `Today: ${input.today}`, `File name: ${input.fileName}`, `Folder: ${input.folder}`,
     `Project: ${input.project}${input.client ? ` (client ${input.client})` : ""}`,
     input.projectNumbers.length ? `Project numbers on record: ${input.projectNumbers.join(", ")}` : "",
+    input.noProjectNumber ? "This job has no project number or project code: \"TBC\", \"N/A\" or a blank in the project number / code box is correct, so never raise it or count it against the report" : "",
     input.expectedClerks.length ? `Clerk(s) on this job: ${input.expectedClerks.join(", ")}` : "",
     input.previous ? `Previous report: number ${input.previous.number ?? "?"}, visit ${input.previous.date ?? "?"}` : "No previous report on record",
     `Photos: ${input.photos.count}${input.photos.usual ? ` (this clerk's last reports on this job had about ${input.photos.usual})` : ""}; ${input.photos.blurry} too low detail to print well, ${input.photos.smallOnPage} shown under 5 cm wide, ${input.photos.stretched} stretched out of shape, ${input.photos.reused} the same as photos in the previous report; file ${input.photos.mb.toFixed(1)} MB. These are the report's real photo figures; the photos attached below are only a sample of up to 12, so never describe that sample as the number of photos`,
