@@ -263,3 +263,37 @@ form.chip .chip-x:hover{background:var(--bad-bg,#fde8e8);color:var(--bad,#b42318
 .hscroll-top{overflow-x:auto;overflow-y:hidden;height:16px;margin:0 -18px 6px;padding:0 18px}
 .hscroll-top::-webkit-scrollbar{height:12px}
 .hscroll-top::-webkit-scrollbar-thumb{background:#b9c0c8;border-radius:6px}
+
+/* Workwear order form on the clerk portal, laid out like the old Beamore Workwear form (Ronan, 24 Nov 2026) */
+.ww{display:grid;grid-template-columns:260px 1fr;gap:20px;align-items:start;--ww:#1f6f63;--ww-soft:#e8f3f0}
+.ww-side{position:sticky;top:12px}
+.ww-card{background:var(--surface,#fff);border:1px solid var(--line,#e2e2e2);border-radius:10px;padding:18px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,.05)}
+.ww-card h2{margin:0 0 6px;font-size:1.15rem}.ww-card h3{margin:0 0 10px;font-size:1.05rem}
+.ww-big{background:var(--ww-soft);border:1px solid #cfe5df;border-radius:8px;text-align:center;padding:16px 8px}
+.ww-big b{display:block;font-size:2.6rem;line-height:1.1}.ww-big span{font-size:.78rem;color:var(--muted,#6b6b6b)}
+.ww-left{color:var(--ww);font-weight:600;font-size:.9rem;margin:12px 0}
+.ww-row{display:flex;justify-content:space-between;gap:8px;border-top:1px solid var(--line,#e2e2e2);padding:8px 0;font-size:.85rem}
+.ww-btn{display:block;width:100%;text-align:center;background:var(--ww);color:#fff;border:0;border-radius:8px;padding:10px;font-weight:600;cursor:pointer;text-decoration:none;margin-top:8px}
+.ww-btn:disabled{opacity:.5;cursor:default}
+.ww-tiny{font-size:.75rem;color:var(--muted,#6b6b6b);margin:6px 0 0}
+.ww-main label{display:flex;flex-direction:column;gap:4px;font-size:.82rem;font-weight:600;margin-bottom:10px}
+.ww-main input,.ww-main select,.ww-main textarea{font:inherit;font-weight:400;padding:8px;border:1px solid var(--line,#ccc);border-radius:6px;background:var(--surface,#fff);color:inherit}
+.ww-grid2{display:grid;grid-template-columns:1fr 1fr;gap:0 14px}
+.ww-check{flex-direction:row!important;align-items:center;font-weight:400!important}
+.ww-note{font-size:.85rem;color:var(--muted,#6b6b6b);margin:0 0 10px}
+.ww-skip{background:var(--ww-soft);color:var(--ww);border:1px solid var(--ww);border-radius:6px;padding:7px 12px;font-weight:600;cursor:pointer;margin-bottom:12px}
+.ww-skip.on{background:var(--ww);color:#fff}
+.ww-items{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:14px}
+.ww-item{border:1px solid var(--line,#e2e2e2);border-radius:8px;padding:10px;display:flex;flex-direction:column;gap:6px}
+.ww-pic{border:1px dashed #cfcfcf;border-radius:6px;height:190px;display:flex;align-items:center;justify-content:center;background:#fff}
+.ww-pic img{max-width:100%;max-height:180px;object-fit:contain}
+.ww-name{font-size:.95rem}.ww-code{font-size:.72rem;color:var(--muted,#6b6b6b)}
+.ww-opts{display:flex;gap:6px;flex-wrap:wrap}.ww-opts label{flex:1 1 70px;margin:0!important;font-size:.75rem}
+.ww-step{display:flex;gap:2px}.ww-step button{border:1px solid var(--line,#ccc);background:var(--surface,#fff);border-radius:6px;width:28px;cursor:pointer}.ww-step input{width:34px;text-align:center;padding:6px 2px!important}
+.ww-add{background:var(--ww-soft);color:var(--ww);border:1px solid var(--ww);border-radius:6px;padding:7px;font-weight:600;cursor:pointer}
+.ww-add:disabled{opacity:.5;cursor:default}
+.ww-added{background:var(--surface-2,#f7f7f7);border:1px solid var(--line,#e2e2e2);border-radius:6px;padding:8px;font-size:.78rem;display:flex;flex-direction:column;gap:3px}
+.ww-added button,.ww-list button{border:0;background:none;color:var(--ww);text-decoration:underline;cursor:pointer;font-size:.75rem}
+.ww-list{margin:0 0 10px 18px}.ww-err{color:var(--bad,#b42318);font-size:.85rem}
+@media (max-width:760px){.ww{grid-template-columns:1fr}.ww-side{position:static}.ww-grid2{grid-template-columns:1fr}}
+.ww-check{justify-content:flex-start;gap:8px!important}.ww-check input{width:auto;margin:0;padding:0}
