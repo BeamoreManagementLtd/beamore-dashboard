@@ -12,6 +12,9 @@ const base = (n) => n.replace(/\.(docx?|pdf)$/i, "").replace(/\s*\(\d+\)\s*$/, "
 /** Finds the date in a name and how it's written. */
 function findDate(s) {
   const tries = [
+    // year first with dots, dashes, underscores or spaces: "006-FS0142-HRCS-CoW Diary-2026.11.12" (Hadlow, Ronan 24 Nov
+    // 2026: report 006 of 12 Nov was put in the week it was uploaded, and its own week showed as missing)
+    { re: /(?<!\d)(20\d{2})([.\-_ ])(\d{1,2})\2(\d{1,2})(?!\d)/, kind: "iso" },
     { re: /(?<!\d)(\d{1,2})([.\-_ ])(\d{1,2})\2(\d{4}|\d{2})(?!\d)/, kind: "dmy" },
     // "30- 09- 2026" (Preece House's building reports, which the renamer couldn't read, 17 Nov 2026)
     { re: /(?<!\d)(\d{1,2})([.\-_] )(\d{1,2})\2(\d{4}|\d{2})(?!\d)/, kind: "dmy" },
@@ -24,7 +27,7 @@ function findDate(s) {
     if (!m) continue;
     let d, mo, y, fmt;
     if (t.kind === "dmy") { d = +m[1]; mo = +m[3]; y = +(m[4].length === 2 ? `20${m[4]}` : m[4]); fmt = { kind: "dmy", sep: m[2], dPad: m[1].length === 2, mPad: m[3].length === 2, yLen: m[4].length }; }
-    else if (t.kind === "iso") { y = +m[1]; mo = +m[2]; d = +m[3]; fmt = { kind: "iso" }; }
+    else if (t.kind === "iso") { y = +m[1]; mo = +(m[4] !== undefined ? m[3] : m[2]); d = +(m[4] !== undefined ? m[4] : m[3]); fmt = { kind: "iso", sep: m[4] !== undefined ? m[2] : "-", pad: (m[4] ?? m[3]).length === 2 }; }
     else if (t.kind === "long") { d = +m[1]; mo = MONTHS.findIndex((x) => x.startsWith(m[3].toLowerCase().slice(0, 3))) + 1; y = +m[4]; fmt = { kind: "long", suffix: !!m[2], short: m[3].length <= 4 && !/^(june|july)$/i.test(m[3]), cap: m[3][0] === m[3][0].toUpperCase() }; }
     else { d = +m[1]; mo = +m[2]; y = +`20${m[3]}`; fmt = { kind: "compact" }; }
     if (mo < 1 || mo > 12 || d < 1 || d > 31 || y < 2015 || y > 2040) continue;
@@ -47,7 +50,7 @@ export function dateInName(name) {
 const ord = (d) => (d % 10 === 1 && d !== 11 ? "st" : d % 10 === 2 && d !== 12 ? "nd" : d % 10 === 3 && d !== 13 ? "rd" : "th");
 function writeDate(iso, f) {
   const [y, m, d] = iso.split("-").map(Number);
-  if (f.kind === "iso") return iso;
+  if (f.kind === "iso") return f.sep && f.sep !== "-" ? `${y}${f.sep}${String(m).padStart(2, "0")}${f.sep}${String(d).padStart(2, "0")}` : iso;
   if (f.kind === "compact") return `${String(d).padStart(2, "0")}${String(m).padStart(2, "0")}${String(y).slice(2)}`;
   if (f.kind === "long") {
     let mon = MONTHS[m - 1]; if (f.short) mon = mon.slice(0, 3); if (f.cap) mon = mon[0].toUpperCase() + mon.slice(1);
