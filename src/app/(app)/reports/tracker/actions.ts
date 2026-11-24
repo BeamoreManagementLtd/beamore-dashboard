@@ -33,3 +33,16 @@ export async function setChasing(form: FormData) {
   await createServiceClient().from("report_settings").update({ chase_missing: form.get("on") === "1" }).eq("id", 1);
   revalidatePath("/reports/tracker");
 }
+
+/** A week no report was needed on a job (a break on site, not started yet): it stops showing as missing (Ronan, 24 Nov 2026). */
+export async function weekNotNeeded(form: FormData) {
+  const me = await requireProfile();
+  const id = String(form.get("project") ?? ""), week = String(form.get("week") ?? "");
+  if (!id || !/^\d{4}-\d{2}-\d{2}$/.test(week)) return;
+  const admin = createServiceClient();
+  const { data: p } = await admin.from("projects").select("details").eq("id", id).single();
+  const det = (p?.details ?? {}) as { no_report_weeks?: string[] };
+  await admin.from("projects").update({ details: { ...det, no_report_weeks: [...new Set([...(det.no_report_weeks ?? []), week])].sort() } }).eq("id", id);
+  await admin.from("project_events").insert({ project_id: id, source: "team", kind: "Report tracker", who: me.full_name ?? me.email, body: `No report needed for the week of ${week}` });
+  revalidatePath("/reports/tracker");
+}

@@ -4,7 +4,7 @@ import { createClient } from "@/lib/supabase/server";
 import { today } from "@/lib/format";
 import { loadHolidays } from "@/lib/reports/days";
 import { buildTracker, MISSING_FROM, type Cell } from "@/lib/reports/tracker";
-import { setReporting, setChasing, finishJob } from "./actions";
+import { setReporting, setChasing, finishJob, weekNotNeeded } from "./actions";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -114,6 +114,9 @@ export default async function ReportTracker({ searchParams }: { searchParams: Pr
                   const s = STYLE[c.state];
                   const title = `${s.title}${c.label ? ` (${c.label})` : ""}${c.files.length ? `: ${c.files.map((f) => f.name).join(", ")}` : c.dueOn ? `, due ${short(c.dueOn)}` : ""}`;
                   const box = <span style={{ display: "block", minWidth: 38, height: 22, lineHeight: "22px", borderRadius: 5, textAlign: "center", fontSize: 11.5, fontWeight: c.state === "missing" ? 700 : 500, background: s.bg, color: s.fg, border: c.state === "due" ? "1px dashed var(--line)" : "none" }}>{c.label === "Monthly" && c.files.length ? "M" : s.text}</span>;
+                  // a missing week that wasn't needed (a break on site, not started yet): one click, and it stops showing (Ronan, 24 Nov 2026)
+                  if (c.state === "missing") return <td key={k} title={`${title}. Click "not needed" if no report was due that week`} style={{ padding: 0 }}>{box}
+                    <form action={weekNotNeeded}><input type="hidden" name="project" value={r.projectId} /><input type="hidden" name="week" value={tr.cols[k]} /><button className="small" style={{ all: "unset", cursor: "pointer", fontSize: 10, color: "var(--muted)", display: "block", textAlign: "center", width: "100%" }}>not needed</button></form></td>;
                   return <td key={k} title={title} style={{ padding: 0 }}>{c.files[0] ? <a href={`https://drive.google.com/file/d/${c.files[0].id}/view`} target="_blank" rel="noreferrer" style={{ textDecoration: "none" }}>{box}</a> : box}</td>;
                 })}
                 <td style={{ paddingLeft: 6 }}>{r.kind !== "monthly" && <form action={finishJob}><input type="hidden" name="project" value={r.projectId} /><button className="btn small" title="Job finished: mark it complete so it leaves the tracker">Finished</button></form>}</td>

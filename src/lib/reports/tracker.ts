@@ -203,7 +203,7 @@ export async function buildTracker(db: SupabaseClient, today: string, h: Set<str
   const cols = Array.from({ length: weeks }, (_, k) => plus(thisWeek, -7 * (weeks - 1 - k)));
   const from = cols[0], to = plus(thisWeek, 6);
   const [{ data: projects }, { data: clerks }] = await Promise.all([
-    db.from("projects").select("id,name,display_name,stage,reporting_frequency,clerk_id,clerk_me_id,reports_elsewhere").in("stage", ["live", "won_preparing", "on_hold"]),
+    db.from("projects").select("id,name,display_name,stage,reporting_frequency,clerk_id,clerk_me_id,reports_elsewhere,details").in("stage", ["live", "won_preparing", "on_hold"]),
     db.from("clerks").select("id,name"),
   ]);
   // every file since a little before the first week, a page at a time (a select stops at 1,000 rows)
@@ -251,6 +251,13 @@ export async function buildTracker(db: SupabaseClient, today: string, h: Set<str
       // M&E written up in the building report ("plus M&E" in Anél's tracker: Yeovil, Highams Park, Castle Hill...): only
       // a job that's had its own M&E report lately is expected to have one
       if (kind === "me" && !mine.some((f) => f.created_time >= plus(from, -60))) continue;
+      // weeks no report is needed (Ronan, 24 Nov 2026): before the job's reports start (Airbus starts next week), or marked
+      // "not needed" on the tracker (a break on site: Greenfield)
+      // ...or after they stop (snagging only from then on: Holy Trinity)
+      const det = (p.details ?? {}) as { reports_from?: string; reports_until?: string; no_report_weeks?: string[] };
+      const notNeeded = (w: string) => (!!det.reports_from && plus(w, 6) < det.reports_from) || (!!det.reports_until && w > det.reports_until) || (det.no_report_weeks ?? []).includes(w);
+      // fortnightly jobs: a week with nothing in is only missing when the week before had nothing either (Star Radcliffe)
+      const fortnightly = /fortnight/i.test(p.reporting_frequency ?? "");
       const cells: Cell[] = cols.map((w) => {
         const inWeek = mine.filter((f) => f.week === w);
         const got = inWeek.map((f) => ({ id: f.drive_file_id as string, name: f.name as string }));
@@ -261,10 +268,12 @@ export async function buildTracker(db: SupabaseClient, today: string, h: Set<str
         // building reports kept elsewhere (FieldView): M&E reports for the same job may still be in Drive (Framwellgate)
         if (p.reports_elsewhere && kind === "building") return { state: "none", files: [], label: p.reports_elsewhere };
         if (p.stage === "on_hold") return { state: "hold", files: [] };
+        if (notNeeded(w)) return { state: "none", files: [], label: "not needed" };
+        if (fortnightly && mine.some((f) => f.week === plus(w, -7))) return { state: "none", files: [] };
         const weekVisits = v.filter((x) => x.visit_date >= w && x.visit_date <= plus(w, 6)).map((x) => x.visit_date).sort();
         // the diary for that month says nothing about this job: fall back on its reporting frequency (weekly only)
         const monthHasDiary = visits.some((x) => x.project_id === p.id && useVisit(x) && x.visit_date.slice(0, 7) === w.slice(0, 7));
-        const byFrequency = !monthHasDiary && kind === "building" && /weekly/i.test(p.reporting_frequency ?? "") && !/fortnight/i.test(p.reporting_frequency ?? "") && p.stage === "live";
+        const byFrequency = !monthHasDiary && kind === "building" && /weekly|fortnight/i.test(p.reporting_frequency ?? "") && p.stage === "live";
         if (!weekVisits.length && !byFrequency) return { state: "none", files: [] };
         if (away(clerkId, w)) return { state: "hol", files: [] };
         const last = weekVisits.at(-1) ?? plus(w, 4);
