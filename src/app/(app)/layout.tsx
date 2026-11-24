@@ -18,6 +18,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     ["/reports", "Reports"],
     ["/personnel", "Personnel"],
     ["/clerk-portal", "Clerk portal"],
+    ["/workwear", "Workwear"],
     ["/signoff", "Month sign-off"],
     ...(director ? ([["/finance", "Finance"]] as [string, string][]) : []),
   ];

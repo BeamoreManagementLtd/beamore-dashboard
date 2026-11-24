@@ -9,6 +9,7 @@ const TABS: [string, string][] = [
   ["/portal/invoices", "Invoices"],
   ["/portal/insurance", "Insurance"],
   ["/portal/certificates", "Certificates & qualifications"],
+  ["/portal/workwear", "Workwear"],
   ["/portal/details", "My details"],
 ];
 
