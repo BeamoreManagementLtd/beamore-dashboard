@@ -331,14 +331,20 @@ export async function checkOne(admin: SupabaseClient, id: string) {
   const { data: visits } = rep.project_id ? await admin.from("diary_visits").select("visit_date,side,clerks(name)").eq("project_id", rep.project_id).gte("visit_date", since).order("visit_date") : { data: [] };
   void [...new Set((visits ?? []).map((v) => `${v.visit_date} ${(v.clerks as unknown as { name?: string } | null)?.name ?? ""}${v.side === "planned" ? " (planned)" : ""}`.trim()))];
   const { data: earlier } = rep.project_id ? await admin.from("reports").select("report_number,visit_date,text_snapshot,photo_hashes,photo_count").eq("project_id", rep.project_id).eq("kind", rep.kind).neq("id", id).not("checked_at", "is", null).order("uploaded_at", { ascending: false }).limit(5) : { data: [] };
-  const prev = earlier?.[0] ?? null;
   const counts = (earlier ?? []).map((e) => e.photo_count).filter((n): n is number => typeof n === "number");
   const usual = counts.length >= 2 ? Math.round(counts.reduce((a, b) => a + b, 0) / counts.length) : null;
   const hashes = await photoHashes(r, sharp, stats);
   // the job's template pictures (DfE logos and the like) aren't photos: not counted, not "reused", not "too small"
   const tpl = withoutTemplate(stats, (earlier ?? []).map((e) => e.photo_hashes as string[] | null));
   stats = tpl.stats;
-  const reused = reusedCount(tpl.hashes, prev?.photo_hashes ?? null);
+  // "reused" is against last week's report, not this same report uploaded or checked before under another name (Peter
+  // Restorick, 24 Nov 2026: his Anglo European pre-check said all 30 photos were reused, matched against the copy he'd
+  // already put in Drive): an earlier report sharing 80% or more of these photos is this one, so the one before it is used
+  const lastWeek = (earlier ?? []).find((e) => {
+    const h = e.photo_hashes as string[] | null;
+    return !h?.length || !tpl.hashes.length || reusedCount(tpl.hashes, h) / tpl.hashes.length < 0.8;
+  }) ?? null;
+  const reused = reusedCount(tpl.hashes, (lastWeek?.photo_hashes as string[] | null) ?? null);
   // up to 12 photos for the AI to look at (spread through the report), remembering which file each one is
   const used = stats.list.filter((x) => x.used);
   const picked = used.length <= 12 ? used : Array.from({ length: 12 }, (_, k) => used[Math.floor((k * used.length) / 12)]);
@@ -381,7 +387,7 @@ export async function checkOne(admin: SupabaseClient, id: string) {
     noProjectNumber: !!((p?.details ?? {}) as { no_project_number?: boolean }).no_project_number,
     // the diary's dates are only estimates for costing, so reports aren't checked against them (Ronan, 15 Nov 2026)
     expectedClerks: (clerks ?? []).map((c) => c.name), diaryVisits: [],
-    previous: prev ? { number: prev.report_number, date: prev.visit_date, text: prev.text_snapshot ?? "" } : null,
+    previous: lastWeek ? { number: lastWeek.report_number as string | null, date: lastWeek.visit_date as string | null, text: (lastWeek.text_snapshot as string | null) ?? "" } : null,
     paragraphs: r.paragraphs, blanks: r.blanks, placeholders: r.placeholders,
     photos: { count: stats.count, blurry: stats.blurry, smallOnPage: stats.smallOnPage, stretched: stats.stretched, mb: raw.length / 1e6, usual, reused, uncaptioned: uncaptioned(r) },
     unticked: unticked(r), thumbnails: thumbs, today: new Date().toISOString().slice(0, 10), appendix,

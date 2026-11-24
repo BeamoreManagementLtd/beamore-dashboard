@@ -50,7 +50,14 @@ export async function precheckOne(admin: SupabaseClient, id: string) {
   // the job's template pictures (DfE logos and the like) aren't photos: not counted, not "reused", not "too small"
   const tpl = withoutTemplate(stats, (earlier ?? []).map((e) => e.photo_hashes as string[] | null));
   stats = tpl.stats;
-  const reused = reusedCount(tpl.hashes, prev?.photo_hashes ?? null);
+  // "reused" is against last week's report, not this same report uploaded or checked before under another name (Peter
+  // Restorick, 24 Nov 2026: his Anglo European pre-check said all 30 photos were reused, matched against the copy he'd
+  // already put in Drive): an earlier report sharing 80% or more of these photos is this one, so the one before it is used
+  const lastWeek = (earlier ?? []).find((e) => {
+    const h = e.photo_hashes as string[] | null;
+    return !h?.length || !tpl.hashes.length || reusedCount(tpl.hashes, h) / tpl.hashes.length < 0.8;
+  }) ?? null;
+  const reused = reusedCount(tpl.hashes, (lastWeek?.photo_hashes as string[] | null) ?? null);
   const used = stats.list.filter((x) => x.used);
   const picked = used.length <= 12 ? used : Array.from({ length: 12 }, (_, k) => used[Math.floor((k * used.length) / 12)]);
   const thumbs: Buffer[] = [];
@@ -92,7 +99,7 @@ export async function precheckOne(admin: SupabaseClient, id: string) {
     projectNumbers: [p?.dfe_project_number, p?.po_number].filter((x): x is string => !!x && /\d/.test(x)),
     noProjectNumber: !!((p?.details ?? {}) as { no_project_number?: boolean }).no_project_number,
     expectedClerks: (clerks ?? []).map((c) => c.name), diaryVisits: [],
-    previous: prev ? { number: prev.report_number, date: prev.visit_date, text: prev.text_snapshot ?? "" } : null,
+    previous: lastWeek ? { number: lastWeek.report_number as string | null, date: lastWeek.visit_date as string | null, text: (lastWeek.text_snapshot as string | null) ?? "" } : null,
     paragraphs: r.paragraphs, blanks: r.blanks, placeholders: r.placeholders,
     photos: { count: stats.count, blurry: stats.blurry, smallOnPage: stats.smallOnPage, stretched: stats.stretched, mb: raw.length / 1e6, usual, reused, uncaptioned: uncaptioned(r) },
     unticked: unticked(r), thumbnails: thumbs, today: new Date().toISOString().slice(0, 10), appendix: null,
