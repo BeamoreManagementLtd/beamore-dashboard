@@ -103,7 +103,10 @@ export async function writeInvoiceToDiary(admin: SupabaseClient, uploadId: strin
   if (!u || !u.clerk_id || !clerkName) return { state: "not_applicable", note: "No clerk for this invoice" };
   const done = await admin.from("portal_diary_cells").select("id", { count: "exact", head: true }).eq("upload_id", uploadId);
   if (done.count) return { state: "written", note: "Already in the diary" };
-  const visits = (((u.ai_result as { visits?: Visit[] } | null)?.visits) ?? []).filter((v) => /^\d{4}-\d{2}-\d{2}$/.test(v.date) && v.site?.trim() && v.half_days > 0);
+  let visits = (((u.ai_result as { visits?: Visit[] } | null)?.visits) ?? []).filter((v) => /^\d{4}-\d{2}-\d{2}$/.test(v.date) && v.site?.trim() && v.half_days > 0);
+  // set out by week instead of by date ("The Forum WC 2nd Nov 5 days @ £340", Damian Breen, 25 Nov 2026): that many
+  // weekdays from the Monday of that week
+  if (!visits.length) visits = weekVisits(u.ai_result as { lines?: { text: string }[]; period?: string | null } | null);
   if (!visits.length) return { state: "needs_review", note: "The invoice doesn't list the dates worked, so it can't go in the diary automatically" };
   const months = [...new Set(visits.map((v) => v.date.slice(0, 7)))];
   if (months.some((m) => m < FIRST_WRITABLE)) return { state: "needs_review", note: `Work in ${months.filter((m) => m < FIRST_WRITABLE).join(", ")}: months before November 2026 aren't written automatically` };
@@ -445,4 +448,29 @@ async function labelOneDiary(admin: SupabaseClient, fileId: string, year: string
   if (after.md5Checksum !== createHash("md5").update(out).digest("hex")) throw new Error("The diary on Drive doesn't match what was saved");
   await admin.from("portal_audit").insert({ actor: "dashboard", action: "diary-company-labels", detail: { changes } });
   return { changed: changes.length, note: `Diary ${year}: ${changes.length} name cells labelled` };
+}
+
+/** Visits from invoice lines set out by week: "The Forum WC 2nd Nov 5 days @ £340" -> Mon 2 to Fri 6 Nov at "The Forum". */
+export function weekVisits(ai: { lines?: { text: string }[]; period?: string | null } | null): Visit[] {
+  const MON = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+  const year = Number((ai?.period ?? "").slice(0, 4)) || new Date().getUTCFullYear();
+  const out: Visit[] = [];
+  for (const l of ai?.lines ?? []) {
+    const m = /^(.*?)\s*(?:w\/?c|week\s+commencing)\s*(\d{1,2})(?:st|nd|rd|th)?\s+([a-z]{3})[a-z]*\.?\s*(\d{4})?\D+?(\d+(?:\.5)?)\s*days?\b/i.exec(l.text.trim());
+    if (!m) continue;
+    const mon = MON.indexOf(m[3].toLowerCase());
+    if (mon < 0 || !m[1].trim()) continue;
+    const start = new Date(Date.UTC(Number(m[4]) || year, mon, Number(m[2])));
+    const days = Number(m[5]);
+    if (!(days > 0 && days <= 7)) continue;
+    // from that day, the next weekdays (whole days; a half day at the end)
+    let left = days * 2;
+    for (let d = new Date(start); left > 0 && d.getTime() - start.getTime() < 14 * 864e5; d.setUTCDate(d.getUTCDate() + 1)) {
+      if (d.getUTCDay() === 0 || d.getUTCDay() === 6) continue;
+      const half = Math.min(2, left);
+      out.push({ date: d.toISOString().slice(0, 10), site: m[1].replace(/[-–:,]\s*$/, "").trim(), half_days: half });
+      left -= half;
+    }
+  }
+  return out;
 }
