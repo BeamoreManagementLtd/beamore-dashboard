@@ -33,6 +33,7 @@ const XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 type Visit = { date: string; site: string; half_days: number };
 type Outcome = { state: "written" | "needs_review" | "waiting" | "not_applicable"; note: string };
 
+const weekend = (d: string) => [0, 6].includes(new Date(`${d}T00:00:00Z`).getUTCDay());
 const norm = (s: string) => s.normalize("NFKC").toLowerCase().replace(/[^a-z0-9]/g, "");
 const colName = (n: number) => { let s = ""; for (; n > 0; n = Math.floor((n - 1) / 26)) s = String.fromCharCode(65 + ((n - 1) % 26)) + s; return s; };
 const cellVal = (c: ExcelJS.Cell) => {
@@ -65,7 +66,7 @@ export async function resolveSites(admin: SupabaseClient, clerkId: string, wordi
   const alias = new Map<string, string>();
   for (const a of (aliases ?? []).sort((x, y) => Number(!!y.clerk_id) - Number(!!x.clerk_id))) if (!alias.has(norm(a.wording))) alias.set(norm(a.wording), a.site_as_typed);
 
-  const out = new Map<string, string | null>(), learnt: [string, string][] = [];
+  const out = new Map<string, string | null>(), learnt: [string, string][] = [], guesses = new Map<string, string>();
   const ask: string[] = [];
   for (const w of wordings) {
     const k = norm(w);
@@ -86,64 +87,85 @@ export async function resolveSites(admin: SupabaseClient, clerkId: string, wordi
     // other candidates: rates names sharing a word with the wording (keeps the list short and relevant)
     const words = new Set(ask.flatMap((w) => w.toLowerCase().split(/[^a-z0-9]+/).filter((x) => x.length > 2 && !/^(the|and|school|primary|academy|site|ltd)$/.test(x))));
     const others = names.filter((n) => !clerkSites.includes(n) && n.toLowerCase().split(/[^a-z0-9]+/).some((x) => words.has(x))).slice(0, 80);
-    const m = await matchSites(ask, clerkSites, others);
+    // the AI being unavailable leaves them unsure (the diary step then goes by the planned days, and says so)
+    const m = await matchSites(ask, clerkSites, others).catch(() => [] as Awaited<ReturnType<typeof matchSites>>);
     for (const w of ask) {
       const hit = m.find((x) => x.wording === w);
       const name = hit?.certain && hit.site && exact.has(norm(hit.site)) ? exact.get(norm(hit.site))! : null;
       out.set(w, name);
+      if (!name && hit?.site && exact.has(norm(hit.site))) guesses.set(w, exact.get(norm(hit.site))!);
       if (name) learnt.push([w, name]);
     }
   }
-  return { map: out, learnt };
+  return { map: out, learnt, guesses, clerkSites };
 }
 
-export async function writeInvoiceToDiary(admin: SupabaseClient, uploadId: string): Promise<Outcome> {
+export async function writeInvoiceToDiary(admin: SupabaseClient, uploadId: string, dry = false): Promise<Outcome & { cells?: { ref: string; value: string; work: string; diary: string }[] }> {
   const { data: u } = await admin.from("portal_uploads").select("id,receipt,clerk_id,sha256,ai_result,status,clerks(name)").eq("id", uploadId).single();
   const clerkName = (u?.clerks as unknown as { name: string } | null)?.name;
   if (!u || !u.clerk_id || !clerkName) return { state: "not_applicable", note: "No clerk for this invoice" };
   const done = await admin.from("portal_diary_cells").select("id", { count: "exact", head: true }).eq("upload_id", uploadId);
   if (done.count) return { state: "written", note: "Already in the diary" };
-  let visits = (((u.ai_result as { visits?: Visit[] } | null)?.visits) ?? []).filter((v) => /^\d{4}-\d{2}-\d{2}$/.test(v.date) && v.site?.trim() && v.half_days > 0);
+  // Every invoice goes in (Ronan, 25 Nov 2026: "even if it's different, I want you to put it in yourself and then tell
+  // me what the difference is and where the problems are"). The invoice's own dates and sites are used when they add up
+  // to what it charges; where they don't, or it gives no dates or no sites, the clerk's planned days in the diary are
+  // used, fitted to the days charged. Every difference and guess is listed in the note for a person to check.
+  const ai = (u.ai_result ?? {}) as InvoiceAi;
+  const problems: string[] = [];
+  let visits = (ai.visits ?? []).filter((v) => /^\d{4}-\d{2}-\d{2}$/.test(v.date) && v.site?.trim() && v.half_days > 0);
   // set out by week instead of by date ("The Forum WC 2nd Nov 5 days @ £340", Damian Breen, 25 Nov 2026): that many
   // weekdays from the Monday of that week
-  if (!visits.length) visits = weekVisits(u.ai_result as { lines?: { text: string }[]; period?: string | null } | null);
-  if (!visits.length) return { state: "needs_review", note: "The invoice doesn't list the dates worked, so it can't go in the diary automatically" };
-  const months = [...new Set(visits.map((v) => v.date.slice(0, 7)))];
-  if (months.some((m) => m < FIRST_WRITABLE)) return { state: "needs_review", note: `Work in ${months.filter((m) => m < FIRST_WRITABLE).join(", ")}: months before November 2026 aren't written automatically` };
-  const year = months[0].slice(0, 4);
-  if (months.some((m) => !m.startsWith(year))) return { state: "needs_review", note: "This invoice covers two different years; please enter it by hand" };
+  if (!visits.length) visits = weekVisits(ai);
+  const period = visits[0]?.date.slice(0, 7) ?? (/^\d{4}-\d{2}$/.test(ai.period ?? "") ? ai.period! : (ai.invoice_date ?? "").slice(0, 7));
+  if (!/^\d{4}-\d{2}$/.test(period)) return { state: "needs_review", note: "Couldn't tell which month the invoice is for" };
+  const { data: planRows } = await admin.from("diary_visits").select("visit_date,site_as_typed,days").eq("clerk_id", u.clerk_id).eq("side", "planned")
+    .gte("visit_date", `${period}-01`).lt("visit_date", new Date(Date.UTC(+period.slice(0, 4), +period.slice(5), 1)).toISOString().slice(0, 10)).order("visit_date");
+  // the planned side as half-days in date order (a planned full day is two)
+  const plan: { date: string; site: string }[] = (planRows ?? []).flatMap((r) => Array.from({ length: Math.max(1, Math.round(Number(r.days ?? 0.5) * 2)) }, () => ({ date: r.visit_date as string, site: r.site_as_typed as string })));
+  const planMain = mostCommon(plan.map((p) => p.site));
 
-  // ---- exact diary names for each site wording
+  // ---- exact diary names for each site wording (a guess when unsure, said in the note)
   const wordings = [...new Set(visits.map((v) => v.site.trim()))];
-  const { map, learnt } = await resolveSites(admin, u.clerk_id, wordings);
-  const unsure = wordings.filter((w) => !map.get(w));
-  if (unsure.length) return { state: "needs_review", note: `Couldn't be sure which diary site: ${unsure.map((w) => `"${w}"`).join(", ")}` };
+  const { map, learnt, guesses, clerkSites } = await resolveSites(admin, u.clerk_id, wordings);
+  for (const w of wordings.filter((x) => !map.get(x))) {
+    const guess = guesses.get(w) ?? planMain ?? clerkSites[0];
+    if (!guess) return { state: "needs_review", note: `No diary site could be found for "${w}"` };
+    map.set(w, guess);
+    problems.push(`"${w}" isn't a site name the diary knows: put in as ${guess}, please check`);
+  }
+  let named: Visit[] = visits.map((v) => ({ ...v, site: map.get(v.site.trim())! }));
 
-  // ---- the days must add up to what the invoice charges (Ronan, 25 Nov 2026: Andrew Marris's "Wales High School
-  // November x 5 @ 310.00" went in as five half days; a visit charged at the day rate is a whole day, the site visit
-  // and the report). The reading of the dates is checked against the money at the diary's rates and the invoice's
-  // day count; a visit read as a half day becomes a whole day when that's what the invoice adds up to.
-  const settled = await settleDays(admin, u.ai_result as Ai, visits, (w) => map.get(w.trim())!);
-  if (!settled.visits) return { state: "needs_review", note: settled.note ?? "The days don't add up" };
-  visits = settled.visits!;
-  const rateNote = settled.note ?? "";
+  // ---- the days must add up to what the invoice charges (a visit charged at the day rate is a whole day, the site
+  // visit and the report: Andrew Marris, 25 Nov 2026)
+  const settled = await settleDays(admin, ai, named, (x) => x);
+  if (settled.visits) {
+    named = settled.visits;
+    if (settled.note) problems.push(settled.note);
+  } else {
+    const fitted = fitToPlan(plan, ai, named, planMain ?? named[0]?.site ?? clerkSites[0] ?? null, period);
+    if (!fitted.visits.length) return { state: "needs_review", note: `${settled.note ?? "The days don't add up"}, and there are no planned days in the diary to go by` };
+    problems.push(`${(settled.note ?? "The days don't add up").replace(/; please put it in the diary by hand$/, "")}: put in from ${fitted.how}, please check`);
+    named = fitted.visits;
+  }
 
   // ---- one list of slot values per day
   const perDay = new Map<string, string[]>();
-  for (const v of visits) {
+  for (const v of named) {
     const list = perDay.get(v.date) ?? [];
-    for (let i = 0; i < Math.min(v.half_days, 4); i++) list.push(map.get(v.site.trim())!);
+    for (let i = 0; i < Math.min(v.half_days, 4); i++) list.push(v.site);
     perDay.set(v.date, list);
   }
-  const tooMany = [...perDay.entries()].filter(([, l]) => l.length > 8);
-  if (tooMany.length) return { state: "needs_review", note: `More than four days' work claimed on ${tooMany.map(([d]) => d).join(", ")}` };
+  const months = [...new Set([...perDay.keys()].map((d) => d.slice(0, 7)))];
+  if (months.some((m) => m < FIRST_WRITABLE)) return { state: "needs_review", note: `Work in ${months.filter((m) => m < FIRST_WRITABLE).join(", ")}: months before November 2026 aren't written automatically` };
+  const year = months[0].slice(0, 4);
+  if (months.some((m) => !m.startsWith(year))) return { state: "needs_review", note: "This invoice covers two different years; please enter it by hand" };
 
   // ---- the diary itself
   const g = await driveClient(admin);
   const fileId = diaryFile(g.connection, year);
   if (!fileId) return { state: "waiting", note: `Waiting for Diary ${year}.xlsx to be created in the Diary folder` };
   const meta = await g.json<{ modifiedTime: string; headRevisionId: string; md5Checksum: string }>(`files/${fileId}`, { fields: "modifiedTime,headRevisionId,md5Checksum", supportsAllDrives: "true" });
-  if (Date.now() - Date.parse(meta.modifiedTime) < QUIET_MS) return { state: "waiting", note: "The diary was changed in the last 10 minutes; will try again shortly" };
+  if (!dry && Date.now() - Date.parse(meta.modifiedTime) < QUIET_MS) return { state: "waiting", note: "The diary was changed in the last 10 minutes; will try again shortly" };
   const raw = Buffer.from(await g.download(fileId));
   const wb = await loadWorkbook(raw);
 
@@ -183,20 +205,24 @@ export async function writeInvoiceToDiary(admin: SupabaseClient, uploadId: strin
     for (const [date, values] of [...perDay.entries()].filter(([d]) => d.startsWith(month)).sort()) {
       const r = rowOf.get(date);
       if (!r) return { state: "needs_review", note: `No row for ${date} in ${clerkName}'s ${sheet} block` };
-      if (![0, 1, 2].every((i) => free(r, i))) return { state: "needs_review", note: `${date} already has entries on the charged side; left for you to check` };
-      values.slice(0, 3).forEach((value, i) => {
+      const open = [0, 1, 2].filter((i) => free(r, i));
+      if (open.length < 3) problems.push(`${date} already had something on the charged side, so the work went in the free slots nearest it`);
+      const here = values.slice(0, open.length);
+      here.forEach((value, k) => {
+        const i = open[k];
         if (!hasCost(r, i)) throw new Error(`no cost formula next to ${colName(slotCols[i])}${r}`);
         changes.push({ sheet, ref: `${colName(slotCols[i])}${r}`, value, work: date, diary: date });
         taken.add(`${r}:${i}`);
       });
-      for (const value of values.slice(3)) overflow.push({ date, value });
+      for (const value of values.slice(here.length)) overflow.push({ date, value });
     }
     // more than three half-days on one date (several sites visited, each a day's charge): the rest go in the nearest
     // free slots that month, the way the office does it by hand (Andrew Marris and Tony Larkins in October)
     for (const o of overflow) {
       const cand = rows.filter((r) => dateOf(r).startsWith(month) && dateOf(r) !== o.date)
         .flatMap((r) => [0, 1, 2].filter((i) => free(r, i) && !taken.has(`${r}:${i}`) && hasCost(r, i)).slice(0, 1).map((i) => ({ r, i })))
-        .sort((x, y) => Math.abs(Date.parse(dateOf(x.r)) - Date.parse(o.date)) - Math.abs(Date.parse(dateOf(y.r)) - Date.parse(o.date)) || x.r - y.r);
+        // weekdays first, then the nearest day, then the day after rather than before (as the office does by hand)
+        .sort((x, y) => Number(weekend(dateOf(x.r))) - Number(weekend(dateOf(y.r))) || Math.abs(Date.parse(dateOf(x.r)) - Date.parse(o.date)) - Math.abs(Date.parse(dateOf(y.r)) - Date.parse(o.date)) || y.r - x.r);
       if (!cand.length) return { state: "needs_review", note: `Nowhere free in the month for all the work on ${o.date}` };
       const { r, i } = cand[0];
       changes.push({ sheet, ref: `${colName(slotCols[i])}${r}`, value: o.value, work: o.date, diary: dateOf(r) });
@@ -221,6 +247,8 @@ export async function writeInvoiceToDiary(admin: SupabaseClient, uploadId: strin
       }
     }
   }
+
+  if (dry) return { state: "written", note: `(dry run) ${changes.length / 2} days${problems.length ? `. CHECK: ${problems.join("; ")}` : ""}`, cells: changes };
 
   // ---- patch only those cells in the original file
   const zip = await JSZip.loadAsync(raw);
@@ -264,7 +292,7 @@ export async function writeInvoiceToDiary(admin: SupabaseClient, uploadId: strin
   await admin.from("portal_diary_cells").insert(changes.map((c) => ({ upload_id: uploadId, sheet: c.sheet, cell: c.ref, value: c.value, work_date: c.work, diary_date: c.diary, revision_after: after.headRevisionId })));
   for (const [wording, site] of learnt) await admin.from("site_aliases").upsert({ clerk_id: u.clerk_id, wording, site_as_typed: site, created_by: "AI" }, { onConflict: "clerk_id,wording" });
   const days = changes.length / 2;
-  return { state: "written", note: `${changes.length} half-day${changes.length === 1 ? "" : "s"} (${days} day${days === 1 ? "" : "s"}) written to ${[...new Set(changes.map((c) => c.sheet))].join(", ")}${markerNotes.length ? `; ${markerNotes.join("; ")}` : "; Invoice received marked green"}${expenseNote ? `; ${expenseNote}` : ""}${rateNote ? `; ${rateNote}` : ""}` };
+  return { state: "written", note: `${changes.length} half-day${changes.length === 1 ? "" : "s"} (${days} day${days === 1 ? "" : "s"}) written to ${[...new Set(changes.map((c) => c.sheet))].join(", ")}${markerNotes.length ? `; ${markerNotes.join("; ")}` : "; Invoice received marked green"}${expenseNote ? `; ${expenseNote}` : ""}${problems.length ? `. CHECK: ${problems.join("; ")}` : ""}` };
 }
 
 /** Every 15 minutes: invoices read by AI that are waiting to go into the diary (one at a time, so writes never overlap). */
@@ -464,7 +492,7 @@ async function labelOneDiary(admin: SupabaseClient, fileId: string, year: string
 }
 
 /** Visits from invoice lines set out by week: "The Forum WC 2nd Nov 5 days @ £340" -> Mon 2 to Fri 6 Nov at "The Forum". */
-export function weekVisits(ai: { lines?: { text: string }[]; period?: string | null } | null): Visit[] {
+export function weekVisits(ai: InvoiceAi | null): Visit[] {
   const MON = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
   const year = Number((ai?.period ?? "").slice(0, 4)) || new Date().getUTCFullYear();
   const out: Visit[] = [];
@@ -488,7 +516,7 @@ export function weekVisits(ai: { lines?: { text: string }[]; period?: string | n
   return out;
 }
 
-type Ai = { days?: number | null; net_gbp?: number | null; expenses?: { amount_gbp: number | null }[] | null } | null;
+type Ai = InvoiceAi | null;
 
 /**
  * Checks the dates read from an invoice against what it charges (Ronan, 25 Nov 2026). Two readings are tried: as read,
@@ -558,4 +586,84 @@ export async function undoInvoiceInDiary(admin: SupabaseClient, uploadId: string
   if (after.md5Checksum !== createHash("md5").update(out).digest("hex")) throw new Error("The diary on Drive doesn't match what was saved");
   await admin.from("portal_diary_cells").delete().eq("upload_id", uploadId);
   return `${cells.length} cells cleared`;
+}
+
+type InvoiceAi = {
+  visits?: Visit[]; lines?: { text: string; amount_gbp?: number | null }[]; period?: string | null; invoice_date?: string | null;
+  days?: number | null; net_gbp?: number | null; expenses?: { text?: string; amount_gbp: number | null }[] | null;
+};
+
+const mostCommon = (xs: string[]) => {
+  const n = new Map<string, number>();
+  for (const x of xs) n.set(x, (n.get(x) ?? 0) + 1);
+  return [...n.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
+};
+
+/** Days charged per stretch, from lines like "W/C Monday 02/11/2026 - 4.5 days @ £310" or "The Forum WC 2nd Nov 5 days". */
+export function dayTargets(ai: InvoiceAi | null, period: string): { start: string; halves: number }[] {
+  const MON = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+  const out: { start: string; halves: number }[] = [];
+  for (const l of ai?.lines ?? []) {
+    const t = l.text;
+    let d: Date | null = null;
+    const num = /(?<!\d)(\d{1,2})[/.-](\d{1,2})[/.-](\d{2,4})(?!\d)/.exec(t);
+    const word = /(?<!\d)(\d{1,2})(?:st|nd|rd|th)?\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?(?:\s+(\d{4}))?/i.exec(t);
+    if (num) d = new Date(Date.UTC(Number(num[3].length === 2 ? `20${num[3]}` : num[3]), Number(num[2]) - 1, Number(num[1])));
+    else if (word) d = new Date(Date.UTC(Number(word[3]) || Number(period.slice(0, 4)), MON.indexOf(word[2].toLowerCase()), Number(word[1])));
+    const after = t.slice((num ?? word)?.index ?? 0);
+    const n = /(\d+(?:\.5)?)\s*(?:days?|visits?)\b/i.exec(after);
+    if (!d || isNaN(d.getTime()) || !n) continue;
+    const halves = Math.round(Number(n[1]) * 2);
+    if (halves > 0 && halves <= 14) out.push({ start: d.toISOString().slice(0, 10), halves });
+  }
+  return out;
+}
+
+/**
+ * When the invoice's own dates don't add up (or it has none): the clerk's planned days in the diary, fitted to the days
+ * charged. Per stretch when the invoice gives days per week; otherwise the planned half-days in date order, extra days
+ * on the free weekdays of the month. With nothing planned, the days charged spread evenly over the month's weekdays.
+ */
+export function fitToPlan(plan: { date: string; site: string }[], ai: InvoiceAi, read: Visit[], site: string | null, period: string): { visits: Visit[]; how: string } {
+  const want = Number(ai.days) > 0 ? Math.round(Number(ai.days) * 2) : read.reduce((n, v) => n + v.half_days, 0);
+  const weekdays: string[] = [];
+  for (let d = new Date(`${period}-01T00:00:00Z`); d.toISOString().startsWith(period); d.setUTCDate(d.getUTCDate() + 1))
+    if (d.getUTCDay() !== 0 && d.getUTCDay() !== 6) weekdays.push(d.toISOString().slice(0, 10));
+  const half = (date: string, s: string): Visit => ({ date, site: s, half_days: 1 });
+  const fallback = site ?? plan[0]?.site ?? null;
+  if (!fallback) return { visits: [], how: "" };
+  // extra half-days: weekdays not yet used, nearest to `near`, then already-used ones
+  const extra = (n: number, used: Set<string>, pool: string[], s: string, near?: string) => {
+    const out: Visit[] = [];
+    const order = [...pool].sort((x, y) => Number(used.has(x)) - Number(used.has(y)) || (near ? Math.abs(Date.parse(x) - Date.parse(near)) - Math.abs(Date.parse(y) - Date.parse(near)) : 0) || x.localeCompare(y));
+    for (let i = 0; out.length < n && order.length; i++) { const d = order[Math.floor(i / 2) % order.length]; out.push(half(d, s)); }
+    return out;
+  };
+
+  const stretches = dayTargets(ai, period);
+  if (stretches.length && stretches.reduce((n, x) => n + x.halves, 0) === want) {
+    const out: Visit[] = [];
+    for (const st of stretches) {
+      const end = new Date(Date.parse(st.start) + 7 * 864e5).toISOString().slice(0, 10);
+      const inWeek = plan.filter((p) => p.date >= st.start && p.date < end);
+      const take = inWeek.slice(0, st.halves).map((p) => half(p.date, p.site));
+      const s = mostCommon(inWeek.map((p) => p.site)) ?? fallback;
+      const days = weekdays.filter((d) => d >= st.start && d < end);
+      out.push(...take, ...extra(st.halves - take.length, new Set(take.map((v) => v.date)), days.length ? days : [st.start], s, st.start));
+    }
+    return { visits: out, how: "the planned days in the diary, week by week as the invoice sets out" };
+  }
+  if (plan.length) {
+    const take = plan.slice(0, want).map((p) => half(p.date, p.site));
+    const more = extra(want - take.length, new Set(take.map((v) => v.date)), weekdays, mostCommon(plan.map((p) => p.site)) ?? fallback);
+    const note = take.length < want ? ` plus ${(want - take.length) / 2} more day${want - take.length === 2 ? "" : "s"} than planned` : want < plan.length ? ` (${(plan.length - want) / 2} planned day${plan.length - want === 2 ? "" : "s"} not charged were left out)` : "";
+    return { visits: [...take, ...more], how: `the planned days in the diary${note}` };
+  }
+  // nothing planned: spread evenly over the month's weekdays, whole days
+  const n = Math.ceil(want / 2), out: Visit[] = [];
+  for (let k = 0; k < n; k++) {
+    const d = weekdays[Math.min(weekdays.length - 1, Math.floor((k + 0.5) * weekdays.length / n))];
+    out.push({ date: d, site: fallback, half_days: Math.min(2, want - k * 2) });
+  }
+  return { visits: out, how: "days spread evenly over the month (nothing was planned in the diary)" };
 }

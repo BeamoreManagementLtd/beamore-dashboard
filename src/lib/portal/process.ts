@@ -180,12 +180,8 @@ async function applyInvoice(admin: SupabaseClient, u: Row, r: Record<string, unk
     checked_at: new Date().toISOString(), checked_by: "AI",
   });
   // queue it for the salmon side of the diary (written by the 15-minute job, one invoice at a time)
-  const visits = (r.visits as unknown[] | undefined) ?? [];
-  await admin.from("portal_uploads").update({
-    period,
-    diary_state: visits.length ? "waiting" : "needs_review",
-    diary_note: visits.length ? "Waiting to go into the diary" : "The invoice doesn't list the dates worked, so it can't go in the diary automatically",
-  }).eq("id", u.id);
+  // every invoice goes in, from the planned days when it gives no dates (Ronan, 25 Nov 2026)
+  await admin.from("portal_uploads").update({ period, diary_state: "waiting", diary_note: "Waiting to go into the diary" }).eq("id", u.id);
   return { problems, forBeamore };
 }
 
