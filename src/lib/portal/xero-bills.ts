@@ -51,6 +51,15 @@ export async function makeBill(admin: SupabaseClient, uploadId: string): Promise
   const dup = have.Invoices.find((i) => i.Status !== "DELETED" && i.Status !== "VOIDED");
   if (dup) return { state: "exists", note: `Already in Xero as bill ${dup.InvoiceNumber} (${dup.Status.toLowerCase()})`, bill_id: dup.InvoiceID, number: dup.InvoiceNumber };
 
+  // the clerk's last bill is the starting point, like "Copy" in Xero (Ronan, 25 Nov 2026): its account, VAT setting,
+  // payment terms and reference style carry over; the lines, number, date and PDF are this invoice's
+  type XLine = { AccountCode?: string; TaxType?: string; LineAmount?: number };
+  type XBill = { InvoiceID: string; InvoiceNumber: string; Status: string; Reference?: string; LineAmountTypes?: string; DateString?: string; DueDateString?: string; LineItems?: XLine[] };
+  const prev = (await xero<{ Invoices: XBill[] }>("Invoices", { where: `Type=="ACCPAY" AND Contact.ContactID==Guid("${co.xero_contact_id}") AND Status!="DELETED" AND Status!="VOIDED"`, order: "Date DESC", page: 1 })).Invoices[0];
+  const prevFull = prev ? (await xero<{ Invoices: XBill[] }>(`Invoices/${prev.InvoiceID}`)).Invoices[0] : null;
+  const prevLine = (prevFull?.LineItems ?? []).find((l) => (l.LineAmount ?? 0) > 0) ?? prevFull?.LineItems?.[0];
+  const termDays = prevFull?.DateString && prevFull?.DueDateString ? Math.round((Date.parse(prevFull.DueDateString) - Date.parse(prevFull.DateString)) / 86400000) : null;
+
   // the jobs: each site wording on the invoice -> its diary site -> the project
   const period = /^\d{4}-\d{2}$/.test(ai.period ?? "") ? ai.period! : (ai.invoice_date ?? new Date().toISOString()).slice(0, 7);
   const monthLabel = `${MONTHS[Number(period.slice(5)) - 1]} ${period.slice(0, 4)}`;
@@ -69,7 +78,10 @@ export async function makeBill(admin: SupabaseClient, uploadId: string): Promise
   };
 
   const vat = Number(ai.vat_gbp ?? 0) > 0;
-  const tax = vat ? "INPUT2" : "NONE";
+  // VAT as on the last bill when it agrees with this invoice (charged or not); otherwise this invoice decides
+  const prevVat = prevLine?.TaxType && !/^(NONE|EXEMPT|ZERO)/i.test(prevLine.TaxType) ? prevLine.TaxType : null;
+  const tax = vat ? (prevVat ?? "INPUT2") : (prevLine?.TaxType && !prevVat ? prevLine.TaxType : "NONE");
+  const account = prevLine?.AccountCode || ACCOUNT;
   type Line = { Description: string; Quantity: number; UnitAmount: number; AccountCode: string; TaxType: string; Tracking?: { Name: string; Option: string }[] };
   const lines: Line[] = [];
   for (const l of ai.lines ?? []) {
@@ -84,13 +96,13 @@ export async function makeBill(admin: SupabaseClient, uploadId: string): Promise
     const p = job?.project ?? null;
     lines.push({
       Description: p ? `${p.display_name ?? p.name} - ${monthLabel}` : l.text,
-      Quantity: ok ? qty : 1, UnitAmount: ok ? rate : amount, AccountCode: ACCOUNT, TaxType: tax,
+      Quantity: ok ? qty : 1, UnitAmount: ok ? rate : amount, AccountCode: account, TaxType: tax,
       ...(p && optionFor(p) ? { Tracking: optionFor(p) } : {}),
     });
   }
   for (const e of ai.expenses ?? []) {
     const amount = Number(e.amount_gbp ?? 0);
-    if (amount > 0) lines.push({ Description: `${e.text} - ${monthLabel}`, Quantity: 1, UnitAmount: amount, AccountCode: ACCOUNT, TaxType: tax });
+    if (amount > 0) lines.push({ Description: `${e.text} - ${monthLabel}`, Quantity: 1, UnitAmount: amount, AccountCode: account, TaxType: tax });
   }
   if (!lines.length) return { state: "needs_review", note: "No amounts could be read from the invoice lines: please enter it in Xero by hand" };
 
@@ -102,7 +114,15 @@ export async function makeBill(admin: SupabaseClient, uploadId: string): Promise
 
   const date = /^\d{4}-\d{2}-\d{2}$/.test(ai.invoice_date ?? "") ? ai.invoice_date! : new Date(Date.UTC(+period.slice(0, 4), +period.slice(5), 0)).toISOString().slice(0, 10);
   const res = await xero.put<{ Invoices: { InvoiceID: string; InvoiceNumber: string; HasErrors?: boolean; ValidationErrors?: { Message: string }[] }[] }>("Invoices", {
-    Invoices: [{ Type: "ACCPAY", Status: "DRAFT", Contact: { ContactID: co.xero_contact_id }, InvoiceNumber: number, Date: date, LineAmountTypes: "Exclusive", LineItems: lines }],
+    Invoices: [{
+      Type: "ACCPAY", Status: "DRAFT", Contact: { ContactID: co.xero_contact_id }, InvoiceNumber: number, Date: date,
+      // the same payment terms as the last bill (else the supplier's own terms in Xero)
+      ...(termDays !== null && termDays >= 0 && termDays <= 90 ? { DueDate: new Date(Date.parse(date) + termDays * 86400000).toISOString().slice(0, 10) } : {}),
+      // a reference that names the month is carried on with this month's
+      ...(prevFull?.Reference && new RegExp(MONTHS.join("|")).test(prevFull.Reference) ? { Reference: prevFull.Reference.replace(new RegExp(`(${MONTHS.join("|")})\\s+\\d{4}`), monthLabel) } : {}),
+      // the amounts here are before VAT
+      LineAmountTypes: "Exclusive", LineItems: lines,
+    }],
   }, { summarizeErrors: "false" });
   const bill = res.Invoices[0];
   if (!bill || bill.HasErrors) return { state: "needs_review", note: `Xero didn't take the bill: ${(bill?.ValidationErrors ?? []).map((v) => v.Message).join("; ") || "no reason given"}` };
@@ -115,7 +135,7 @@ export async function makeBill(admin: SupabaseClient, uploadId: string): Promise
       await xero.attach(`Invoices/${bill.InvoiceID}`, u.file_name, Buffer.from(await g.download(u.drive_file_id)), u.mime || "application/pdf");
     } catch (e) { attached = ` (the invoice file couldn't be attached: ${e instanceof Error ? e.message.slice(0, 80) : "error"})`; }
   }
-  return { state: "created", note: `Draft bill ${number} for £${net}${vat ? ` + £${ai.vat_gbp} VAT` : ""} made in Xero, waiting for approval${attached}`, bill_id: bill.InvoiceID, number };
+  return { state: "created", note: `Draft bill ${number} for £${net}${vat ? ` + £${ai.vat_gbp} VAT` : ""} made in Xero${prev ? ` from ${prev.InvoiceNumber}` : ""}, waiting for approval${attached}`, bill_id: bill.InvoiceID, number };
 }
 
 /** Every 15 minutes: invoices now in the diary that haven't been made into a Xero bill yet. */
