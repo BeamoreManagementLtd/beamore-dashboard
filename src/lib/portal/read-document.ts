@@ -88,7 +88,8 @@ const INVOICE = {
     // costs on top of the site days, for the diary's "Other costs" line (Ronan, 15 Nov 2026)
     expenses: {
       type: "array", description: "Costs charged on top of the site days/visits: hotels, mileage, travel, parking, materials. Amounts before VAT. Empty if none",
-      items: { type: "object", additionalProperties: false, required: ["text", "amount_gbp"], properties: { text: { type: "string", description: "what it is, short, e.g. 'Premier Inn 2 nights'" }, amount_gbp: { type: "number" } } },
+      // the diary has two lines, recharged to the client or not (Ronan, 25 Nov 2026)
+      items: { type: "object", additionalProperties: false, required: ["text", "amount_gbp", "recharge_to_client"], properties: { text: { type: "string", description: "what it is, short, e.g. 'Premier Inn 2 nights'" }, amount_gbp: { type: "number" }, recharge_to_client: { type: "boolean", description: "true only if the invoice says this cost is to be recharged / passed on / billed to the client; otherwise false" } } },
     },
     problems: { type: "array", items: s },
   },

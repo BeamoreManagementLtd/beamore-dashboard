@@ -1,3 +1,4 @@
+import { loadReportQueue } from "@/lib/due";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { requireProfile } from "@/lib/auth";
@@ -36,11 +37,11 @@ export default async function Project({ params }: { params: Promise<{ id: string
     db.from("project_info").select("id,item,requested_on,received_on,hint,hint_thread,auto,value,value_from").eq("project_id", id).order("created_at"),
     db.from("project_events").select("id,happened_at,source,kind,who,body").eq("project_id", id).order("happened_at", { ascending: false }).limit(40),
   ]);
-  const [months, { data: invoices }, { data: onSite }, { data: queue }, { data: log }, { data: contacts }, { data: staff }, { data: fin }] = await Promise.all([
+  const [months, { data: invoices }, { data: onSite }, queue, { data: log }, { data: contacts }, { data: staff }, { data: fin }] = await Promise.all([
     db.rpc("project_month_days", { p: id }),
     db.from("invoices").select("id,number,reference,due,amount_due,days_building,days_me,chase_state(status,next_action,next_action_due)").eq("project_id", id).gt("amount_due", 0).order("due"),
     db.from("diary_visits").select("clerk_id,side,days,clerks(name)").eq("project_id", id).gte("visit_date", monthStart),
-    db.from("report_queue").select("report_name,due,checker").eq("project_id", id).order("due"),
+    loadReportQueue(db, id),
     db.from("report_log").select("report_date,working_days,status,clerk_name").eq("project_id", id).order("report_date", { ascending: false }).limit(8),
     db.from("invoice_contacts").select("label,to_emails,cc_emails,notes").or(`project_id.eq.${id}${p.client_id ? `,client_id.eq.${p.client_id}` : ""}`),
     db.from("profiles").select("id,full_name,email").order("full_name"),
@@ -282,7 +283,7 @@ export default async function Project({ params }: { params: Promise<{ id: string
           <h2>Reports</h2>
           {!queue?.length ? <p className="small muted">Nothing waiting to check.</p> : (
             <table><tbody>{queue.map((q, i) => (
-              <tr key={i}><td className="small">{q.report_name}</td><td className={q.due && q.due < t ? "neg" : ""}>{fd(q.due)}</td><td>{q.checker === "Unknown" ? <span className="pill bad">No checker</span> : q.checker}</td></tr>
+              <tr key={i}><td className="small">{q.report_name}</td><td className={q.due && q.due < t ? "neg" : ""}>{fd(q.due)}</td><td>{!q.checker ? <span className="pill bad">No checker</span> : ((staff ?? []).find((p) => p.id === q.checker)?.full_name ?? "").split(" ")[0]}</td></tr>
             ))}</tbody></table>
           )}
           {!!log?.length && (

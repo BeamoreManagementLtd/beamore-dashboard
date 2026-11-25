@@ -173,7 +173,7 @@ export async function writeInvoiceToDiary(admin: SupabaseClient, uploadId: strin
 
   const changes: { sheet: string; ref: string; value: string; work: string; diary: string }[] = [];
   const markers: { sheet: string; ref: string }[] = [];
-  const expenses = ((((u.ai_result as { expenses?: { text: string; amount_gbp: number | null }[] } | null)?.expenses) ?? [])
+  const expenses = ((((u.ai_result as { expenses?: { text: string; amount_gbp: number | null; recharge_to_client?: boolean }[] } | null)?.expenses) ?? [])
     .filter((e) => e && e.text && Number(e.amount_gbp) > 0));
   const extras: { sheet: string; ref: string; text?: string; amount?: number }[] = [];
   let expenseNote = "";
@@ -232,21 +232,37 @@ export async function writeInvoiceToDiary(admin: SupabaseClient, uploadId: strin
     }
     const label = rows.find((r) => /^invoice received$/i.test(String(cellVal(ws.getCell(r, s + 7)) ?? "").trim()));
     if (label) markers.push({ sheet, ref: `${colName(s + 7)}${label}` });
-    // the invoice's expenses (hotels, mileage...) on the block's "Other costs" line, so the block's total matches the
-    // invoice (Ronan, 15 Nov 2026); diaries from 2027 have that line under day 31
+    // the invoice's expenses (hotels, mileage...) under the clerk's days, so the block's total matches the invoice (Ronan,
+    // 15 Nov 2026). From 25 Nov 2026 there are two lines, "Recharge to client" and "Not recharged": what it's for in the
+    // merged box after the label (s + 1), the amount at the end of the line (s + 6, column S / I). Anything the invoice
+    // doesn't say is recharged goes on "Not recharged" and is listed to check. Older diaries had one "Other costs" line
+    // with the amount next to the label (s + 1) and what it's for after it (s + 2).
     if (expenses.length && month === months[months.length - 1]) {
-      const oc = [1, 2, 3].map((k) => Math.max(...rows) + k).find((r) => /^other costs/i.test(String(cellVal(ws.getCell(r, s)) ?? "").trim()));
-      const total = Math.round(expenses.reduce((n, e) => n + Number(e.amount_gbp), 0) * 100) / 100;
-      if (!oc) expenseNote = `the invoice has £${total.toFixed(2)} of expenses (${expenses.map((e) => e.text).join(", ")}): this diary has no Other costs line, so add them by hand`;
-      // the amount goes in the Cost cell next to the label, what it's for in the merged box after it (Ronan, 17 Nov 2026);
-      // older diaries had the amount in the 3rd slot's cost cell (s + 5)
-      else if (!isBlank(cellVal(ws.getCell(oc, s + 2))) || !isBlank(cellVal(ws.getCell(oc, s + 1))) || !isBlank(cellVal(ws.getCell(oc, s + 5)))) expenseNote = `${clerkName}'s Other costs line already has something in it; the invoice's £${total.toFixed(2)} of expenses weren't added`;
-      else {
-        const merged = ws.getCell(oc, s + 3).isMerged; // the 2026 / 2027 diaries after the merge: amount next to the label
-        extras.push({ sheet, ref: `${colName(s + 2)}${oc}`, text: expenses.map((e) => `${e.text} £${Number(e.amount_gbp).toFixed(2)}`).join("; ").slice(0, 250) });
-        extras.push({ sheet, ref: `${colName(merged ? s + 1 : s + 5)}${oc}`, amount: total });
-        expenseNote = `£${total.toFixed(2)} of expenses put on the Other costs line`;
-      }
+      const below = [1, 2, 3, 4].map((k) => Math.max(...rows) + k);
+      const lineOf = (re: RegExp) => below.find((r) => re.test(String(cellVal(ws.getCell(r, s)) ?? "").trim()));
+      const total = (es: typeof expenses) => Math.round(es.reduce((n, e) => n + Number(e.amount_gbp), 0) * 100) / 100;
+      const words = (es: typeof expenses) => es.map((e) => `${e.text} £${Number(e.amount_gbp).toFixed(2)}`).join("; ").slice(0, 250);
+      const recharge = lineOf(/^recharge to client/i), ours = lineOf(/^not recharged/i), oc = lineOf(/^other costs/i);
+      const notes: string[] = [];
+      if (recharge && ours) {
+        for (const [line, es, name] of [[recharge, expenses.filter((e) => e.recharge_to_client), "Recharge to client"], [ours, expenses.filter((e) => !e.recharge_to_client), "Not recharged"]] as const) {
+          if (!es.length) continue;
+          if (!isBlank(cellVal(ws.getCell(line, s + 1))) || !isBlank(cellVal(ws.getCell(line, s + 6)))) { notes.push(`${clerkName}'s ${name} line already has something in it; £${total(es).toFixed(2)} (${es.map((e) => e.text).join(", ")}) wasn't added`); continue; }
+          extras.push({ sheet, ref: `${colName(s + 1)}${line}`, text: words(es) });
+          extras.push({ sheet, ref: `${colName(s + 6)}${line}`, amount: total(es) });
+          notes.push(`£${total(es).toFixed(2)} of expenses on the ${name} line`);
+        }
+        if (expenses.some((e) => !e.recharge_to_client)) problems.push(`expenses went on "Not recharged" (${expenses.filter((e) => !e.recharge_to_client).map((e) => e.text).join(", ")}): move any the client pays for to "Recharge to client"`);
+      } else if (oc) {
+        if (!isBlank(cellVal(ws.getCell(oc, s + 2))) || !isBlank(cellVal(ws.getCell(oc, s + 1))) || !isBlank(cellVal(ws.getCell(oc, s + 5)))) notes.push(`${clerkName}'s Other costs line already has something in it; the invoice's £${total(expenses).toFixed(2)} of expenses weren't added`);
+        else {
+          const merged = ws.getCell(oc, s + 3).isMerged;
+          extras.push({ sheet, ref: `${colName(s + 2)}${oc}`, text: words(expenses) });
+          extras.push({ sheet, ref: `${colName(merged ? s + 1 : s + 5)}${oc}`, amount: total(expenses) });
+          notes.push(`£${total(expenses).toFixed(2)} of expenses put on the Other costs line`);
+        }
+      } else notes.push(`the invoice has £${total(expenses).toFixed(2)} of expenses (${expenses.map((e) => e.text).join(", ")}): this diary has no expenses lines, so add them by hand`);
+      expenseNote = notes.join("; ");
     }
   }
 
@@ -270,7 +286,7 @@ export async function writeInvoiceToDiary(admin: SupabaseClient, uploadId: strin
     for (const c of changes.filter((x) => x.sheet === sheet)) xml = setCell(xml, c.ref, c.value);
     for (const e of extras.filter((x) => x.sheet === sheet)) {
       try { xml = e.amount !== undefined ? setNumberCell(xml, e.ref, e.amount) : setCell(xml, e.ref, e.text ?? ""); }
-      catch { expenseNote = "the expenses couldn't be put on the Other costs line; please add them by hand"; }
+      catch { expenseNote = "the expenses couldn't be put on the expenses lines; please add them by hand"; }
     }
     for (const m of markers.filter((x) => x.sheet === sheet)) {
       const st = cellStyle(xml, m.ref);

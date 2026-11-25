@@ -2,7 +2,7 @@ import Link from "next/link";
 import { requireProfile } from "@/lib/auth";
 import { createClient } from "@/lib/supabase/server";
 import { gbp, fd, fdt, today } from "@/lib/format";
-import { buildDueList, isMine } from "@/lib/due";
+import { buildDueList, isMine, loadReportQueue } from "@/lib/due";
 import { AskBox } from "./ask/ask-box";
 
 export const dynamic = "force-dynamic";
@@ -13,9 +13,9 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ d
   const db = await createClient();
   const t = today();
 
-  const [{ data: overdue }, { data: queue }, due, { data: snap }, { data: lastSync }] = await Promise.all([
+  const [{ data: overdue }, queue, due, { data: snap }, { data: lastSync }] = await Promise.all([
     db.from("invoices").select("number,amount_due,due,chase_state(status)").gt("amount_due", 0).lt("due", t),
-    db.from("report_queue").select("due,checker"),
+    loadReportQueue(db),
     buildDueList(db, me),
     // RLS returns nothing here for admin accounts
     db.from("finance_snapshots").select("*").eq("period", "latest").order("taken_at", { ascending: false }).limit(1),
@@ -64,7 +64,7 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ d
         <Link className={`tile ${qLate ? "alert" : ""}`} href="/reports">
           <span className="label">Reports waiting to check</span>
           <span className="big">{q.length}</span>
-          <span className="sub">{qLate} past due · {q.filter((r) => r.checker === "Unknown").length} with no checker</span>
+          <span className="sub">{qLate} past due · {q.filter((r) => !r.checker).length} with no checker</span>
         </Link>
       </div>
 

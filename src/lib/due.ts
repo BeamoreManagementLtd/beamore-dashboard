@@ -3,8 +3,32 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Profile } from "@/lib/auth";
 import { SCOPES_CHANGED_AT } from "@/lib/xero";
 import { GOOGLE_SCOPES_CHANGED_AT } from "@/lib/google";
+import { loadHolidays, addWorkingDays } from "@/lib/reports/days";
+import { holdOf } from "@/lib/reports/hold";
 import { loadWorkflows, WORKFLOW_COLUMNS, daysSince, type WorkflowProject } from "@/lib/workflow";
 const fdShort = (d: string) => new Date(`${d}T12:00:00Z`).toLocaleDateString("en-GB", { day: "numeric", month: "short", timeZone: "UTC" });
+
+/**
+ * Reports waiting to be checked, from the report tracker (the same queue as the Reports page), not the old "Ready To
+ * Check" sheet (Ronan, 25 Nov 2026: the to-do list said 12 with no checker while the Reports page said none). On hold with
+ * the clerk doesn't count. due = the team's deadline after upload.
+ */
+const OPEN_REPORTS = ["new", "checking", "ready", "failed", "approved", "sending"];
+export async function loadReportQueue(db: SupabaseClient, projectId?: string) {
+  const [h, { data: rs }, { data }] = await Promise.all([
+    loadHolidays(),
+    db.from("report_settings").select("team_days").eq("id", 1).maybeSingle(),
+    projectId
+      ? db.from("reports").select("id,file_name,uploaded_at,checker_id,hold_by,hold_at,hold_reason,modified_at,project_folder_name,projects(name)").in("status", OPEN_REPORTS).eq("project_id", projectId)
+      : db.from("reports").select("id,file_name,uploaded_at,checker_id,hold_by,hold_at,hold_reason,modified_at,project_folder_name,projects(name)").in("status", OPEN_REPORTS),
+  ]);
+  return (data ?? []).filter((r) => !holdOf(r)).map((r) => ({
+    report_name: r.file_name as string,
+    checker: (r.checker_id as string | null) ?? null,
+    due: addWorkingDays(String(r.uploaded_at).slice(0, 10), rs?.team_days ?? 1, h),
+    project_name: ((r.projects as unknown as { name?: string } | null)?.name ?? r.project_folder_name ?? null) as string | null,
+  })).sort((a, b) => a.due.localeCompare(b.due));
+}
 
 /**
  * The team due list. Most items are worked out from live data each time (they disappear once the underlying thing is
@@ -36,7 +60,7 @@ export async function buildDueList(db: SupabaseClient, me: Profile): Promise<Due
   const [profiles, chases, queue, projects, compliance, tasks, unmatchedSites, unmatchedRefs, runs, signoffs, planned] = await Promise.all([
     db.from("profiles").select("id,full_name,email,role"),
     db.from("invoices").select("id,number,due,amount_due,clients(name),chase_state(status,next_action,next_action_due,promised_date,owner_id)").gt("amount_due", 0).lt("due", t),
-    db.from("report_queue").select("checker,due,project_name"),
+    loadReportQueue(db),
     db.from("projects").select("id,display_name,next_action,next_action_due,owner_id").not("next_action_due", "is", null).lte("next_action_due", addDays(t, 14)),
     db.from("clerk_compliance").select("clerk_id,dbs_recheck,chartership_renewal,pi_insurance_expiry,pl_insurance_expiry,cscs_expiry,onboarding_started,onboarding_complete,clerks(name,active)"),
     db.from("tasks").select("id,title,kind,due,link,owner_id,owner_name,ai_note").is("done_at", null),
@@ -96,17 +120,17 @@ export async function buildDueList(db: SupabaseClient, me: Profile): Promise<Due
   if (notChased)
     items.push({ key: "not-chased", kind: "Chasing", title: `${notChased} overdue invoice${notChased > 1 ? "s" : ""} not chased yet`, detail: "Start with the oldest", due: t, link: "/invoices", ...joint });
 
-  // ---- reports waiting to check, one line per checker
-  const q = queue.data ?? [];
-  const checkers = [...new Set(q.map((r) => r.checker ?? "Unknown"))];
+  // ---- reports waiting to check, one line per checker (on hold with the clerk doesn't count)
+  const q = queue;
+  const checkers = [...new Set(q.map((r) => r.checker))];
   for (const c of checkers) {
-    const mine = q.filter((r) => (r.checker ?? "Unknown") === c);
+    const mine = q.filter((r) => r.checker === c);
     const late = mine.filter((r) => r.due && r.due < t).length;
     const earliest = mine.map((r) => r.due).filter(Boolean).sort()[0] ?? null;
-    if (c === "Unknown")
-      items.push({ key: "reports-nochecker", kind: "Reports", title: `${mine.length} report${mine.length > 1 ? "s" : ""} with no checker`, detail: `Decide who checks ${[...new Set(mine.map((r) => r.project_name).filter(Boolean))].slice(0, 6).join(", ")}${mine.length > 6 ? "…" : ""} and add them to the report scanner's checker list`, due: earliest, link: "/reports?checker=Unknown", ...joint });
+    if (!c)
+      items.push({ key: "reports-nochecker", kind: "Reports", title: `${mine.length} report${mine.length > 1 ? "s" : ""} with no checker`, detail: `Decide who checks ${[...new Set(mine.map((r) => r.project_name).filter(Boolean))].slice(0, 6).join(", ")}${mine.length > 6 ? "…" : ""}`, due: earliest, link: "/reports?who=none", ...joint });
     else
-      items.push({ key: `reports-${c}`, kind: "Reports", title: `Check ${mine.length} report${mine.length > 1 ? "s" : ""}`, detail: late ? `${late} past due` : undefined, due: earliest, link: `/reports?checker=${encodeURIComponent(c)}`, ...ownerOf(null, c) });
+      items.push({ key: `reports-${c}`, kind: "Reports", title: `Check ${mine.length} report${mine.length > 1 ? "s" : ""}`, detail: late ? `${late} past due` : undefined, due: earliest, link: `/reports?who=${c}`, ...ownerOf(c, null) });
   }
 
   // ---- project information asked for over a week ago and not received (one line per project)
