@@ -42,7 +42,7 @@ export function greeting(to: string) {
  * records the same email against other refs (one email covering several reports).
  */
 export async function sendFromAi(admin: SupabaseClient, e: Queued, also: Queued[] = []) {
-  const body = e.body.replace(/\n+Ronan O'Boyle\n+Beamore Management Ltd\s*$/, "\n\nBeamore Management Ltd");
+  const body = e.body.replace(/\n+Ronan O'Boyle\n+Beamore Management Ltd\s*$/, "\n\nBeamore AI Assistant");
   const { sendFromMailbox, AI_MAILBOX } = await import("@/lib/google-user");
   const { driveClient } = await import("@/lib/google");
   let res: unknown = null;
