@@ -104,6 +104,14 @@ export async function xeroClient(admin: SupabaseClient) {
   const post = <T>(path: string, body: unknown) => call<T>("POST", path, {}, body);
   /** Only used to delete tracking options never used on an invoice, for finished/lost/merged jobs. */
   const del = <T>(path: string) => call<T>("DELETE", path, {});
-  return Object.assign(get, { put, post, del });
+  /** Attaches a file to a record, e.g. the clerk's invoice PDF on a draft bill (Ronan, 25 Nov 2026). */
+  const attach = async (path: string, fileName: string, body: Buffer, contentType: string) => {
+    const res = await fetch(`${API}/api.xro/2.0/${path}/Attachments/${encodeURIComponent(fileName)}`, {
+      method: "PUT", headers: { Authorization: `Bearer ${access}`, "Xero-tenant-id": c.tenant_id, Accept: "application/json", "Content-Type": contentType },
+      body: new Uint8Array(body), cache: "no-store",
+    });
+    if (!res.ok) throw new Error(`Xero attachment failed (${res.status}): ${(await res.text()).slice(0, 200)}`);
+  };
+  return Object.assign(get, { put, post, del, attach });
 }
 export type XeroGet = Awaited<ReturnType<typeof xeroClient>>;

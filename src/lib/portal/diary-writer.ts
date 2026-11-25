@@ -50,7 +50,7 @@ const cellVal = (c: ExcelJS.Cell) => {
 };
 const isBlank = (v: unknown) => v === null || v === undefined || (typeof v === "string" && !v.trim());
 /** How this clerk usually words sites -> exact diary names. */
-async function resolveSites(admin: SupabaseClient, clerkId: string, wordings: string[]) {
+export async function resolveSites(admin: SupabaseClient, clerkId: string, wordings: string[]) {
   const since = new Date(Date.now() - 200 * 864e5).toISOString().slice(0, 10);
   const [{ data: rates }, { data: mine }, { data: aliases }] = await Promise.all([
     admin.from("rates").select("site_as_typed"),

@@ -82,7 +82,7 @@ export default async function ClerkPortalAdmin({ searchParams }: { searchParams:
 
       {tab === "diary" && await (async () => {
         const [{ data }, { data: rates }] = await Promise.all([
-          db.from("portal_uploads").select("id,clerk_id,file_name,received_at,period,diary_state,diary_note,drive_file_id,clerks(name),portal_diary_cells(sheet,cell,value,work_date,diary_date)")
+          db.from("portal_uploads").select("id,clerk_id,file_name,received_at,period,diary_state,diary_note,drive_file_id,ai_result->xero,clerks(name),portal_diary_cells(sheet,cell,value,work_date,diary_date)")
             .eq("kind", "invoice").not("diary_state", "is", null).neq("status", "deleted").order("received_at", { ascending: false }).limit(100),
           db.from("rates").select("site_as_typed").order("site_as_typed"),
         ]);
@@ -96,7 +96,7 @@ export default async function ClerkPortalAdmin({ searchParams }: { searchParams:
             <datalist id="sites">{(rates ?? []).map((x) => <option key={x.site_as_typed} value={x.site_as_typed} />)}</datalist>
             {rows.length ? (
               <table>
-                <thead><tr><th>Received</th><th>Clerk</th><th>Invoice</th><th>Diary</th><th></th></tr></thead>
+                <thead><tr><th>Received</th><th>Clerk</th><th>Invoice</th><th>Diary</th><th>Xero bill</th><th></th></tr></thead>
                 <tbody>
                   {rows.map((u) => {
                     const unsure = u.diary_state === "needs_review" ? [...(u.diary_note ?? "").matchAll(/"([^"]+)"/g)].map((m) => m[1]) : [];
@@ -118,6 +118,14 @@ export default async function ClerkPortalAdmin({ searchParams }: { searchParams:
                             </form>
                           ))}
                         </td>
+                        <td>{(() => {
+                          // the draft bill made in Xero once it's in the diary (Ronan, 25 Nov 2026)
+                          const x = (u as unknown as { xero?: { state: string; note: string; bill_id?: string } | null }).xero;
+                          if (!x) return u.diary_state === "written" ? <span className="small muted">next run</span> : null;
+                          const t = x.state === "created" || x.state === "exists" ? "good" : x.state === "needs_review" ? "warn" : "neutral";
+                          const l = x.state === "created" ? "Draft made" : x.state === "exists" ? "Already in Xero" : x.state === "needs_review" ? "Needs you" : "Not for Xero";
+                          return <><span className={`pill ${t}`}>{l}</span><div className="small">{x.bill_id ? <a href={`https://go.xero.com/AccountsPayable/View.aspx?InvoiceID=${x.bill_id}`} target="_blank" rel="noreferrer">{x.note}</a> : x.note}</div></>;
+                        })()}</td>
                         <td>{u.diary_state === "needs_review" && !unsure.length && <form action={retryDiary}><input type="hidden" name="id" value={u.id} /><button className="btn">Try again</button></form>}</td>
                       </tr>
                     );
