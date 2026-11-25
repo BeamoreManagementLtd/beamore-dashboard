@@ -151,5 +151,19 @@ export async function makePendingBills(admin: SupabaseClient) {
     await admin.from("portal_uploads").update({ ai_result: { ...((cur?.ai_result ?? {}) as object), xero: { ...o, at: new Date().toISOString() } } }).eq("id", r.id);
     if (o.state === "created") made++;
   }
+  // bills made before the attachment permission was given: attach the invoice now
+  const { data: noFile } = await admin.from("portal_uploads").select("id,file_name,mime,drive_file_id,ai_result").in("kind", ["invoice", "company_invoice"]).eq("ai_result->xero->>state", "created").like("ai_result->xero->>note", "%couldn't be attached%").limit(10);
+  if (noFile?.length) {
+    const xero = await xeroClient(admin);
+    const g = await driveClient(admin);
+    for (const r of noFile) {
+      const x = (r.ai_result as Ai).xero!;
+      if (!x.bill_id || !r.drive_file_id) continue;
+      try {
+        await xero.attach(`Invoices/${x.bill_id}`, r.file_name, Buffer.from(await g.download(r.drive_file_id)), r.mime || "application/pdf");
+        await admin.from("portal_uploads").update({ ai_result: { ...(r.ai_result as object), xero: { ...x, note: `${x.note.split(" (the invoice file couldn't be attached")[0]} (invoice attached)`, at: new Date().toISOString() } } }).eq("id", r.id);
+      } catch { break; } // still not allowed: try again next time
+    }
+  }
   return made;
 }

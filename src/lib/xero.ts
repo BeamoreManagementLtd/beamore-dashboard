@@ -5,10 +5,11 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 // sign-off create DRAFT invoices; nothing is ever approved or sent from the dashboard.
 export const XERO_SCOPES =
   process.env.XERO_SCOPES ??
-  "openid profile email offline_access accounting.invoices accounting.settings accounting.reports.profitandloss.read accounting.reports.banksummary.read";
+  "openid profile email offline_access accounting.invoices accounting.attachments accounting.settings accounting.reports.profitandloss.read accounting.reports.banksummary.read";
+// accounting.attachments (25 Nov 2026): the clerk's invoice PDF attached to the draft bill made from it
 // accounting.settings: only used when the director clicks "Set up Project tracking" (adds the category and its options),
 // and to read the Project options so draft invoices can be tagged. Connections made before this date lack it.
-export const SCOPES_CHANGED_AT = "2026-11-14T17:00:00Z";
+export const SCOPES_CHANGED_AT = "2026-11-25T10:00:00Z";
 const AUTH_URL = "https://login.xero.com/identity/connect/authorize";
 const TOKEN_URL = "https://identity.xero.com/connect/token";
 const API = "https://api.xero.com";
