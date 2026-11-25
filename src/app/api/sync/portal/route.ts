@@ -6,6 +6,7 @@ import { findHolidayEmails } from "@/lib/holidays";
 import { writeContactsIfNeeded } from "@/lib/portal/contacts-writer";
 import { writeProjectsTab } from "@/lib/portal/projects-writer";
 import { makePendingBills } from "@/lib/portal/xero-bills";
+import { sendAskedFromAi } from "@/lib/outbox";
 
 export const maxDuration = 300;
 export const dynamic = "force-dynamic";
@@ -19,6 +20,8 @@ export async function GET(request: NextRequest) {
   const { data: run } = await admin.from("sync_runs").insert({ source: "portal" }).select("id").single();
   try {
     const r = await processPending(admin);
+    // emails Ronan asked to go from ai@beamore.co.uk
+    const aiEmails = await sendAskedFromAi(admin).catch(() => 0);
     const diary = await writePendingToDiary(admin);
     // invoices now in the diary become draft bills in Xero (Ronan, 25 Nov 2026)
     const bills = await makePendingBills(admin).catch(() => 0);
@@ -30,8 +33,8 @@ export async function GET(request: NextRequest) {
     // email list changes made on the dashboard that aren't in the diary's Projects tab yet
     const { count: listChanges } = await admin.from("projects").select("id", { count: "exact", head: true }).not("details->_lists_pending", "is", null);
     if (listChanges) await writeProjectsTab(admin).catch(() => undefined);
-    await admin.from("sync_runs").update({ finished_at: new Date().toISOString(), ok: r.failed === 0, message: `${r.done} processed, ${r.failed} failed, ${diary} invoices and ${holidays} holidays written to the diary, ${bills} draft bills made in Xero, ${holidayEmails} holiday emails found${contacts ? `, contact details: ${contacts.note || "no change"}` : ""}` }).eq("id", run?.id);
-    return NextResponse.json({ ...r, diary, bills, holidays, holidayEmails, contacts });
+    await admin.from("sync_runs").update({ finished_at: new Date().toISOString(), ok: r.failed === 0, message: `${r.done} processed, ${r.failed} failed, ${diary} invoices and ${holidays} holidays written to the diary, ${bills} draft bills made in Xero, ${holidayEmails} holiday emails found, ${aiEmails} emails sent from ai@${contacts ? `, contact details: ${contacts.note || "no change"}` : ""}` }).eq("id", run?.id);
+    return NextResponse.json({ ...r, aiEmails, diary, bills, holidays, holidayEmails, contacts });
   } catch (e) {
     const m = e instanceof Error ? e.message : String(e);
     await admin.from("sync_runs").update({ finished_at: new Date().toISOString(), ok: false, message: m }).eq("id", run?.id);

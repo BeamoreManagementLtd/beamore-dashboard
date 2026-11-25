@@ -55,3 +55,21 @@ export async function sendFromAi(admin: SupabaseClient, e: Queued, also: Queued[
   for (const q of [e, ...also]) await queueEmail(admin, { ...q, body, status, note });
   return !!res;
 }
+
+/**
+ * Emails Ronan has asked for, to go from ai@beamore.co.uk (status "ai_to_send" on the email list): sent by the 15-minute
+ * job, which holds the mailbox's Google keys (25 Nov 2026: Sunny Singh's CMS 13 dates, written from a session that
+ * couldn't sign in to the mailbox itself). If ai@ can't send, it waits on "Emails to send" for someone to check.
+ */
+export async function sendAskedFromAi(admin: SupabaseClient) {
+  const { data } = await admin.from("email_outbox").select("id,to_email,subject,body").eq("status", "ai_to_send").order("created_at").limit(10);
+  const { sendFromMailbox, AI_MAILBOX } = await import("@/lib/google-user");
+  let sent = 0;
+  for (const e of data ?? []) {
+    let ok = false;
+    try { ok = !!(await sendFromMailbox(admin, AI_MAILBOX, "Beamore AI Assistant", { to: e.to_email, subject: e.subject, body: e.body })); } catch { ok = false; }
+    await admin.from("email_outbox").update(ok ? { status: "sent", done_at: new Date().toISOString(), note: "Sent from ai@beamore.co.uk at Ronan's request" } : { status: "waiting", note: "ai@beamore.co.uk couldn't send it: check and send" }).eq("id", e.id);
+    if (ok) sent++;
+  }
+  return sent;
+}
