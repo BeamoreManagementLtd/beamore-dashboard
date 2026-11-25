@@ -11,6 +11,19 @@ import { projectCategories, isEducation, TRACKING_NAMES } from "@/lib/xero-track
  * sent from the dashboard: drafts wait in Xero for Ronan.
  */
 
+/**
+ * When a client invoice is due. Usually the same terms as the last invoice copied; some clients have fixed terms:
+ *  - The Forum Hotel (Ronan, 25 Nov 2026): billed at the end of the month, paid on the 5th of the month after next,
+ *    e.g. November's invoice (dated 30 November) is due 5 January
+ */
+function dueDate(project: string, contact: string, end: string, termDays: number) {
+  if (/forum/i.test(`${project} ${contact}`)) {
+    const d = new Date(`${end}T00:00:00Z`);
+    return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 2, 5)).toISOString().slice(0, 10);
+  }
+  return addDays(end, termDays);
+}
+
 export const monthStart = (ym: string) => `${ym.slice(0, 7)}-01`;
 const lastDay = (m: string) => new Date(Date.UTC(+m.slice(0, 4), +m.slice(5, 7), 0)).toISOString().slice(0, 10);
 const addDays = (d: string, n: number) => new Date(Date.parse(d + "T00:00:00Z") + n * 86400000).toISOString().slice(0, 10);
@@ -182,7 +195,7 @@ export async function prepareDrafts(admin: SupabaseClient, m: string, { test = f
     const tagged = (l: XLine) => option && t.cat ? [...(l.Tracking ?? []).filter((x) => !TRACKING_NAMES.includes(x.Name)), { Name: t.cat.Name, Option: option }] : l.Tracking?.filter((x) => !TRACKING_NAMES.includes(x.Name));
     const payload = {
       Type: "ACCREC", Status: "DRAFT", Contact: { ContactID: tpl.Contact.ContactID }, InvoiceNumber: number, Reference: reference,
-      Date: end, DueDate: addDays(end, termDays), LineAmountTypes: tpl.LineAmountTypes ?? "Exclusive",
+      Date: end, DueDate: dueDate(p.name, tpl.Contact.Name, end, termDays), LineAmountTypes: tpl.LineAmountTypes ?? "Exclusive",
       LineItems: lines.map((l) => ({
         Description: l.Description, ...(priced(l) ? { Quantity: l.Quantity, UnitAmount: l.UnitAmount, AccountCode: l.AccountCode, TaxType: l.TaxType } : {}),
         ...(l.ItemCode && priced(l) ? { ItemCode: l.ItemCode } : {}),
