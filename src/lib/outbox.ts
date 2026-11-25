@@ -38,7 +38,7 @@ export function greeting(to: string) {
 /**
  * Emails the dashboard sends by itself (report visit dates, monthly trackers, insurance renewals, portal corrections,
  * project details, missing reports) go from ai@beamore.co.uk, never from Ronan's address (Ronan, 25 Nov 2026). If that
- * mailbox can't send, the email waits on "Emails to send" instead. Signed from Beamore rather than from Ronan. `also`
+ * mailbox can't send, the email waits on "Emails to send" instead. Signed "Beamore AI Assistant", not Ronan. `also`
  * records the same email against other refs (one email covering several reports).
  */
 export async function sendFromAi(admin: SupabaseClient, e: Queued, also: Queued[] = []) {
@@ -47,8 +47,8 @@ export async function sendFromAi(admin: SupabaseClient, e: Queued, also: Queued[
   const { driveClient } = await import("@/lib/google");
   let res: unknown = null;
   try {
-    res = (await sendFromMailbox(admin, AI_MAILBOX, "Beamore Management", { to: e.to, subject: e.subject, body }))
-      ?? (await (await driveClient(admin)).sendAutomaticAs({ email: AI_MAILBOX, name: "Beamore Management" }, { to: e.to, subject: e.subject, body }));
+    res = (await sendFromMailbox(admin, AI_MAILBOX, "Beamore AI Assistant", { to: e.to, subject: e.subject, body }))
+      ?? (await (await driveClient(admin)).sendAutomaticAs({ email: AI_MAILBOX, name: "Beamore AI Assistant" }, { to: e.to, subject: e.subject, body }));
   } catch { res = null; }
   const status = res ? "sent" as const : "waiting" as const;
   const note = res ? "Sent automatically from ai@beamore.co.uk" : "ai@beamore.co.uk couldn't send it: check and send";
