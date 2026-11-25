@@ -313,6 +313,25 @@ export async function writeInvoiceToDiary(admin: SupabaseClient, uploadId: strin
   return { state: "written", note: `${changes.length} half-day${changes.length === 1 ? "" : "s"} (${days} day${days === 1 ? "" : "s"}) written to ${[...new Set(changes.map((c) => c.sheet))].join(", ")}${markerNotes.length ? `; ${markerNotes.join("; ")}` : "; Invoice received marked green"}${expenseNote ? `; ${expenseNote}` : ""}${problems.length ? `. CHECK: ${problems.join("; ")}` : ""}` };
 }
 
+/**
+ * What the diary writer found goes in the upload's Issues ("Diary: ..."), so "Beamore to look" means something to look
+ * at: a CHECK after writing, or an invoice it couldn't write. A clean write clears it (Ronan, 25 Nov 2026).
+ */
+export function diaryIssue(o: Outcome) {
+  if (o.state === "needs_review") return `Diary: ${o.note}`;
+  const check = /\bCHECK: ([\s\S]*)$/.exec(o.note ?? "")?.[1];
+  return o.state === "written" && check ? `Diary: ${check}` : null;
+}
+async function diaryIssues(admin: SupabaseClient, id: string, o: Outcome) {
+  if (o.state === "waiting") return {};
+  const { data: u } = await admin.from("portal_uploads").select("status,issues").eq("id", id).single();
+  if (!u) return {};
+  const issue = diaryIssue(o);
+  const issues = [...((u.issues ?? []) as string[]).filter((i) => !i.startsWith("Diary: ")), ...(issue ? [issue] : [])];
+  const status = issue && u.status === "checked" ? "needs_beamore" : !issue && u.status === "needs_beamore" && !issues.length ? "checked" : u.status;
+  return { issues, status };
+}
+
 /** Every 15 minutes: invoices read by AI that are waiting to go into the diary (one at a time, so writes never overlap). */
 export async function writePendingToDiary(admin: SupabaseClient) {
   const { data } = await admin.from("portal_uploads").select("id").eq("kind", "invoice").eq("diary_state", "waiting").neq("status", "deleted").order("received_at").limit(5);
@@ -321,7 +340,7 @@ export async function writePendingToDiary(admin: SupabaseClient) {
     let o: Outcome;
     try { o = await writeInvoiceToDiary(admin, r.id); }
     catch (e) { o = { state: "needs_review", note: `Couldn't write to the diary: ${e instanceof Error ? e.message.slice(0, 200) : "error"}` }; }
-    await admin.from("portal_uploads").update({ diary_state: o.state, diary_note: o.note }).eq("id", r.id);
+    await admin.from("portal_uploads").update({ diary_state: o.state, diary_note: o.note, ...(await diaryIssues(admin, r.id, o)) }).eq("id", r.id);
     if (o.state === "written") written++;
     if (o.state === "waiting") break; // diary busy: try the rest next time
   }

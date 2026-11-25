@@ -160,7 +160,9 @@ async function applyInvoice(admin: SupabaseClient, u: Row, r: Record<string, unk
     const end = new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10);
     const { data: v } = await admin.from("diary_visits").select("days").eq("clerk_id", u.clerk_id).eq("side", "charged").gte("visit_date", `${period}-01`).lte("visit_date", end);
     diaryDays = (v ?? []).reduce((s, x) => s + Number(x.days), 0);
-    if (r.days !== null && r.days !== undefined && Math.abs(Number(r.days) - diaryDays) > 0.01) forBeamore.push(`Invoice charges ${r.days} days; the diary shows ${diaryDays} for ${period}`);
+    // no "the diary shows N days" issue here: the invoice hasn't gone into the diary yet at this point, so it was always 0
+    // (Ronan, 25 Nov 2026: "of course it shows 0 days... you are supposed to fill it in"). The diary writer checks the
+    // days and money itself and lists any difference under CHECK.
   }
   if (r.supplier && u.clerk_id) {
     const names = await knownNames(admin, u.clerk_id);
