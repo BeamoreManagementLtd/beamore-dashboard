@@ -675,9 +675,8 @@ async function askForVisitDates(admin: SupabaseClient, rep: { id: string; clerk_
   const name = rep.file_name.replace(/\.docx?$/i, "");
   const body = `Hi ${first}\n\nThanks for your report (${name}). ${how === "week_commencing" ? "I noticed it gives the week (\"week commencing\") rather than the day you were on site." : "I couldn't see the date of the visit written in it."}\n\nCould you make sure each report has the date of each visit on it, near the top? If you were on site twice, please put both dates (for example 10/11/26 and 13/11/26), rather than week commencing.\n\nIt helps us match each report to the visit and keep on top of when reports go out.\n\nMany thanks\n\nRonan O'Boyle\nBeamore Management Ltd`;
   const subject = "The visit date on your reports";
-    // nothing is sent automatically from Ronan's address (Ronan, 25 Nov 2026): it waits on "Emails to send" for a person to check and send
-  const { queueEmail } = await import("@/lib/outbox");
-  await queueEmail(admin, { kind: "report-visit-dates", to: c.email, subject, body, clerkId: rep.clerk_id, ref: rep.id, status: "waiting", note: "Check and send (automatic sending is off)" });
+  const { sendFromAi } = await import("@/lib/outbox");
+  await sendFromAi(admin, { kind: "report-visit-dates", to: c.email, subject, body, clerkId: rep.clerk_id, ref: rep.id });
 }
 
 /**
@@ -706,9 +705,8 @@ export async function askToUpdateMonthlyTracker(admin: SupabaseClient, rep: { id
     `Many thanks\n\nRonan O'Boyle\nBeamore Management Ltd`,
   ].join("\n\n");
   const subject = `Issues tracker in your monthly report: ${name}`;
-    // nothing is sent automatically from Ronan's address (Ronan, 25 Nov 2026): it waits on "Emails to send" for a person to check and send
-  const { queueEmail } = await import("@/lib/outbox");
-  await queueEmail(admin, { kind: "monthly-tracker", to: c.email, subject, body, clerkId: rep.clerk_id, ref: rep.id, status: "waiting", note: "Check and send (automatic sending is off)" });
+  const { sendFromAi } = await import("@/lib/outbox");
+  await sendFromAi(admin, { kind: "monthly-tracker", to: c.email, subject, body, clerkId: rep.clerk_id, ref: rep.id });
   return true;
 }
 

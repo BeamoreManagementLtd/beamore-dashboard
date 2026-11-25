@@ -2,7 +2,7 @@ import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { driveClient } from "@/lib/google";
 import { PI_ASK_PENCE } from "@/lib/portal/data";
-import { queueEmail } from "@/lib/outbox";
+import { queueEmail, sendFromAi } from "@/lib/outbox";
 
 /**
  * Renewals (onboarding O2, "for as long as they work with us"), run once a day.
@@ -74,10 +74,9 @@ export async function runRenewals(admin: SupabaseClient, opts: { dryRun?: boolea
       out.plan.push(`${c.name}: ${due.map((d) => `${d.type} ${d.expires} (${d.when})`).join(", ")}`);
       if (!opts.dryRun) {
         g ??= await driveClient(admin);
-    // nothing is sent automatically from Ronan's address (Ronan, 25 Nov 2026): it waits on "Emails to send" for a person to check and send
         for (const d of due) chased[`${d.field}@${d.expires}`] = today;
         await admin.from("clerk_compliance").update({ expiry_chased: chased }).eq("clerk_id", r.clerk_id);
-        await queueEmail(admin, { kind: "insurance-renewal", to: c.email, subject, body, clerkId: r.clerk_id, ref: `${r.clerk_id}:${today}`, status: "waiting", note: "Check and send (automatic sending is off)" }).catch(() => undefined);
+        await sendFromAi(admin, { kind: "insurance-renewal", to: c.email, subject, body, clerkId: r.clerk_id, ref: `${r.clerk_id}:${today}` }).catch(() => undefined);
         out.sent++;
       }
     }

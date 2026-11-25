@@ -70,7 +70,7 @@ export async function chaseMissing(admin: SupabaseClient, today: string, h: Set<
     const what = m.r.kind === "monthly" ? `the monthly report for ${m.r.name.replace(/ monthly$/, "")}` : `${m.r.name}, week of ${new Date(`${m.week}T00:00:00Z`).toLocaleDateString("en-GB", { day: "numeric", month: "long", timeZone: "UTC" })}`;
     byClerk.set(m.r.clerkId, [...(byClerk.get(m.r.clerkId) ?? []), { ref, text: what, projectId: m.r.projectId }]);
   }
-  const { queueEmail } = await import("@/lib/outbox");
+  const { sendFromAi } = await import("@/lib/outbox");
   let sent = 0;
   for (const [clerkId, items] of byClerk) {
     const { data: c } = await admin.from("clerks").select("name,email,active").eq("id", clerkId).single();
@@ -83,8 +83,8 @@ export async function chaseMissing(admin: SupabaseClient, today: string, h: Set<
       `Many thanks\n\nRonan O'Boyle\nBeamore Management Ltd`,
     ].join("\n\n");
     const subject = one ? `Report not uploaded yet: ${items[0].text}` : `${items.length} reports not uploaded yet`;
-    // nothing is sent automatically from Ronan's address (Ronan, 25 Nov 2026): it waits on "Emails to send" for a person to check and send
-    for (const i of items) await queueEmail(admin, { kind: "report-missing", to: c.email, subject, body, clerkId, projectId: i.projectId, ref: i.ref, status: "waiting", note: "Check and send (automatic sending is off)" });
+    const q = items.map((i) => ({ kind: "report-missing", to: c.email!, subject, body, clerkId, projectId: i.projectId, ref: i.ref }));
+    await sendFromAi(admin, q[0], q.slice(1));
     sent++;
   }
   return sent;

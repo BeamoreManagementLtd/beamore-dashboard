@@ -72,10 +72,9 @@ async function draftCorrection(admin: SupabaseClient, u: Row, problems: string[]
   const body = `Hi ${c.name.split(" ")[0]},\n\nThanks for uploading your ${what} (${u.file_name ?? "your file"}). We checked it and found:\n\n${problems.map((p) => `- ${p}`).join("\n")}\n\nCould you upload a corrected or renewed copy on the portal when you can?\n\nhttps://portal.beamore.co.uk\n\nMany thanks,\nRonan\n\nRonan O'Boyle\nBeamore Management Ltd`;
   // sent straight away from Ronan's Gmail (Ronan, 17 Nov 2026: "don't put them onto the to-do list, just deal with them");
   // a copy is kept on "Emails to send". When a good replacement is uploaded the flag clears itself (supersede below).
-  const { queueEmail } = await import("@/lib/outbox");
+  const { sendFromAi } = await import("@/lib/outbox");
   const subject = `Please update your ${what}`;
-    // nothing is sent automatically from Ronan's address (Ronan, 25 Nov 2026): it waits on "Emails to send" for a person to check and send
-  await queueEmail(admin, { kind: "portal-correction", to: c.email, subject, body, clerkId: u.clerk_id, ref: u.id, status: "waiting", note: "Check and send (automatic sending is off)" });
+  await sendFromAi(admin, { kind: "portal-correction", to: c.email, subject, body, clerkId: u.clerk_id, ref: u.id });
   await admin.from("portal_uploads").update({ correction_drafted_at: new Date().toISOString() }).eq("id", u.id);
 }
 
