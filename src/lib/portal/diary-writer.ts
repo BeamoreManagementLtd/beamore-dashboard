@@ -540,8 +540,8 @@ export async function undoInvoiceInDiary(admin: SupabaseClient, uploadId: string
   const wbXml = await zip.file("xl/workbook.xml")!.async("string");
   const rels = await zip.file("xl/_rels/workbook.xml.rels")!.async("string");
   for (const sheet of [...new Set(cells.map((c) => c.sheet))]) {
-    const rid = new RegExp(`<(?:\w+:)?sheet\b[^>]*name="${sheet}"[^>]*r:id="([^"]+)"`).exec(wbXml)?.[1];
-    const target = rid && new RegExp(`<Relationship\b[^>]*Id="${rid}"[^>]*Target="([^"]+)"`).exec(rels)?.[1];
+    const rid = new RegExp(String.raw`<(?:\w+:)?sheet\b[^>]*name="${sheet}"[^>]*r:id="([^"]+)"`).exec(wbXml)?.[1] ?? new RegExp(String.raw`<(?:\w+:)?sheet\b[^>]*r:id="([^"]+)"[^>]*name="${sheet}"`).exec(wbXml)?.[1];
+    const target = rid && new RegExp(String.raw`<Relationship\b[^>]*Id="${rid}"[^>]*Target="([^"]+)"`).exec(rels)?.[1] || rid && new RegExp(String.raw`<Relationship\b[^>]*Target="([^"]+)"[^>]*Id="${rid}"`).exec(rels)?.[1];
     if (!target) throw new Error(`can't find the ${sheet} sheet inside the file`);
     const p = target.startsWith("/") ? target.slice(1) : `xl/${target}`;
     let xml = await zip.file(p)!.async("string");
