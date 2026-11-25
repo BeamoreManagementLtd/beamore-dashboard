@@ -559,7 +559,8 @@ export async function undoInvoiceInDiary(admin: SupabaseClient, uploadId: string
   const fileId = diaryFile(g.connection, year);
   if (!fileId) throw new Error(`no Diary ${year}`);
   const meta = await g.json<{ modifiedTime: string; headRevisionId: string }>(`files/${fileId}`, { fields: "modifiedTime,headRevisionId", supportsAllDrives: "true" });
-  if (Date.now() - Date.parse(meta.modifiedTime) < QUIET_MS) throw new Error("The diary was changed in the last 10 minutes; try again shortly");
+  const ours = (await admin.from("portal_diary_cells").select("id", { count: "exact", head: true }).eq("revision_after", meta.headRevisionId)).count;
+  if (!ours && Date.now() - Date.parse(meta.modifiedTime) < QUIET_MS) throw new Error("The diary was changed in the last 10 minutes; try again shortly");
   const raw = Buffer.from(await g.download(fileId));
   const wb = await loadWorkbook(raw);
   for (const c of cells) {
