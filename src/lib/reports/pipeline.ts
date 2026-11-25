@@ -110,6 +110,8 @@ const DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.doc
 /** The box in the report for the date it goes to the TA (DfE diaries / site visit reports), most specific first. */
 const TA_DATE_LABELS = ["Date issued to Lead Consultant (TA)", "Date issued to Lead Consultant", "Date issued to TA", "Date issued to the TA", "Date sent to TA", "Issue Date", "Date of issue", "Date issued"];
 const SETTLE_MS = 30 * 60 * 1000;
+/** A Word file uploaded longer ago than this and only found because it changed is taken as already dealt with. */
+const OLD_FILE_DAYS = 21;
 const STUCK = "The check stopped part-way";
 
 /** A report's name with order, punctuation and "No"/"Nr" set aside, so a renamed copy matches the clerk's original. */
@@ -208,7 +210,15 @@ export async function scanReports(admin: SupabaseClient) {
     const key = sameName(f.name);
     const { data: done } = await admin.from("reports").select("id,file_name,renamed_from,checked_name,status,done_at,pdf_file_id").eq("folder_id", rf.id).in("status", ["done", "sent"]);
     const twin = (done ?? []).find((d) => [d.file_name, d.renamed_from, d.checked_name].some((n) => n && sameName(n) === key));
+    // a file that's been in Drive for weeks and only turned up now because it was changed (renamed, tidied): it was dealt
+    // with before the tracker knew about it, so it's recorded as done, not checked and shown as late (Ray's Foxwood NEC
+    // Supervisor Diaries 01-08 from August to October, renamed on 25 Nov 2026, Ronan)
+    const old = !twin && Date.parse(f.createdTime) < Date.now() - OLD_FILE_DAYS * 864e5;
     await admin.from("reports").insert({
+      ...(old ? {
+        status: "done", done_at: new Date().toISOString(),
+        error: `Uploaded on ${new Date(f.createdTime).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })} and only found now because it was changed, so taken as already checked and sent. If it does need checking, Check again.`,
+      } : {}),
       ...(twin ? {
         status: "ignored", pdf_file_id: twin.pdf_file_id, done_at: twin.done_at,
         error: `The same report as "${twin.file_name}", already ${twin.status === "sent" ? "sent" : "done"}${twin.done_at ? ` on ${new Date(twin.done_at).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}` : ""}: the clerk seems to have uploaded it again. If they've changed something that needs to go out, Check again.`,
@@ -219,7 +229,7 @@ export async function scanReports(admin: SupabaseClient) {
       uploaded_at: f.createdTime, modified_at: f.modifiedTime, main_folder: MAIN_FOLDER_NAME[pf.parents?.[0] ?? ""] ?? null,
       checker_id: p?.report_checker_id ?? byFirst((oldQueue ?? []).find((q) => q.project_id === p?.id && q.checker && q.checker !== "Unknown")?.checker),
       // an old-format Word file can't be checked automatically: it waits for the team to check it by hand
-      ...(/\.doc$/i.test(f.name) ? { status: "failed", error: "Old Word format (.doc): the dashboard can't check it. Open it in Word, check it by hand and save it as .docx (or make the PDF as before)." } : {}),
+      ...(!old && /\.doc$/i.test(f.name) ? { status: "failed", error: "Old Word format (.doc): the dashboard can't check it. Open it in Word, check it by hand and save it as .docx (or make the PDF as before)." } : {}),
     });
     found++;
   }
