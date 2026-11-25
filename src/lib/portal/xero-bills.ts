@@ -6,7 +6,8 @@ import { projectCategories, isEducation } from "@/lib/xero-tracking";
 import { resolveSites } from "./diary-writer";
 
 /**
- * A clerk's invoice uploaded on the portal becomes a DRAFT bill in Xero once it's in the diary (Ronan, 25 Nov 2026:
+ * A clerk's invoice uploaded on the portal becomes a DRAFT bill in Xero once the diary step has run, whether it went in
+ * or is held there for a person (Ronan, 25 Nov 2026:
  * "how come their invoice wasn't put onto Xero straight away"). Set out the way the office enters them by hand: account
  * 464, prices excluding VAT, VAT at 20% only when the clerk charges it (no CIS at Beamore), one line per job
  * ("Brunswick School Woodhouse - October 2026", days x day rate) tagged with the job's project, the clerk's invoice
@@ -140,7 +141,7 @@ export async function makeBill(admin: SupabaseClient, uploadId: string): Promise
 
 /** Every 15 minutes: invoices now in the diary that haven't been made into a Xero bill yet. */
 export async function makePendingBills(admin: SupabaseClient) {
-  const { data } = await admin.from("portal_uploads").select("id,ai_result").in("kind", ["invoice", "company_invoice"]).eq("diary_state", "written")
+  const { data } = await admin.from("portal_uploads").select("id,ai_result").in("kind", ["invoice", "company_invoice"]).in("diary_state", ["written", "needs_review"])
     .is("deleted_at", null).neq("status", "deleted").gte("received_at", FROM).order("received_at").limit(40);
   let made = 0;
   for (const r of (data ?? []).filter((x) => !(x.ai_result as Ai | null)?.xero).slice(0, 8)) {

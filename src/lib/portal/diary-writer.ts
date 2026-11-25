@@ -119,6 +119,15 @@ export async function writeInvoiceToDiary(admin: SupabaseClient, uploadId: strin
   const unsure = wordings.filter((w) => !map.get(w));
   if (unsure.length) return { state: "needs_review", note: `Couldn't be sure which diary site: ${unsure.map((w) => `"${w}"`).join(", ")}` };
 
+  // ---- the days must add up to what the invoice charges (Ronan, 25 Nov 2026: Andrew Marris's "Wales High School
+  // November x 5 @ 310.00" went in as five half days; a visit charged at the day rate is a whole day, the site visit
+  // and the report). The reading of the dates is checked against the money at the diary's rates and the invoice's
+  // day count; a visit read as a half day becomes a whole day when that's what the invoice adds up to.
+  const settled = await settleDays(admin, u.ai_result as Ai, visits, (w) => map.get(w.trim())!);
+  if (!settled.visits) return { state: "needs_review", note: settled.note ?? "The days don't add up" };
+  visits = settled.visits!;
+  const rateNote = settled.note ?? "";
+
   // ---- one list of slot values per day
   const perDay = new Map<string, string[]>();
   for (const v of visits) {
@@ -126,8 +135,8 @@ export async function writeInvoiceToDiary(admin: SupabaseClient, uploadId: strin
     for (let i = 0; i < Math.min(v.half_days, 4); i++) list.push(map.get(v.site.trim())!);
     perDay.set(v.date, list);
   }
-  const tooMany = [...perDay.entries()].filter(([, l]) => l.length > 4);
-  if (tooMany.length) return { state: "needs_review", note: `More than two days' work claimed on ${tooMany.map(([d]) => d).join(", ")}` };
+  const tooMany = [...perDay.entries()].filter(([, l]) => l.length > 8);
+  if (tooMany.length) return { state: "needs_review", note: `More than four days' work claimed on ${tooMany.map(([d]) => d).join(", ")}` };
 
   // ---- the diary itself
   const g = await driveClient(admin);
@@ -180,14 +189,18 @@ export async function writeInvoiceToDiary(admin: SupabaseClient, uploadId: strin
         changes.push({ sheet, ref: `${colName(slotCols[i])}${r}`, value, work: date, diary: date });
         taken.add(`${r}:${i}`);
       });
-      if (values[3]) overflow.push({ date, value: values[3] });
+      for (const value of values.slice(3)) overflow.push({ date, value });
     }
+    // more than three half-days on one date (several sites visited, each a day's charge): the rest go in the nearest
+    // free slots that month, the way the office does it by hand (Andrew Marris and Tony Larkins in October)
     for (const o of overflow) {
-      const cand = rows.filter((r) => dateOf(r).startsWith(month) && dateOf(r) !== o.date && free(r, 2) && !taken.has(`${r}:2`) && hasCost(r, 2))
-        .sort((x, y) => Math.abs(Date.parse(dateOf(x)) - Date.parse(o.date)) - Math.abs(Date.parse(dateOf(y)) - Date.parse(o.date)) || x - y);
-      if (!cand.length) return { state: "needs_review", note: `Nowhere free for the 4th half-day on ${o.date}` };
-      changes.push({ sheet, ref: `${colName(s + 4)}${cand[0]}`, value: o.value, work: o.date, diary: dateOf(cand[0]) });
-      taken.add(`${cand[0]}:2`);
+      const cand = rows.filter((r) => dateOf(r).startsWith(month) && dateOf(r) !== o.date)
+        .flatMap((r) => [0, 1, 2].filter((i) => free(r, i) && !taken.has(`${r}:${i}`) && hasCost(r, i)).slice(0, 1).map((i) => ({ r, i })))
+        .sort((x, y) => Math.abs(Date.parse(dateOf(x.r)) - Date.parse(o.date)) - Math.abs(Date.parse(dateOf(y.r)) - Date.parse(o.date)) || x.r - y.r);
+      if (!cand.length) return { state: "needs_review", note: `Nowhere free in the month for all the work on ${o.date}` };
+      const { r, i } = cand[0];
+      changes.push({ sheet, ref: `${colName(slotCols[i])}${r}`, value: o.value, work: o.date, diary: dateOf(r) });
+      taken.add(`${r}:${i}`);
     }
     const label = rows.find((r) => /^invoice received$/i.test(String(cellVal(ws.getCell(r, s + 7)) ?? "").trim()));
     if (label) markers.push({ sheet, ref: `${colName(s + 7)}${label}` });
@@ -251,7 +264,7 @@ export async function writeInvoiceToDiary(admin: SupabaseClient, uploadId: strin
   await admin.from("portal_diary_cells").insert(changes.map((c) => ({ upload_id: uploadId, sheet: c.sheet, cell: c.ref, value: c.value, work_date: c.work, diary_date: c.diary, revision_after: after.headRevisionId })));
   for (const [wording, site] of learnt) await admin.from("site_aliases").upsert({ clerk_id: u.clerk_id, wording, site_as_typed: site, created_by: "AI" }, { onConflict: "clerk_id,wording" });
   const days = changes.length / 2;
-  return { state: "written", note: `${changes.length} half-day${changes.length === 1 ? "" : "s"} (${days} day${days === 1 ? "" : "s"}) written to ${[...new Set(changes.map((c) => c.sheet))].join(", ")}${markerNotes.length ? `; ${markerNotes.join("; ")}` : "; Invoice received marked green"}${expenseNote ? `; ${expenseNote}` : ""}` };
+  return { state: "written", note: `${changes.length} half-day${changes.length === 1 ? "" : "s"} (${days} day${days === 1 ? "" : "s"}) written to ${[...new Set(changes.map((c) => c.sheet))].join(", ")}${markerNotes.length ? `; ${markerNotes.join("; ")}` : "; Invoice received marked green"}${expenseNote ? `; ${expenseNote}` : ""}${rateNote ? `; ${rateNote}` : ""}` };
 }
 
 /** Every 15 minutes: invoices read by AI that are waiting to go into the diary (one at a time, so writes never overlap). */
@@ -473,4 +486,76 @@ export function weekVisits(ai: { lines?: { text: string }[]; period?: string | n
     }
   }
   return out;
+}
+
+type Ai = { days?: number | null; net_gbp?: number | null; expenses?: { amount_gbp: number | null }[] | null } | null;
+
+/**
+ * Checks the dates read from an invoice against what it charges (Ronan, 25 Nov 2026). Two readings are tried: as read,
+ * and every visit a whole day (a school visit plus its report is charged at the day rate). The one that costs what the
+ * invoice charges at the diary's rates wins; failing that, the one with the invoice's number of days (the diary's rate
+ * for a site then differs from the clerk's, which is said in the note). Neither: held for a person.
+ */
+export async function settleDays(admin: SupabaseClient, ai: Ai, visits: Visit[], siteOf: (wording: string) => string): Promise<{ visits?: Visit[]; note?: string }> {
+  const readings = [visits, visits.map((v) => ({ ...v, half_days: 2 }))];
+  const halves = (vs: Visit[]) => vs.reduce((n, v) => n + v.half_days, 0);
+  const { data: rates } = await admin.from("rates").select("site_as_typed,pay").in("site_as_typed", [...new Set(visits.map((v) => siteOf(v.site)))]);
+  const pay = new Map((rates ?? []).map((r) => [r.site_as_typed as string, Number(r.pay)]));
+  const cost = (vs: Visit[]) => vs.every((v) => (pay.get(siteOf(v.site)) ?? 0) > 0) ? Math.round(vs.reduce((n, v) => n + v.half_days * pay.get(siteOf(v.site))! / 2, 0) * 100) / 100 : null;
+  const expenses = (ai?.expenses ?? []).reduce((n, e) => n + (Number(e?.amount_gbp) || 0), 0);
+  const work = ai?.net_gbp != null ? Math.round((Number(ai.net_gbp) - expenses) * 100) / 100 : null;
+  if (work !== null) {
+    const hit = readings.find((vs) => { const c = cost(vs); return c !== null && Math.abs(c - work) <= Math.max(1, work * 0.005); });
+    if (hit) return { visits: hit };
+  }
+  const days = Number(ai?.days);
+  if (days > 0) {
+    const hit = readings.find((vs) => halves(vs) === Math.round(days * 2));
+    if (hit) {
+      const c = cost(hit);
+      return { visits: hit, ...(work !== null && c !== null ? { note: `the diary's rates come to £${c} for these days but the invoice charges £${work}: check the rates` } : {}) };
+    }
+    return { note: `The dates on the invoice come to ${halves(visits) / 2} day${halves(visits) === 2 ? "" : "s"} but it charges ${days}; please put it in the diary by hand` };
+  }
+  return work === null ? { visits } : { note: `The dates on the invoice don't add up to the £${work} it charges at the diary's rates; please put it in the diary by hand` };
+}
+
+/** Takes an invoice back out of the diary: clears the cells written for it, if they still hold what was written. */
+export async function undoInvoiceInDiary(admin: SupabaseClient, uploadId: string): Promise<string> {
+  const { data: cells } = await admin.from("portal_diary_cells").select("id,sheet,cell,value,diary_date").eq("upload_id", uploadId);
+  if (!cells?.length) return "nothing in the diary";
+  const year = cells[0].diary_date.slice(0, 4);
+  const g = await driveClient(admin);
+  const fileId = diaryFile(g.connection, year);
+  if (!fileId) throw new Error(`no Diary ${year}`);
+  const meta = await g.json<{ modifiedTime: string; headRevisionId: string }>(`files/${fileId}`, { fields: "modifiedTime,headRevisionId", supportsAllDrives: "true" });
+  if (Date.now() - Date.parse(meta.modifiedTime) < QUIET_MS) throw new Error("The diary was changed in the last 10 minutes; try again shortly");
+  const raw = Buffer.from(await g.download(fileId));
+  const wb = await loadWorkbook(raw);
+  for (const c of cells) {
+    const v = cellVal(wb.getWorksheet(c.sheet)!.getCell(c.cell));
+    if (String(v ?? "") !== c.value) throw new Error(`${c.sheet} ${c.cell} now holds "${v}", not "${c.value}": left for you`);
+  }
+  const zip = await JSZip.loadAsync(raw);
+  const wbXml = await zip.file("xl/workbook.xml")!.async("string");
+  const rels = await zip.file("xl/_rels/workbook.xml.rels")!.async("string");
+  for (const sheet of [...new Set(cells.map((c) => c.sheet))]) {
+    const rid = new RegExp(`<(?:\w+:)?sheet\b[^>]*name="${sheet}"[^>]*r:id="([^"]+)"`).exec(wbXml)?.[1];
+    const target = rid && new RegExp(`<Relationship\b[^>]*Id="${rid}"[^>]*Target="([^"]+)"`).exec(rels)?.[1];
+    if (!target) throw new Error(`can't find the ${sheet} sheet inside the file`);
+    const p = target.startsWith("/") ? target.slice(1) : `xl/${target}`;
+    let xml = await zip.file(p)!.async("string");
+    for (const c of cells.filter((x) => x.sheet === sheet)) xml = setCell(xml, c.cell, "");
+    zip.file(p, xml);
+  }
+  const calc = /<(?:\w+:)?calcPr\b[^>]*\/>/.exec(wbXml);
+  if (calc) zip.file("xl/workbook.xml", wbXml.replace(calc[0], calc[0].replace(/\s+(fullCalcOnLoad|forceFullCalc)="[^"]*"/g, "").replace(/\/>$/, ' fullCalcOnLoad="1"/>')));
+  const out = await zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE", compressionOptions: { level: 6 } });
+  const now = await g.json<{ headRevisionId: string }>(`files/${fileId}`, { fields: "headRevisionId", supportsAllDrives: "true" });
+  if (now.headRevisionId !== meta.headRevisionId) throw new Error("The diary changed while preparing; try again");
+  await g.replaceContent(fileId, out, XLSX);
+  const after = await g.json<{ md5Checksum: string }>(`files/${fileId}`, { fields: "md5Checksum", supportsAllDrives: "true" });
+  if (after.md5Checksum !== createHash("md5").update(out).digest("hex")) throw new Error("The diary on Drive doesn't match what was saved");
+  await admin.from("portal_diary_cells").delete().eq("upload_id", uploadId);
+  return `${cells.length} cells cleared`;
 }
