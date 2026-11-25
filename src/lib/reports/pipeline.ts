@@ -494,7 +494,10 @@ export async function checkOne(admin: SupabaseClient, id: string) {
     modified_at: new Date().toISOString(), updated_at: new Date().toISOString(),
   }).eq("id", id);
   if (monthlyTracker?.text) await askToUpdateMonthlyTracker(admin, { id, clerk_id: rep.clerk_id, file_name: rep.file_name }, monthlyTracker).catch(() => undefined);
-  if (ai.date_on_report === "none" || ai.date_on_report === "week_commencing")
+  // only when the report really has no visit date: a report giving both the week commencing and the inspection date is
+  // right (Adrian Carroll, Greenfield 61, 25 Nov 2026, was asked wrongly), so any date written outside a "week
+  // commencing" stops the email
+  if ((ai.date_on_report === "none" || ai.date_on_report === "week_commencing") && !hasVisitDate(r.paragraphs.map((x) => x.text).join(" ")))
     await askForVisitDates(admin, { id, clerk_id: rep.clerk_id, file_name: rep.file_name }, ai.date_on_report).catch(() => undefined);
 }
 
@@ -634,6 +637,28 @@ export async function judgeReport(x: {
 }
 
 /**
+ * Whether a report that gives a "week commencing" also gives the day(s) of the visit: any other date written in it that
+ * falls in that week (Adrian Carroll's "inspection: 25/11/2026" under "Week Commencing 23/11/26", Keith Osorio's
+ * "17/11/2026: Overcast conditions during the visit", weather rows by day). Dates outside the week (programme dates,
+ * inspections by others) don't count.
+ */
+export function hasVisitDate(text: string) {
+  const MON = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+  const re = /(?<!\d)(\d{1,2})(?:[/.\- ](\d{1,2})[/.\- ](\d{2,4})|(?:st|nd|rd|th)?\s+(?:of\s+)?(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s*,?\s*(\d{4}))(?!\d)/gi;
+  const weeks: number[] = [], days: number[] = [];
+  for (const m of text.matchAll(re)) {
+    const y = Number(m[3] ?? m[5]), year = y < 100 ? 2000 + y : y;
+    const mon = m[2] ? Number(m[2]) - 1 : MON.indexOf(m[4].toLowerCase());
+    const t = Date.UTC(year, mon, Number(m[1]));
+    if (Number.isNaN(t) || mon < 0 || mon > 11) continue;
+    const before = text.slice(Math.max(0, m.index! - 40), m.index!).toLowerCase();
+    if (/(w\.?\s*\/?\s*c|week\s*(commencing|beginning|starting)|wk\s*comm)[\s\S]{0,25}$/.test(before)) weeks.push(t);
+    else days.push(t);
+  }
+  return weeks.some((w) => days.some((d) => d > w && d < w + 7 * 864e5));
+}
+
+/**
  * A report with no visit date written in it, or only "week commencing" (Ronan, 17 Nov 2026): email the clerk straight
  * away (from Ronan's Gmail, not a draft) asking for the date of each visit. Once per report, and no more than one a
  * week to the same clerk. Gentle, like all feedback to the clerks. Kept on "Emails to send" as a record.
@@ -650,9 +675,9 @@ async function askForVisitDates(admin: SupabaseClient, rep: { id: string; clerk_
   const name = rep.file_name.replace(/\.docx?$/i, "");
   const body = `Hi ${first}\n\nThanks for your report (${name}). ${how === "week_commencing" ? "I noticed it gives the week (\"week commencing\") rather than the day you were on site." : "I couldn't see the date of the visit written in it."}\n\nCould you make sure each report has the date of each visit on it, near the top? If you were on site twice, please put both dates (for example 10/11/26 and 13/11/26), rather than week commencing.\n\nIt helps us match each report to the visit and keep on top of when reports go out.\n\nMany thanks\n\nRonan O'Boyle\nBeamore Management Ltd`;
   const subject = "The visit date on your reports";
-  await (await driveClient(admin)).sendAutomatic({ to: c.email, subject, body });
+    // nothing is sent automatically from Ronan's address (Ronan, 25 Nov 2026): it waits on "Emails to send" for a person to check and send
   const { queueEmail } = await import("@/lib/outbox");
-  await queueEmail(admin, { kind: "report-visit-dates", to: c.email, subject, body, clerkId: rep.clerk_id, ref: rep.id, status: "sent", note: "Sent automatically" });
+  await queueEmail(admin, { kind: "report-visit-dates", to: c.email, subject, body, clerkId: rep.clerk_id, ref: rep.id, status: "waiting", note: "Check and send (automatic sending is off)" });
 }
 
 /**
@@ -681,9 +706,9 @@ export async function askToUpdateMonthlyTracker(admin: SupabaseClient, rep: { id
     `Many thanks\n\nRonan O'Boyle\nBeamore Management Ltd`,
   ].join("\n\n");
   const subject = `Issues tracker in your monthly report: ${name}`;
-  await (await driveClient(admin)).sendAutomatic({ to: c.email, subject, body });
+    // nothing is sent automatically from Ronan's address (Ronan, 25 Nov 2026): it waits on "Emails to send" for a person to check and send
   const { queueEmail } = await import("@/lib/outbox");
-  await queueEmail(admin, { kind: "monthly-tracker", to: c.email, subject, body, clerkId: rep.clerk_id, ref: rep.id, status: "sent", note: "Sent automatically" });
+  await queueEmail(admin, { kind: "monthly-tracker", to: c.email, subject, body, clerkId: rep.clerk_id, ref: rep.id, status: "waiting", note: "Check and send (automatic sending is off)" });
   return true;
 }
 

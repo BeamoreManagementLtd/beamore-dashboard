@@ -74,8 +74,8 @@ async function draftCorrection(admin: SupabaseClient, u: Row, problems: string[]
   // a copy is kept on "Emails to send". When a good replacement is uploaded the flag clears itself (supersede below).
   const { queueEmail } = await import("@/lib/outbox");
   const subject = `Please update your ${what}`;
-  await (await driveClient(admin)).sendAutomatic({ to: c.email, subject, body });
-  await queueEmail(admin, { kind: "portal-correction", to: c.email, subject, body, clerkId: u.clerk_id, ref: u.id, status: "sent", note: "Sent automatically" });
+    // nothing is sent automatically from Ronan's address (Ronan, 25 Nov 2026): it waits on "Emails to send" for a person to check and send
+  await queueEmail(admin, { kind: "portal-correction", to: c.email, subject, body, clerkId: u.clerk_id, ref: u.id, status: "waiting", note: "Check and send (automatic sending is off)" });
   await admin.from("portal_uploads").update({ correction_drafted_at: new Date().toISOString() }).eq("id", u.id);
 }
 

@@ -198,9 +198,9 @@ export async function shareWithClerks(admin: SupabaseClient, projectId: string) 
     const update = !!before.hash && (before.to ?? []).includes(c.id);
     const body = `Hi ${c.name.split(" ")[0]}\n\n${update ? `The project details for ${s.project} have been updated.` : `Here are the project details for ${s.project}.`}\n\n${s.site ? `Site: ${s.site}\n` : ""}${s.lines.map((l) => `${l.label}: ${l.value}`).join("\n")}\n\nThe same details are on the portal (https://portal.beamore.co.uk/portal/jobs) and in the project folder as "Project information"${s.folder ? ` (${s.folder})` : ""}.\n\nRegards\n\nRonan O'Boyle\nBeamore Management Ltd`;
     const subject = `${update ? "Updated project details" : "Project details"}: ${s.project}`;
-    await g.sendAutomatic({ to: c.email, subject, body });
+    // nothing is sent automatically from Ronan's address (Ronan, 25 Nov 2026): it waits on "Emails to send" for a person to check and send
     const { queueEmail } = await import("@/lib/outbox");
-    await queueEmail(admin, { kind: "clerk-project-info", to: c.email, subject, body, clerkId: c.id, projectId, ref: `${projectId}:${c.id}:${hash.length}`, status: "sent", note: "Sent automatically" }).catch(() => undefined);
+    await queueEmail(admin, { kind: "clerk-project-info", to: c.email, subject, body, clerkId: c.id, projectId, ref: `${projectId}:${c.id}:${hash.length}`, status: "waiting", note: "Check and send (automatic sending is off)" }).catch(() => undefined);
     await admin.from("project_events").insert({ project_id: projectId, source: "dashboard", kind: "Email sent", who: "Dashboard", body: `Project details sent to ${c.name} (${c.email})` });
     sentTo.push(c.name);
   }
