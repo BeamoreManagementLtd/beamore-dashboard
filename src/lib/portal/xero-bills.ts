@@ -39,11 +39,13 @@ export async function makeBill(admin: SupabaseClient, uploadId: string): Promise
   const number = (ai.invoice_number ?? "").trim();
   if (!number) return { state: "needs_review", note: "The invoice has no invoice number, so it wasn't put into Xero: please enter it by hand" };
 
-  // the supplier: the clerk's own company linked to Xero (the one named on the invoice when there are several)
-  const { data: cos } = await admin.from("clerk_companies").select("company_name,xero_contact_id").eq("clerk_id", u.clerk_id).eq("status", "Enabled").eq("kind", "own").not("xero_contact_id", "is", null);
+  // the supplier: a company linked to the clerk in Xero, their own or one they work through (e.g. Mark Prickett through
+  // Amrin Resources, Ronan 26 Nov 2026); the one named on the invoice first, then their own
+  const { data: cos } = await admin.from("clerk_companies").select("company_name,xero_contact_id,kind").eq("clerk_id", u.clerk_id).eq("status", "Enabled").not("xero_contact_id", "is", null);
   if (!cos?.length) return { state: "needs_review", note: "This clerk's company isn't linked to a Xero contact yet (Clerk portal → Company links)" };
   const sup = (ai.supplier ?? "").toLowerCase();
-  const co = cos.find((c) => sup && (sup.includes(c.company_name.toLowerCase()) || c.company_name.toLowerCase().includes(sup))) ?? cos[0];
+  const co = cos.find((c) => sup && (sup.includes(c.company_name.toLowerCase()) || c.company_name.toLowerCase().includes(sup)))
+    ?? cos.find((c) => c.kind === "own") ?? cos[0];
   const xero = await xeroClient(admin);
 
   // already in Xero (entered by hand, or made here before)?
@@ -144,7 +146,10 @@ export async function makePendingBills(admin: SupabaseClient) {
   const { data } = await admin.from("portal_uploads").select("id,ai_result").in("kind", ["invoice", "company_invoice"]).in("diary_state", ["written", "needs_review"])
     .is("deleted_at", null).neq("status", "deleted").gte("received_at", FROM).order("received_at").limit(40);
   let made = 0;
-  for (const r of (data ?? []).filter((x) => !(x.ai_result as Ai | null)?.xero).slice(0, 8)) {
+  // also tried again: ones stopped only because the company wasn't linked yet (it may be linked now)
+  const notLinked = (x: Ai["xero"]) => x?.state === "needs_review" && x.note.includes("isn't linked to a Xero contact");
+  for (const r of (data ?? []).filter((x) => { const b = (x.ai_result as Ai | null)?.xero; return !b || notLinked(b); })
+    .sort((a, b) => Number(!!(a.ai_result as Ai | null)?.xero) - Number(!!(b.ai_result as Ai | null)?.xero)).slice(0, 8)) {
     let o: BillOutcome;
     try { o = await makeBill(admin, r.id); }
     catch (e) { o = { state: "needs_review", note: `Couldn't make the Xero bill: ${e instanceof Error ? e.message.slice(0, 200) : "error"}` }; }
