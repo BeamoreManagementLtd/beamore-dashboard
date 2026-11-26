@@ -87,7 +87,7 @@ export async function runEmailTodos(admin: SupabaseClient, opts: { hours?: numbe
     if (!work) throw new Error("No Todoist Work list");
     const secs = (board.sections ?? []).filter((s) => !s.is_deleted && !s.is_archived && (s.project_id === work.id || s.project_id === team?.id));
     const colId = (name: string) => secs.find((s) => s.project_id === work.id && s.name.toLowerCase() === name.toLowerCase())?.id ?? null;
-    const listId = (first: string) => secs.find((s) => s.name.toLowerCase() === `${first.toLowerCase()}'s list`)?.id ?? null;
+    const listId = (first: string) => secs.find((s) => s.project_id === work.id && s.name.toLowerCase() === `${first.toLowerCase()}'s list`)?.id ?? null;
     const open = (board.items ?? []).filter((i) => !i.checked && !i.is_deleted && (i.project_id === work.id || i.project_id === team?.id));
     const secName = new Map(secs.map((s) => [s.id, s.name]));
     const threadOf = (d?: string) => /#all\/([0-9a-f]{12,})/.exec(d ?? "")?.[1];
@@ -146,11 +146,11 @@ export async function runEmailTodos(admin: SupabaseClient, opts: { hours?: numbe
       // a "comment" whose card isn't on the board any more, but with a title: a new card, unless the thread has one
       if ((d.action !== "new" && d.action !== "comment") || !d.title || byThread.has(d.thread)) continue;
       const owner = d.owner ?? "Ronan";
-      // either of them (Ronan, 17 Nov 2026): the "Ronan or Judy" column on the Beamore board
-      const shared = owner === "Ronan or Judy" ? secs.find((s) => s.project_id === team?.id && s.name.toLowerCase() === "ronan or judy")?.id ?? null : null;
+      // either of them (Ronan, 17 Nov 2026): the "Ronan or Judy" column (on the Work list since 26 Nov 2026: one board)
+      const shared = owner === "Ronan or Judy" ? colId("Ronan or Judy") : null;
       const person = owner === "Ronan" || shared ? null : staff.find((s) => s.first.toLowerCase() === owner.toLowerCase());
       const section = shared ?? (person ? listId(person.first) : colId(d.column ?? "Email replies") ?? colId("General admin"));
-      const project = (person || shared) && section ? team?.id : work.id;
+      const project = work.id;
       const due = d.due && /^\d{4}-\d{2}-\d{2}$/.test(d.due) ? d.due : null;
       const ids = await todoistCommands([{ type: "item_add", temp_id: "n", args: {
         content: d.title.slice(0, 200), project_id: project, ...(section ? { section_id: section } : {}),
