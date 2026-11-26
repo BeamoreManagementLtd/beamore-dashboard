@@ -51,7 +51,7 @@ export default async function PortalInvoices() {
         <h1>Invoices</h1>
         <p className="muted">Upload your invoice for each month you work. We match it to the diary and pay it from Xero.</p>
       </section>
-      {me.clerk.invoice_upload ? (
+      {me.clerk.invoice_upload || me.viewingAs ? (
         <UploadBox kind="invoice" title="Upload your invoice" hint="PDF or a photo. Drop it here or choose it from your files. It's saved straight away." button="Choose invoice" />
       ) : (
         <section className="callout warn">Invoice upload isn&apos;t switched on for your account. Please email your invoice to Beamore as usual.</section>

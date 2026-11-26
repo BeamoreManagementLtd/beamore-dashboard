@@ -253,7 +253,7 @@ export async function processUpload(admin: SupabaseClient, id: string) {
   const status = problems.length ? "needs_correction" : forBeamore.length ? "needs_beamore" : u.kind === "invoice" ? "checked" : "accepted";
   await admin.from("portal_uploads").update({ ai_state: "done", ai_result: { ...result, ai_notes: ai }, issues, status }).eq("id", u.id);
   // (old-portal uploads: the old portal already emailed the clerk, so no new draft)
-  if (problems.length && u.clerk_id && (u as Row & { source?: string }).source !== "legacy") await draftCorrection(admin, { ...u, issues }, problems).catch(() => undefined);
+  if (problems.length && u.clerk_id && !["legacy", "office"].includes(String((u as Row & { source?: string }).source))) await draftCorrection(admin, { ...u, issues }, problems).catch(() => undefined);
   // a good one replaces the earlier ones we'd asked them to fix: those clear themselves (Ronan, 17 Nov 2026: "update it
   // as they send them"). Insurance: any earlier insurance upload; certificates: the same kind; invoices: the same month.
   if (status === "accepted" || status === "checked") {

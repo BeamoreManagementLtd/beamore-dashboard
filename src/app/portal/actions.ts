@@ -12,10 +12,12 @@ const MAX = 25 * 1024 * 1024;
 export async function startUpload(a: { kind: Kind; docType: string | null; fileName: string; mime: string; bytes: number }) {
   const me = await requirePortalUser();
   if (!me.clerk) return { ok: false as const, message: "Only clerks can upload here." };
-  if (me.viewingAs) return { ok: false as const, message: "You're viewing as this clerk, so uploads are switched off." };
+  // staff viewing as a clerk can upload for them, e.g. an invoice someone else sends in for the clerk's company
+  // (Ronan, 26 Nov 2026: Mark Prickett's invoices come from someone without portal access). Marked as from the office.
+  const office = !!me.viewingAs;
   if (!["invoice", "insurance", "qualification"].includes(a.kind)) return { ok: false as const, message: "Unknown upload." };
   if (a.bytes > MAX) return { ok: false as const, message: "That file is over 25 MB. Please send a smaller copy or email it to us." };
-  if (a.kind === "invoice" && !me.clerk.invoice_upload) return { ok: false as const, message: "Invoice upload isn't switched on for your account yet. Please email your invoice to Beamore." };
+  if (a.kind === "invoice" && !office && !me.clerk.invoice_upload) return { ok: false as const, message: "Invoice upload isn't switched on for your account yet. Please email your invoice to Beamore." };
   const admin = createServiceClient();
   const receipt = randomUUID();
   const safe = a.fileName.replace(/[^\w.\- ()]+/g, "_").slice(-120) || "upload";
@@ -23,6 +25,7 @@ export async function startUpload(a: { kind: Kind; docType: string | null; fileN
   const { error } = await admin.from("portal_uploads").insert({
     receipt, clerk_id: me.clerk.id, email: me.clerk.email, kind: a.kind, doc_type: a.docType?.slice(0, 60) ?? null,
     file_name: a.fileName.slice(0, 200), mime: a.mime.slice(0, 100), bytes: a.bytes, storage_path: path, status: "uploading",
+    ...(office ? { source: "office" } : {}),
   });
   if (error) return { ok: false as const, message: "Couldn't start the upload. Please try again." };
   const { data, error: e2 } = await admin.storage.from("portal-uploads").createSignedUploadUrl(path);
@@ -42,7 +45,7 @@ export async function finishUpload(receipt: string) {
   if (!there?.length) return { ok: false as const, message: "The file didn't arrive. Please try again." };
   if (u.status === "uploading") {
     await admin.from("portal_uploads").update({ status: "received", received_at: new Date().toISOString() }).eq("id", u.id);
-    await admin.from("portal_audit").insert({ actor: me.email, action: "upload", detail: { receipt } });
+    await admin.from("portal_audit").insert({ actor: me.email, action: me.viewingAs ? "upload for clerk" : "upload", detail: { receipt, ...(me.viewingAs ? { clerk: me.clerk.name } : {}) } });
   }
   after(() => processUpload(admin, u.id).catch(() => undefined)); // the hourly job retries anything left over
   return { ok: true as const };

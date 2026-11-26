@@ -22,7 +22,7 @@ export default async function PortalLayout({ children }: { children: React.React
         </div>
       </header>
       {me.viewingAs && (
-        <form action={viewAs} className="viewas"><span>Viewing as <b>{me.clerk?.name}</b> (what they see; uploads are off)</span><button className="btn">Stop</button></form>
+        <form action={viewAs} className="viewas"><span>Viewing as <b>{me.clerk?.name}</b> (what they see; anything you upload goes in for them, from the office)</span><button className="btn">Stop</button></form>
       )}
       {me.clerk && <PortalNav />}
       <main className="portal-main">{children}</main>
