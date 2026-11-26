@@ -98,6 +98,8 @@ export async function precheckOne(admin: SupabaseClient, id: string) {
     client: ourClient && endClient ? `${ourClient} (Beamore's client), working for the end client ${endClient}: the report may name either as the client, and both are correct, so don't raise it` : ourClient,
     projectNumbers: [p?.dfe_project_number, p?.po_number].filter((x): x is string => !!x && /\d/.test(x)),
     noProjectNumber: !!((p?.details ?? {}) as { no_project_number?: boolean }).no_project_number,
+    photoTarget: ((p?.details ?? {}) as { report_photos?: number }).report_photos ?? null,
+    qualityOnly: (((p?.details ?? {}) as { quality_only_kinds?: string[] }).quality_only_kinds ?? []).includes(pc.kind),
     expectedClerks: (clerks ?? []).map((c) => c.name), diaryVisits: [],
     previous: lastWeek ? { number: lastWeek.report_number as string | null, date: lastWeek.visit_date as string | null, text: (lastWeek.text_snapshot as string | null) ?? "" } : null,
     paragraphs: r.paragraphs, blanks: r.blanks, placeholders: r.placeholders,
@@ -123,7 +125,7 @@ export async function precheckOne(admin: SupabaseClient, id: string) {
   const monthly = isMonthly({ file_name: pc.file_name, folder_name: folderName });
 
   const j = await judgeReport({
-    r, ai, kind: pc.kind, monthly, appendix: false, usual, reused, ourClient, endClient, stats, rawBytes: raw.length,
+    r, ai, kind: pc.kind, monthly, photoTarget: ((p?.details ?? {}) as { report_photos?: number }).report_photos ?? null, qualityOnly: (((p?.details ?? {}) as { quality_only_kinds?: string[] }).quality_only_kinds ?? []).includes(pc.kind), appendix: false, usual, reused, ourClient, endClient, stats, rawBytes: raw.length,
     sideways, wasUniform: uniform.wasUniform, rotated: 0, nameFixed, template, skipped: [], heldBack,
     findTrackerFile: async () => {
       if (!g || !folderId) return null;

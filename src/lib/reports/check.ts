@@ -118,6 +118,10 @@ export type CheckInput = {
   fileName: string; folder: string; project: string; projectNumbers: string[]; client: string | null;
   /** The job has no project number or code at all (Ronan, 24 Nov 2026: Pepys Court): TBC or blank there is right. */
   noProjectNumber?: boolean;
+  /** A small job needs fewer photos (Ronan, 26 Nov 2026: "Ewell is a small project so probably only 20 photos needed"). */
+  photoTarget?: number | null;
+  /** Quality and technical matters only, no H&S or progress (Ronan, 26 Nov 2026: Mark Taylor's M&E reports for The Forum). */
+  qualityOnly?: boolean;
   expectedClerks: string[]; diaryVisits: string[]; previous: { number: string | null; date: string | null; text: string } | null;
   paragraphs: { i: number; text: string; pic?: boolean }[]; blanks: string[]; placeholders: { i: number; text: string }[];
   photos: { count: number; blurry: number; smallOnPage: number; stretched: number; mb: number; usual: number | null; reused: number; uncaptioned: number };
@@ -149,6 +153,8 @@ export async function checkReport(input: CheckInput): Promise<Check> {
     `Project: ${input.project}${input.client ? ` (client ${input.client})` : ""}`,
     input.projectNumbers.length ? `Project numbers on record: ${input.projectNumbers.join(", ")}` : "",
     input.noProjectNumber ? "This job has no project number or project code: \"TBC\", \"N/A\" or a blank in the project number / code box is correct, so never raise it or count it against the report" : "",
+    input.qualityOnly ? "This report covers quality and technical matters only: it has no health and safety section and no progress / programme section, and isn't meant to. Never raise, suggest or count against it anything about health and safety or progress" : "",
+    input.photoTarget ? `This is a small job: about ${input.photoTarget} photos is enough for a report here (not the usual 35-50), so never raise the number of photos when there are ${input.photoTarget} or more` : "",
     input.expectedClerks.length ? `Clerk(s) on this job: ${input.expectedClerks.join(", ")}` : "",
     input.previous ? `Previous report: number ${input.previous.number ?? "?"}, visit ${input.previous.date ?? "?"}` : "No previous report on record",
     `Photos: ${input.photos.count}${input.photos.usual ? ` (this clerk's last reports on this job had about ${input.photos.usual})` : ""}; ${input.photos.blurry} too low detail to print well, ${input.photos.smallOnPage} shown under 5 cm wide, ${input.photos.stretched} stretched out of shape, ${input.photos.reused} the same as photos in the previous report; file ${input.photos.mb.toFixed(1)} MB. These are the report's real photo figures; the photos attached below are only a sample of up to 12, so never describe that sample as the number of photos`,

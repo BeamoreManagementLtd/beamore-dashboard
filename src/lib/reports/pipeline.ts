@@ -395,6 +395,8 @@ export async function checkOne(admin: SupabaseClient, id: string) {
     client: ourClient && endClient ? `${ourClient} (Beamore's client), working for the end client ${endClient}: the report may name either as the client, and both are correct, so don't raise it` : ourClient,
     projectNumbers: [p?.dfe_project_number, p?.po_number].filter((x): x is string => !!x && /\d/.test(x)),
     noProjectNumber: !!((p?.details ?? {}) as { no_project_number?: boolean }).no_project_number,
+    photoTarget: ((p?.details ?? {}) as { report_photos?: number }).report_photos ?? null,
+    qualityOnly: (((p?.details ?? {}) as { quality_only_kinds?: string[] }).quality_only_kinds ?? []).includes(rep.kind),
     // the diary's dates are only estimates for costing, so reports aren't checked against them (Ronan, 15 Nov 2026)
     expectedClerks: (clerks ?? []).map((c) => c.name), diaryVisits: [],
     previous: lastWeek ? { number: lastWeek.report_number as string | null, date: lastWeek.visit_date as string | null, text: (lastWeek.text_snapshot as string | null) ?? "" } : null,
@@ -437,7 +439,7 @@ export async function checkOne(admin: SupabaseClient, id: string) {
   // wrote it that way; the dashboard lists every correction (Ronan, 18 Nov 2026)
   acceptOwnRevisions(r);
   const { issues, words, prog, hs, trk, monthlyTracker, parts, clerkPoints } = await judgeReport({
-    r, ai, kind: rep.kind, monthly: isMonthly(rep), appendix: !!appendix, usual, reused, ourClient, endClient, stats, rawBytes: raw.length,
+    r, ai, kind: rep.kind, monthly: isMonthly(rep), photoTarget: ((p?.details ?? {}) as { report_photos?: number }).report_photos ?? null, qualityOnly: (((p?.details ?? {}) as { quality_only_kinds?: string[] }).quality_only_kinds ?? []).includes(rep.kind), appendix: !!appendix, usual, reused, ourClient, endClient, stats, rawBytes: raw.length,
     sideways: sideways.length, wasUniform: uniform.wasUniform, rotated: rotated.length, nameFixed, template, skipped: spelt.skipped, heldBack,
     findTrackerFile: async () => {
       const since = new Date(Date.now() - 21 * 864e5).toISOString();
@@ -522,7 +524,7 @@ type Ai = Awaited<ReturnType<typeof checkReport>>;
  * uploading (precheck.ts, Ronan 18 Nov 2026), so both judge a report the same way. Changes nothing in the file.
  */
 export async function judgeReport(x: {
-  r: Report; ai: Ai; kind: string; monthly: boolean; appendix: boolean; usual: number | null; reused: number; ourClient: string | null; endClient: string | null;
+  r: Report; ai: Ai; kind: string; monthly: boolean; appendix: boolean; usual: number | null; photoTarget?: number | null; qualityOnly?: boolean; reused: number; ourClient: string | null; endClient: string | null;
   stats: Stats; rawBytes: number; sideways: number; wasUniform: boolean; rotated: number; nameFixed: string | null; template: TemplateCheck | null;
   skipped: { find: string; replace: string }[]; heldBack: { find: string; replace: string; p: number | null }[];
   findTrackerFile: () => Promise<string | null>; monthlyGap: () => Promise<MonthlyTracker | null>;
@@ -533,13 +535,25 @@ export async function judgeReport(x: {
   // 1,800-5,000 words); monthly reports aren't judged on this
   const words = r.paragraphs.reduce((n, p) => n + (p.text.match(/[A-Za-z]{2,}/g) ?? []).length, 0);
   const min = x.kind === "me" ? { photos: 12, words: 800 } : { photos: 20, words: 1200 };
+  // a small job's own photo target (projects.details.report_photos; Ronan, 26 Nov 2026: Ewell, about 20)
+  const target = x.photoTarget ? (x.kind === "me" ? Math.min(20, x.photoTarget) : x.photoTarget) : null;
+  if (target) min.photos = Math.min(min.photos, target);
   const extra: Issue[] = [];
   // with an appendix, the photos and much of the writing are in it (Tom Hunt's St Michael's reports)
-  if (!monthly && !appendix && stats.count < min.photos) extra.push({ severity: "medium", kind: "photos", text: `Only ${stats.count} photo${stats.count === 1 ? "" : "s"}: good reports have ${x.kind === "me" ? "20 or more" : "35-50"}${usual ? ` (this clerk usually has about ${usual} here)` : ""}`, p: null });
+  if (!monthly && !appendix && stats.count < min.photos) extra.push({ severity: "medium", kind: "photos", text: `Only ${stats.count} photo${stats.count === 1 ? "" : "s"}: ${target ? `this job needs about ${target}` : `good reports have ${x.kind === "me" ? "20 or more" : "35-50"}`}${usual ? ` (this clerk usually has about ${usual} here)` : ""}`, p: null });
   if (!monthly && !appendix && words < min.words) extra.push({ severity: "medium", kind: "vague", text: `Not much written (about ${words} words): good reports describe each area in detail, typically ${x.kind === "me" ? "1,000+" : "1,800-5,000"} words`, p: null });
   // weekly CQM reports (the CQM Lead / MEP / Discipline Specialist Site Inspection Reports) don't have to comment on
   // progress vs programme: that goes in the CQM monthly report (Ronan, 19 Nov 2026: "don't dock them down"). Done
   // well, it still counts as done; otherwise it's treated as not part of the report and never raised or suggested.
+  // quality and technical matters only, set per job and report kind in projects.details.quality_only_kinds (Ronan,
+  // 26 Nov 2026: "Mark Taylor's report for the Forum, he doesn't have to look at health and safety or progress")
+  if (x.qualityOnly) {
+    if (ai.programme && ai.programme.verdict !== "good") ai.programme = { ...ai.programme, verdict: "not_in_form", note: "Quality and technical matters only on this job" };
+    if (ai.standards) delete (ai.standards as Record<string, unknown>).summary;
+    const off = /\bprogramme\b|progress (summary|section|vs)|health\s*(and|&)\s*safety|\bH\s*&\s*S\b/i;
+    ai.issues = ai.issues.filter((i) => i.kind !== "programme" && !off.test(i.text));
+    ai.clerk_points = (ai.clerk_points ?? []).filter((t) => !off.test(t));
+  }
   if (ai.programme && isWeeklyCqm(r.paragraphs.map((p) => p.text), monthly)) {
     if (ai.programme.verdict !== "good") ai.programme = { ...ai.programme, verdict: "not_in_form", note: "Weekly CQM report: progress vs programme goes in the CQM monthly report" };
     (ai.programme as Programme & { weekly_cqm?: boolean }).weekly_cqm = true;
@@ -575,7 +589,7 @@ export async function judgeReport(x: {
     ai.issues = ai.issues.filter((i) => !(/\bclient\b/i.test(i.text) && names.some((n) => i.text.toLowerCase().includes(n))));
   }
   // the ten H&S rows are only looked for in the Word file: with an appendix they may be written there instead
-  const early = cqmMonthly || !!appendix || Number(/\d+/.exec(ai.report_number ?? "")?.[0] ?? 99) <= 2;
+  const early = !!x.qualityOnly || cqmMonthly || !!appendix || Number(/\d+/.exec(ai.report_number ?? "")?.[0] ?? 99) <= 2;
   const hsGone = hs.filter((h) => h.status === "missing" || h.status === "empty"), hsThin = hs.filter((h) => h.status === "thin");
   // "N/A" or "none" is a fair answer when nothing of that kind is going on, e.g. no excavations (Ronan, 20 Nov 2026):
   // only an item taken out or left empty is raised
@@ -623,7 +637,7 @@ export async function judgeReport(x: {
   // the report's mark, from the report as the clerk sent it, before any corrections (Ronan, 16 Nov 2026)
   const parts = scoreParts({
     quality: Number.isFinite(x.ai.quality) ? x.ai.quality : null, qualityWhy: x.ai.quality_why || null,
-    photos: { count: x.stats.count, expected: monthly || x.appendix ? 0 : x.kind === "me" ? 20 : 35, mixed: !x.wasUniform, stretched: x.stats.stretched, small: x.stats.smallOnPage, blurry: x.stats.blurry, sideways: x.sideways, reused: x.reused },
+    photos: { count: x.stats.count, expected: monthly || x.appendix ? 0 : target ?? (x.kind === "me" ? 20 : 35), mixed: !x.wasUniform, stretched: x.stats.stretched, small: x.stats.smallOnPage, blurry: x.stats.blurry, sideways: x.sideways, reused: x.reused },
     spelling: x.ai.spelling.length, spellingExamples: x.ai.spelling.slice(0, 4).map((s) => `"${s.find}" → "${s.replace}"`), words,
     hs: early ? null : hs, programme: prog ?? null, programmeGaps: progGaps.length, programmeTips: progGaps, standards: x.ai.standards ?? null,
     standardsMissed: STANDARD_KEYS.filter((k) => x.ai.standards?.[k] === false).map((k) => STANDARDS[k].label),
