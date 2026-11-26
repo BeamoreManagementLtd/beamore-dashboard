@@ -344,7 +344,10 @@ export async function writeInvoiceToDiary(admin: SupabaseClient, uploadId: strin
   if (after.md5Checksum !== createHash("md5").update(out).digest("hex")) throw new Error("The diary on Drive doesn't match what was saved");
 
   // the notes are recorded too, so taking the invoice back out clears them
-  await admin.from("portal_diary_cells").insert([...changes, ...comments].map((c) => ({ upload_id: uploadId, sheet: c.sheet, cell: c.ref, value: c.value, work_date: c.work, diary_date: c.diary, revision_after: after.headRevisionId })));
+  // a failed record would leave cells nobody can take back out (Sunny Singh's CMS 13, 26 Nov 2026: a stale record on
+  // one of the cells stopped all of them being kept), so it's said, not ignored
+  const rec = await admin.from("portal_diary_cells").insert([...changes, ...comments].map((c) => ({ upload_id: uploadId, sheet: c.sheet, cell: c.ref, value: c.value, work_date: c.work, diary_date: c.diary, revision_after: after.headRevisionId })));
+  if (rec.error) problems.push(`the cells written couldn't be recorded (${rec.error.message.slice(0, 120)}), so this can't be taken back out automatically`);
   for (const [wording, site] of learnt) await admin.from("site_aliases").upsert({ clerk_id: u.clerk_id, wording, site_as_typed: site, created_by: "AI" }, { onConflict: "clerk_id,wording" });
   const days = changes.length / 2;
   return { state: "written", note: `${changes.length} half-day${changes.length === 1 ? "" : "s"} (${days} day${days === 1 ? "" : "s"}) written to ${[...new Set(changes.map((c) => c.sheet))].join(", ")}${markerNotes.length ? `; ${markerNotes.join("; ")}` : "; Invoice received marked green"}${expenseNote ? `; ${expenseNote}` : ""}${problems.length ? `. CHECK: ${problems.join("; ")}` : ""}` };

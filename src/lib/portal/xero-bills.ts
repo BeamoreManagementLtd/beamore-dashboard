@@ -133,7 +133,8 @@ export async function makeBill(admin: SupabaseClient, uploadId: string): Promise
   }
   const stated = Number(ai.net_gbp ?? (ai.gross_gbp && !vat ? ai.gross_gbp : NaN));
   if (Number.isFinite(stated) && Math.abs(net - stated) > 0.05) return { state: "needs_review", note: `The lines come to £${net}, but the invoice says £${stated} before VAT: please check and enter it in Xero by hand` };
-  if (vat && Math.abs(money(net * 0.2) - Number(ai.vat_gbp)) > 0.05) return { state: "needs_review", note: `VAT on the invoice is £${ai.vat_gbp}, not 20% of £${net}: please check and enter it in Xero by hand` };
+  const vatable = money(lines.filter((l) => l.TaxType !== "NONE").reduce((s, l) => s + l.Quantity * l.UnitAmount, 0));
+  if (vat && Math.abs(money(vatable * 0.2) - Number(ai.vat_gbp)) > 0.05) return { state: "needs_review", note: `VAT on the invoice is £${ai.vat_gbp}, not 20% of £${vatable}: please check and enter it in Xero by hand` };
 
   const date = /^\d{4}-\d{2}-\d{2}$/.test(ai.invoice_date ?? "") ? ai.invoice_date! : new Date(Date.UTC(+period.slice(0, 4), +period.slice(5), 0)).toISOString().slice(0, 10);
   const res = await xero.put<{ Invoices: { InvoiceID: string; InvoiceNumber: string; HasErrors?: boolean; ValidationErrors?: { Message: string }[] }[] }>("Invoices", {
