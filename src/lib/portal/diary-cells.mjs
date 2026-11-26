@@ -63,6 +63,8 @@ export function greenVersion(styles, from) {
   const xfs = [...xfsXml.matchAll(/<(?:\w+:)?xf\b[^>]*\/>|<(?:\w+:)?xf\b[^>]*>[\s\S]*?<\/(?:\w+:)?xf>/g)].map((m) => m[0]);
   const base = xfs[from];
   if (!base || !green.size) return null;
+  // already green (an earlier invoice, or coloured by hand): nothing to do, and not a job to do by hand
+  if (green.has(Number(/fillId="(\d+)"/.exec(base)?.[1] ?? -1))) return from;
   const strip = (x) => x.replace(/\s+fillId="\d+"/, "").replace(/\s+applyFill="[^"]*"/, "");
   const idx = xfs.findIndex((x, i) => i !== from && green.has(Number(/fillId="(\d+)"/.exec(x)?.[1] ?? -1)) && strip(x) === strip(base));
   return idx >= 0 ? idx : null;
