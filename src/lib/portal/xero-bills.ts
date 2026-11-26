@@ -49,8 +49,10 @@ export async function makeBill(admin: SupabaseClient, uploadId: string): Promise
   const { data: cos } = await admin.from("clerk_companies").select("company_name,xero_contact_id,kind").eq("clerk_id", u.clerk_id).eq("status", "Enabled").not("xero_contact_id", "is", null);
   if (!cos?.length) return { state: "needs_review", note: "This clerk's company isn't linked to a Xero contact yet (Clerk portal → Company links)" };
   const sup = (ai.supplier ?? "").toLowerCase();
-  const co = cos.find((c) => sup && (sup.includes(c.company_name.toLowerCase()) || c.company_name.toLowerCase().includes(sup)))
-    ?? cos.find((c) => c.kind === "own") ?? cos[0];
+  // the closest name first ("Damian Breen - Account 2" over "Damian Breen" when the invoice says Account 2)
+  const named = cos.filter((c) => sup && (sup.includes(c.company_name.toLowerCase()) || c.company_name.toLowerCase().includes(sup)))
+    .sort((x, y) => Number(y.company_name.toLowerCase() === sup) - Number(x.company_name.toLowerCase() === sup) || Number(sup.includes(y.company_name.toLowerCase())) * y.company_name.length - Number(sup.includes(x.company_name.toLowerCase())) * x.company_name.length);
+  const co = named[0] ?? cos.find((c) => c.kind === "own") ?? cos[0];
   const xero = await xeroClient(admin);
 
   // already in Xero (entered by hand, or made here before)?
