@@ -36,7 +36,12 @@ export async function makeBill(admin: SupabaseClient, uploadId: string): Promise
   const { data: u } = await admin.from("portal_uploads").select("id,clerk_id,file_name,mime,drive_file_id,ai_result,kind,clerks(name)").eq("id", uploadId).single();
   if (!u?.clerk_id) return { state: "not_applicable", note: "No clerk for this invoice" };
   const ai = (u.ai_result ?? {}) as Ai;
-  const number = (ai.invoice_number ?? "").trim();
+  // no number on the invoice itself: the one in the file name (Ronan, 26 Nov 2026: Margaret's "Invoice 42 - November
+  // 2026.pdf", Conor's "BML 43.pdf")
+  const number = (ai.invoice_number ?? "").trim() || numberFromFileName(u.file_name ?? "");
+  // a timesheet with no money on it (Wayne Gates: Clipper invoice for his work later) isn't a bill
+  if (/time\s*sheet/i.test(u.file_name ?? "") && !Number(ai.net_gbp ?? 0) && !(ai.lines ?? []).some((l) => Number(l.amount_gbp ?? 0) > 0))
+    return { state: "not_applicable", note: "A timesheet, not an invoice: the company will invoice for it" };
   if (!number) return { state: "needs_review", note: "The invoice has no invoice number, so it wasn't put into Xero: please enter it by hand" };
 
   // the supplier: a company linked to the clerk in Xero, their own or one they work through (e.g. Mark Prickett through
@@ -103,14 +108,27 @@ export async function makeBill(admin: SupabaseClient, uploadId: string): Promise
       ...(p && optionFor(p) ? { Tracking: optionFor(p) } : {}),
     });
   }
+  // the only priced line is the total with VAT (Sunny Singh's CMS 13: £8,088 on the line, £6,740 + £1,348 VAT): the net
+  if (vat && lines.length === 1 && ai.gross_gbp && ai.net_gbp && Math.abs(lines[0].Quantity * lines[0].UnitAmount - Number(ai.gross_gbp)) < 0.05) {
+    lines[0].Quantity = 1; lines[0].UnitAmount = Number(ai.net_gbp);
+  }
   for (const e of ai.expenses ?? []) {
     const amount = Number(e.amount_gbp ?? 0);
+    // already one of the invoice's own lines (Mark Prickett's hotel): not twice
+    if ((ai.lines ?? []).some((l) => Math.abs(Number(l.amount_gbp ?? 0) - amount) < 0.01)) continue;
     if (amount > 0) lines.push({ Description: `${e.text} - ${monthLabel}`, Quantity: 1, UnitAmount: amount, AccountCode: account, TaxType: tax });
   }
   if (!lines.length) return { state: "needs_review", note: "No amounts could be read from the invoice lines: please enter it in Xero by hand" };
 
   // the lines must come to the invoice's own total
   const net = money(lines.reduce((s, l) => s + l.Quantity * l.UnitAmount, 0));
+  // VAT charged on the days but not the expenses (Mark Prickett's hotel, no VAT on it): those lines carry no VAT
+  if (vat) {
+    const exp = (ai.expenses ?? []).map((e) => Number(e.amount_gbp ?? 0)).filter((n) => n > 0);
+    const noVat = lines.filter((l) => exp.some((n) => Math.abs(l.Quantity * l.UnitAmount - n) < 0.01));
+    const rest = money(net - noVat.reduce((s, l) => s + l.Quantity * l.UnitAmount, 0));
+    if (noVat.length && Math.abs(net * 0.2 - Number(ai.vat_gbp)) > 0.05 && Math.abs(rest * 0.2 - Number(ai.vat_gbp)) <= 0.05) for (const l of noVat) l.TaxType = "NONE";
+  }
   const stated = Number(ai.net_gbp ?? (ai.gross_gbp && !vat ? ai.gross_gbp : NaN));
   if (Number.isFinite(stated) && Math.abs(net - stated) > 0.05) return { state: "needs_review", note: `The lines come to £${net}, but the invoice says £${stated} before VAT: please check and enter it in Xero by hand` };
   if (vat && Math.abs(money(net * 0.2) - Number(ai.vat_gbp)) > 0.05) return { state: "needs_review", note: `VAT on the invoice is £${ai.vat_gbp}, not 20% of £${net}: please check and enter it in Xero by hand` };
@@ -172,4 +190,13 @@ export async function makePendingBills(admin: SupabaseClient) {
     }
   }
   return made;
+}
+
+/** An invoice number in the file name: "Invoice 42 - November 2026.pdf" -> "42", "BML 43.pdf" -> "BML 43". */
+export function numberFromFileName(name: string) {
+  const base = name.replace(/\.[a-z0-9]+$/i, "").trim();
+  if (/^[A-Z]{2,6}[\s\-]?\d{1,6}$/i.test(base)) return base;
+  const m = /\binv(?:oice)?\.?\s*(?:no\.?|number|#)?\s*[:\-]?\s*([A-Z]*[-\/]?\d[\w\-\/.]*)/i.exec(base);
+  if (m) return m[1].replace(/[.\-]+$/, "");
+  return "";
 }

@@ -138,9 +138,18 @@ export async function writeInvoiceToDiary(admin: SupabaseClient, uploadId: strin
   // ---- the days must add up to what the invoice charges (a visit charged at the day rate is a whole day, the site
   // visit and the report: Andrew Marris, 25 Nov 2026)
   const settled = await settleDays(admin, ai, named, (x) => x);
+  // what the invoice charges for the days over the diary's rates (Sunny Singh, extra for travelling far to some jobs):
+  // the difference goes on the "Not recharged" line (Ronan, 26 Nov 2026: "put any difference in costs down on the
+  // unrecoverable extras"); less than the diary's rates is only reported
+  let overRates: { text: string; amount_gbp: number; recharge_to_client: boolean } | null = null;
   if (settled.visits) {
     named = settled.visits;
     if (settled.note) problems.push(settled.note);
+    const m = /diary's rates come to £([\d.]+) for these days but the invoice charges £([\d.]+)/.exec(settled.note ?? "");
+    if (m) {
+      const diff = Math.round((Number(m[2]) - Number(m[1])) * 100) / 100;
+      if (diff > 0.5) overRates = { text: `Charged above the diary's rates (£${m[2]} for days the diary prices at £${m[1]})`, amount_gbp: diff, recharge_to_client: false };
+    }
   } else {
     const fitted = fitToPlan(plan, ai, named, planMain ?? named[0]?.site ?? clerkSites[0] ?? null, period);
     if (!fitted.visits.length) return { state: "needs_review", note: `${settled.note ?? "The days don't add up"}, and there are no planned days in the diary to go by` };
@@ -155,7 +164,18 @@ export async function writeInvoiceToDiary(admin: SupabaseClient, uploadId: strin
     for (let i = 0; i < Math.min(v.half_days, 4); i++) list.push(v.site);
     perDay.set(v.date, list);
   }
-  const months = [...new Set([...perDay.keys()].map((d) => d.slice(0, 7)))];
+  // work from a month before the diary writer's first month, on an invoice that's mostly for a later month (Andrew
+  // Collier's 30-31 Oct on his November invoice): put on free days in the later month, with a note beside them saying
+  // where it's from (Ronan, 26 Nov 2026: "put that down just on a random day and write in the notes beside it that this
+  // was from October")
+  const carried: { from: string; value: string }[] = [];
+  if ([...perDay.keys()].some((d) => d.slice(0, 7) >= FIRST_WRITABLE)) {
+    for (const d of [...perDay.keys()].filter((x) => x.slice(0, 7) < FIRST_WRITABLE).sort()) {
+      for (const value of perDay.get(d)!) carried.push({ from: d, value });
+      perDay.delete(d);
+    }
+  }
+  const months = [...new Set([...perDay.keys()].map((d) => d.slice(0, 7)))].sort();
   if (months.some((m) => m < FIRST_WRITABLE)) return { state: "needs_review", note: `Work in ${months.filter((m) => m < FIRST_WRITABLE).join(", ")}: months before November 2026 aren't written automatically` };
   const year = months[0].slice(0, 4);
   if (months.some((m) => !m.startsWith(year))) return { state: "needs_review", note: "This invoice covers two different years; please enter it by hand" };
@@ -175,7 +195,9 @@ export async function writeInvoiceToDiary(admin: SupabaseClient, uploadId: strin
   const markers: { sheet: string; ref: string }[] = [];
   const expenses = ((((u.ai_result as { expenses?: { text: string; amount_gbp: number | null; recharge_to_client?: boolean }[] } | null)?.expenses) ?? [])
     .filter((e) => e && e.text && Number(e.amount_gbp) > 0));
+  if (overRates) expenses.push(overRates);
   const extras: { sheet: string; ref: string; text?: string; amount?: number }[] = [];
+  const comments: { sheet: string; ref: string; value: string; work: string; diary: string }[] = [];
   let expenseNote = "";
   for (const month of months) {
     const sheet = MONTHS[Number(month.slice(5)) - 1];
@@ -203,7 +225,7 @@ export async function writeInvoiceToDiary(admin: SupabaseClient, uploadId: strin
     const free = (r: number, i: number) => isBlank(cellVal(ws.getCell(r, slotCols[i])));
     const hasCost = (r: number, i: number) => { const v = cellVal(ws.getCell(r, slotCols[i] + 1)); return !!v && typeof v === "object" && "formula" in (v as object); };
     const taken = new Set<string>();
-    const overflow: { date: string; value: string }[] = [];
+    const overflow: { date: string; value: string; from?: string }[] = [];
     for (const [date, values] of [...perDay.entries()].filter(([d]) => d.startsWith(month)).sort()) {
       const r = rowOf.get(date);
       if (!r) return { state: "needs_review", note: `No row for ${date} in ${clerkName}'s ${sheet} block` };
@@ -220,6 +242,9 @@ export async function writeInvoiceToDiary(admin: SupabaseClient, uploadId: strin
     }
     // more than three half-days on one date (several sites visited, each a day's charge): the rest go in the nearest
     // free slots that month, the way the office does it by hand (Andrew Marris and Tony Larkins in October)
+    // carried-over work from an earlier month: from the start of this month, a note beside each day used
+    const fromNote = new Map<number, Set<string>>();
+    if (month === months[0]) for (const c of carried) overflow.push({ date: `${month}-01`, value: c.value, from: c.from });
     for (const o of overflow) {
       const cand = rows.filter((r) => dateOf(r).startsWith(month) && dateOf(r) !== o.date)
         .flatMap((r) => [0, 1, 2].filter((i) => free(r, i) && !taken.has(`${r}:${i}`) && hasCost(r, i)).slice(0, 1).map((i) => ({ r, i })))
@@ -227,9 +252,17 @@ export async function writeInvoiceToDiary(admin: SupabaseClient, uploadId: strin
         .sort((x, y) => Number(weekend(dateOf(x.r))) - Number(weekend(dateOf(y.r))) || Math.abs(Date.parse(dateOf(x.r)) - Date.parse(o.date)) - Math.abs(Date.parse(dateOf(y.r)) - Date.parse(o.date)) || y.r - x.r);
       if (!cand.length) return { state: "needs_review", note: `Nowhere free in the month for all the work on ${o.date}` };
       const { r, i } = cand[0];
-      changes.push({ sheet, ref: `${colName(slotCols[i])}${r}`, value: o.value, work: o.date, diary: dateOf(r) });
+      changes.push({ sheet, ref: `${colName(slotCols[i])}${r}`, value: o.value, work: o.from ?? o.date, diary: dateOf(r) });
       taken.add(`${r}:${i}`);
+      if (o.from) fromNote.set(r, (fromNote.get(r) ?? new Set()).add(o.from));
     }
+    for (const [r, froms] of fromNote) {
+      const when = [...froms].sort().map((d) => new Date(`${d}T12:00:00Z`).toLocaleDateString("en-GB", { day: "numeric", month: "short", timeZone: "UTC" })).join(", ");
+      const text = `From ${MONTHS[Number([...froms][0].slice(5, 7)) - 1]} (${when})`;
+      if (!isBlank(cellVal(ws.getCell(r, s + 6)))) problems.push(`${dateOf(r)} has work carried over from ${when} but its comment box was already used, so the note wasn't added`);
+      else comments.push({ sheet, ref: `${colName(s + 6)}${r}`, value: text, work: [...froms][0], diary: dateOf(r) });
+    }
+    if (carried.length && month === months[0]) problems.push(`${carried.length / 2} day${carried.length === 2 ? "" : "s"} of work from before ${MONTHS[Number(FIRST_WRITABLE.slice(5)) - 1]} put on free days in ${sheet} with a note beside them`);
     const label = rows.find((r) => /^invoice received$/i.test(String(cellVal(ws.getCell(r, s + 7)) ?? "").trim()));
     if (label) markers.push({ sheet, ref: `${colName(s + 7)}${label}` });
     // the invoice's expenses (hotels, mileage...) under the clerk's days, so the block's total matches the invoice (Ronan,
@@ -284,6 +317,9 @@ export async function writeInvoiceToDiary(admin: SupabaseClient, uploadId: strin
     const p = pathOf(sheet);
     let xml = await zip.file(p)!.async("string");
     for (const c of changes.filter((x) => x.sheet === sheet)) xml = setCell(xml, c.ref, c.value);
+    for (const c of comments.filter((x) => x.sheet === sheet)) {
+      try { xml = setCell(xml, c.ref, c.value); } catch { problems.push(`the note "${c.value}" couldn't be written in ${c.ref}`); }
+    }
     for (const e of extras.filter((x) => x.sheet === sheet)) {
       try { xml = e.amount !== undefined ? setNumberCell(xml, e.ref, e.amount) : setCell(xml, e.ref, e.text ?? ""); }
       catch { expenseNote = "the expenses couldn't be put on the expenses lines; please add them by hand"; }
@@ -307,7 +343,8 @@ export async function writeInvoiceToDiary(admin: SupabaseClient, uploadId: strin
   const after = await g.json<{ headRevisionId: string; md5Checksum: string; modifiedTime: string }>(`files/${fileId}`, { fields: "headRevisionId,md5Checksum,modifiedTime", supportsAllDrives: "true" });
   if (after.md5Checksum !== createHash("md5").update(out).digest("hex")) throw new Error("The diary on Drive doesn't match what was saved");
 
-  await admin.from("portal_diary_cells").insert(changes.map((c) => ({ upload_id: uploadId, sheet: c.sheet, cell: c.ref, value: c.value, work_date: c.work, diary_date: c.diary, revision_after: after.headRevisionId })));
+  // the notes are recorded too, so taking the invoice back out clears them
+  await admin.from("portal_diary_cells").insert([...changes, ...comments].map((c) => ({ upload_id: uploadId, sheet: c.sheet, cell: c.ref, value: c.value, work_date: c.work, diary_date: c.diary, revision_after: after.headRevisionId })));
   for (const [wording, site] of learnt) await admin.from("site_aliases").upsert({ clerk_id: u.clerk_id, wording, site_as_typed: site, created_by: "AI" }, { onConflict: "clerk_id,wording" });
   const days = changes.length / 2;
   return { state: "written", note: `${changes.length} half-day${changes.length === 1 ? "" : "s"} (${days} day${days === 1 ? "" : "s"}) written to ${[...new Set(changes.map((c) => c.sheet))].join(", ")}${markerNotes.length ? `; ${markerNotes.join("; ")}` : "; Invoice received marked green"}${expenseNote ? `; ${expenseNote}` : ""}${problems.length ? `. CHECK: ${problems.join("; ")}` : ""}` };
