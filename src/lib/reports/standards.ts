@@ -54,10 +54,10 @@ export const STANDARDS = {
   },
   people: {
     label: "Weather and people",
-    test: "Weather for each visit day, the contractor's management team, and the trades on site with numbers",
-    tip: "Record the weather for each visit day, the contractor's team on site and each trade with numbers of operatives",
+    test: "Weather for each visit day, the contractor's management team by name, and the trades on site with numbers (a photo or screenshot of the site's sign-in system, e.g. Biosite, showing trades and numbers counts)",
+    tip: "Record the weather for each visit day, the main contractor's team on site by name and each trade with numbers of operatives (a screenshot of the Biosite or sign-in system is fine for the trades)",
     from: "Damian Breen's reports for The Forum and Lewis Lucas's for Bloxwich",
-    dfe: 'Fill in the People and Equipment boxes properly: weather for each visit day, the contractor\'s team, and each trade with numbers (not "see weekly reports")',
+    dfe: 'Fill in the People and Equipment boxes properly: weather for each visit day, the main contractor\'s team by name (the DfE asks for this), and each trade with numbers (not "see weekly reports"; a Biosite or sign-in system screenshot is fine for the trades)',
   },
 } as const;
 
