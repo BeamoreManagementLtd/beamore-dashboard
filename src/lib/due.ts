@@ -167,10 +167,13 @@ export async function buildDueList(db: SupabaseClient, me: Profile): Promise<Due
           add(`Price ${p.display_name}`, `Asked to price ${days} days ago. Ticks itself when the proposal shows in your sent email`, toDirector, addDays(p.stage_changed_at.slice(0, 10), 2));
         else if (p.stage === "sent" && w.status.waitingOn === "you")
           add(`Won or lost: ${p.display_name}?`, w.status.text, toDirector);
-        else if (p.stage === "sent" && p.stage_changed_at && days >= 30)
-          add(`Is ${p.display_name} still live?`, `Proposal sent ${days} days ago with no reply. Mark it Lost, or chase once more`, toDirector);
-        else if (p.stage === "sent" && p.stage_changed_at && days >= 7)
-          add(`Ask for a reply: ${p.display_name}`, `Proposal sent ${days} days ago, no reply yet. Reminds again every 7 days`, toDirector, addDays(p.stage_changed_at.slice(0, 10), 7 * Math.floor(days / 7)));
+        else if (p.stage === "sent" && p.stage_changed_at) {
+          // every 2 months, not every 7 days (Ronan, 26 Nov 2026: "change that to every 2 months... and remove them all
+          // from my to-do list"): counted from when it was sent, or from 26 Nov 2026 for proposals already out then
+          const from = p.stage_changed_at.slice(0, 10) > "2026-11-26" ? p.stage_changed_at.slice(0, 10) : "2026-11-26";
+          const since = daysSince(from) ?? 0;
+          if (since >= 60) add(`Ask for a reply: ${p.display_name}`, `Proposal sent ${days} days ago, no reply yet. Chase it, or mark it Lost. Reminds again every 2 months`, toDirector, addDays(from, 60 * Math.floor(since / 60)));
+        }
       } else if (w.current === "setup" && (w.status.waitingOn === "us" || w.status.waitingOn === "admin")) {
         add(`Set up ${p.display_name}`, w.status.text, toDirector);
       } else if (w.current === "start" && w.status.waitingOn === "you") {
