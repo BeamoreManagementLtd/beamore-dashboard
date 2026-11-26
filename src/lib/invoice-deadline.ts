@@ -9,7 +9,8 @@ import { sendFromAi } from "@/lib/outbox";
  * them: you're now late with your invoice, to avoid being paid late, please upload it straight away." Sent from
  * ai@beamore.co.uk. Nothing is sent until Ronan sets the date (portal_audit "invoice-deadline", the latest per month).
  */
-export type Deadline = { month: string; dueAt: string; setAt: string };
+/** onlyLate: Ronan already told the clerks himself, so only the "now late" email goes (November 2026). */
+export type Deadline = { month: string; dueAt: string; setAt: string; onlyLate?: boolean };
 type Stage = "notice" | "reminder" | "late";
 const DAY = 864e5;
 const PORTAL = "https://portal.beamore.co.uk\n\nSign in with your @beamore.co.uk Google account and go to Invoices. A PDF or a photo of your invoice is fine.";
@@ -36,7 +37,7 @@ export function londonInstant(date: string, time: string) {
 export async function deadlines(admin: SupabaseClient): Promise<Deadline[]> {
   const { data } = await admin.from("portal_audit").select("at,detail").eq("action", "invoice-deadline").order("at", { ascending: true });
   const by = new Map<string, Deadline>();
-  for (const r of data ?? []) { const d = r.detail as { month: string; due_at: string }; by.set(d.month, { month: d.month, dueAt: d.due_at, setAt: r.at }); }
+  for (const r of data ?? []) { const d = r.detail as { month: string; due_at: string; only_late?: boolean }; by.set(d.month, { month: d.month, dueAt: d.due_at, setAt: r.at, onlyLate: !!d.only_late }); }
   return [...by.values()].sort((a, b) => a.month.localeCompare(b.month));
 }
 
@@ -94,7 +95,7 @@ export async function runInvoiceDeadlines(admin: SupabaseClient, opts: { dryRun?
     if (now > due + 14 * DAY) continue; // old months: leave alone
     // the stage due now (only the latest one: a deadline set late doesn't send all three at once)
     const stage: Stage | null = now >= due ? "late" : now >= due - DAY ? "reminder" : now >= due - 7 * DAY || Date.parse(d.setAt) > due - 7 * DAY ? "notice" : null;
-    if (!stage) continue;
+    if (!stage || (d.onlyLate && stage !== "late")) continue;
     for (const c of await clerksFor(admin, d.month)) {
       if (c.sent) continue; // already uploaded this month's invoice
       const key = `${c.id}:${d.month}:${d.dueAt}:${stage}`;
