@@ -16,8 +16,8 @@ export const STANDARDS = {
   },
   detail: {
     label: "Specific detail",
-    test: "Observations say where (building, level, room, gridline), what was seen, which trade, and the control or action; even 'nothing to report' items are specific",
-    tip: 'Make every observation specific: where (level, room, gridline), what you saw, which trade, and what\'s in place or needs doing. Avoid a bare "N/A" or "Good"',
+    test: "Observations say where (the level and room, corridor or area; a gridline is fine but never needed), what was seen, which trade, and the control or action; even 'nothing to report' items are specific",
+    tip: 'Make every observation specific: where (the level and room or area), what you saw, which trade, and what\'s in place or needs doing. Avoid a bare "N/A" or "Good"',
     from: "Christian Tate's reports (e.g. St Leonards)",
   },
   references: {

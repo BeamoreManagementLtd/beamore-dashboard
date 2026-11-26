@@ -41,7 +41,7 @@ export function scoreParts(x: In): ScorePart[] {
 
   const q = x.quality === null ? 70 : Math.min(100, Math.max(0, x.quality));
   parts.push({ label: "Quality of the information", of: 40, got: r1((q / 100) * 40), note: x.quality === null ? "not judged; counted as 70%" : `${Math.round(q)}% on detail, accuracy, follow-up and what was seen`,
-    improve: q < 100 ? (x.qualityWhy || "Make every observation specific: where (level, room, gridline), what was seen, which trade, and what's in place or needs doing") : undefined });
+    improve: q < 100 ? (x.qualityWhy || "Make every observation specific: where (the level and room or area), what was seen, which trade, and what's in place or needs doing") : undefined });
 
   // photos: enough of them (fresh ones), the same size, none stretched or sideways, big and sharp enough
   const p = x.photos, fresh = Math.max(0, p.count - p.reused);
