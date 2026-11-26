@@ -40,8 +40,8 @@ export const STANDARDS = {
   },
   tracker: {
     label: "Running issues tracker",
-    test: "Has a running defects/issues tracker carried from report to report: number, report and date raised, the item, date closed and comments",
-    tip: "Keep a running defects tracker at the end of every report: number, the report and date it was raised, the item, the date closed and comments",
+    test: "Has a running defects/issues tracker carried from report to report, text only (no photos), real issues only: number, report and date raised, the item, amber (open) / red (needs attention) / green (closed), and a close-out date with the reason only once it's green",
+    tip: "Keep a running issues tracker at the end of every report, text only: the item, the report it's in, amber while open (red if it needs attention), and only when it's fully closed turn it green with the date and why it's closed",
     from: "Keith Osorio's reports for Holiday Inn Camden and Nick Jenkin's for Siemens",
     dfe: "Keep the defects tracker at the end of the DfE form up to date: every item raised, with the report and date, and the date closed",
   },
