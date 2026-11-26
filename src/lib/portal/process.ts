@@ -150,6 +150,48 @@ async function applyQualification(admin: SupabaseClient, u: Row, r: Record<strin
   return { problems, forBeamore };
 }
 
+/** Earlier uploads of the same invoice by this clerk: the same invoice number, or the same file name for the same month. */
+async function earlierCopies(admin: SupabaseClient, u: Row, number: string | null, period: string | null) {
+  const { data } = await admin.from("portal_uploads").select("id,file_name,period,received_at,diary_state,ai_result,portal_invoice_checks(invoice_number)")
+    .eq("clerk_id", u.clerk_id!).eq("kind", "invoice").neq("status", "deleted").neq("id", u.id).lt("received_at", u.received_at);
+  const num = (x: string | null | undefined) => (x ?? "").replace(/^[\s#]*(inv(oice)?[\s.:-]*)?(no\.?\s*)?/i, "").replace(/\s+/g, "").toLowerCase();
+  return (data ?? []).filter((o) => {
+    const ck = o.portal_invoice_checks as unknown as { invoice_number: string | null } | { invoice_number: string | null }[] | null;
+    const theirs = Array.isArray(ck) ? ck[0]?.invoice_number : ck?.invoice_number;
+    const ai = o.ai_result as { invoice_number?: string | null; period?: string | null } | null;
+    const n = num(theirs ?? ai?.invoice_number);
+    if (number && n && n === num(number)) return true;
+    return !!period && (o.period ?? ai?.period) === period && !!o.file_name && o.file_name.trim().toLowerCase() === (u.file_name ?? "").trim().toLowerCase();
+  });
+}
+
+/**
+ * Takes an older copy off: marked deleted (the file stays in Drive), its diary entries queued to come out before the new
+ * copy goes in (diary_state "undo"), and its draft bill deleted in Xero if it's still a draft. Returns a note when
+ * something needs a person.
+ */
+async function replaceUpload(admin: SupabaseClient, old: { id: string; file_name: string | null; diary_state: string | null; ai_result: unknown }, u: Row) {
+  const { count } = await admin.from("portal_diary_cells").select("id", { count: "exact", head: true }).eq("upload_id", old.id);
+  const ai = (old.ai_result ?? {}) as { xero?: { state?: string; bill_id?: string; number?: string } };
+  let note: string | null = null;
+  if (ai.xero?.state === "created" && ai.xero.bill_id) {
+    try {
+      const { xeroClient } = await import("@/lib/xero");
+      const xero = await xeroClient(admin);
+      const bill = (await xero<{ Invoices: { Status: string }[] }>(`Invoices/${ai.xero.bill_id}`)).Invoices[0];
+      if (bill?.Status === "DRAFT") await xero.post(`Invoices/${ai.xero.bill_id}`, { Invoices: [{ InvoiceID: ai.xero.bill_id, Status: "DELETED" }] });
+      else if (bill && bill.Status !== "DELETED") note = `The earlier copy's bill ${ai.xero.number ?? ""} in Xero is already ${bill.Status.toLowerCase()}, so it was left: check it against this one`;
+    } catch (e) { note = `The earlier copy's draft bill ${ai.xero.number ?? ""} couldn't be removed from Xero (${e instanceof Error ? e.message.slice(0, 120) : "error"}): remove it by hand`; }
+  }
+  await admin.from("portal_uploads").update({
+    status: "deleted", deleted_at: new Date().toISOString(), deleted_by: "dashboard", deleted_reason: `Replaced by ${u.file_name ?? "a newer upload"} (${u.received_at.slice(0, 10)})`,
+    ...(count ? { diary_state: "undo", diary_note: `Replaced by ${u.file_name ?? "a newer upload"}: being taken out of the diary` } : {}),
+    ai_result: { ...(ai as object), replaced_by: u.id, ...(ai.xero?.state === "created" && !note ? { xero: { ...ai.xero, state: "deleted", note: "Draft bill deleted: replaced by a newer upload" } } : {}) },
+  }).eq("id", old.id);
+  await admin.from("insurance_policies").delete().eq("upload_id", old.id);
+  return note;
+}
+
 async function applyInvoice(admin: SupabaseClient, u: Row, r: Record<string, unknown>) {
   const problems: string[] = [], forBeamore: string[] = [];
   if (!r.readable || !r.is_invoice) { forBeamore.push(r.is_invoice === false ? "This doesn't look like an invoice" : "The invoice couldn't be read clearly"); return { problems, forBeamore }; }
@@ -170,10 +212,15 @@ async function applyInvoice(admin: SupabaseClient, u: Row, r: Record<string, unk
     if (!names.some((n) => n && (sup.includes(n) || n.includes(sup)))) forBeamore.push(`Invoice is from "${r.supplier}", which isn't linked to this person yet (link it under Company links)`);
   }
   const pence = (v: unknown) => (v === null || v === undefined ? null : Math.round(Number(v) * 100));
-  if (r.invoice_number && u.clerk_id) {
-    const { data: dup } = await admin.from("portal_invoice_checks").select("upload_id,portal_uploads!inner(clerk_id,status)").ilike("invoice_number", String(r.invoice_number))
-      .eq("portal_uploads.clerk_id", u.clerk_id).neq("portal_uploads.status", "deleted").neq("upload_id", u.id).limit(1);
-    if (dup?.length) forBeamore.push(`Invoice number ${r.invoice_number} has already been uploaded`);
+  // the clerk sent a corrected copy (same invoice number, or the same file name for the same month): the newer one
+  // replaces the older, which is taken back out of the diary, its draft bill removed from Xero, and taken off the list
+  // (Ronan, 26 Nov 2026: Carl Smith sent invoice 00653 twice and both went in the diary)
+  if (u.clerk_id) {
+    const replaced = await earlierCopies(admin, u, r.invoice_number ? String(r.invoice_number) : null, period);
+    for (const old of replaced) {
+      const note = await replaceUpload(admin, old, u);
+      if (note) forBeamore.push(note);
+    }
   }
   await admin.from("portal_invoice_checks").upsert({
     upload_id: u.id, supplier: r.supplier ?? null, invoice_number: r.invoice_number ?? null, invoice_date: r.invoice_date ?? null, period,

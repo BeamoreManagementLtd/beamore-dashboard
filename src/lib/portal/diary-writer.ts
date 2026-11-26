@@ -334,9 +334,26 @@ async function diaryIssues(admin: SupabaseClient, id: string, o: Outcome) {
 
 /** Every 15 minutes: invoices read by AI that are waiting to go into the diary (one at a time, so writes never overlap). */
 export async function writePendingToDiary(admin: SupabaseClient) {
-  const { data } = await admin.from("portal_uploads").select("id").eq("kind", "invoice").eq("diary_state", "waiting").neq("status", "deleted").order("received_at").limit(5);
+  // first, copies replaced by a corrected one come back out ("undo"), and ones to be put in again come out then go back
+  // in ("redo"), so the new copy never sits on top of the old (Ronan, 26 Nov 2026)
+  const { data: outs } = await admin.from("portal_uploads").select("id,clerk_id,diary_state,ai_result").eq("kind", "invoice").in("diary_state", ["undo", "redo"]).order("received_at").limit(5);
+  const stuck = new Set<string>();
+  for (const r of outs ?? []) {
+    try {
+      const n = await undoInvoiceInDiary(admin, r.id);
+      await admin.from("portal_uploads").update(r.diary_state === "redo" ? { diary_state: "waiting", diary_note: `Taken out (${n}); going back in` } : { diary_state: "undone", diary_note: `Taken out of the diary (${n}): replaced by a newer upload` }).eq("id", r.id);
+    } catch (e) {
+      const m = e instanceof Error ? e.message : String(e);
+      if (/10 minutes|changed while/i.test(m)) return 0; // diary busy: try again next time, before writing anything
+      await admin.from("portal_uploads").update({ diary_state: "undo_failed", diary_note: `Couldn't take it out of the diary: ${m.slice(0, 200)}` }).eq("id", r.id);
+      if (r.clerk_id) stuck.add(r.clerk_id);
+      const by = (r.ai_result as { replaced_by?: string } | null)?.replaced_by;
+      if (by) await admin.from("portal_uploads").update({ diary_state: "needs_review", diary_note: `The earlier copy couldn't be taken out of the diary (${m.slice(0, 160)}). Take it out by hand, then press Read again on this one` }).eq("id", by).eq("diary_state", "waiting");
+    }
+  }
+  const { data } = await admin.from("portal_uploads").select("id,clerk_id").eq("kind", "invoice").eq("diary_state", "waiting").neq("status", "deleted").order("received_at").limit(5);
   let written = 0;
-  for (const r of data ?? []) {
+  for (const r of (data ?? []).filter((x) => !stuck.has(x.clerk_id))) {
     let o: Outcome;
     try { o = await writeInvoiceToDiary(admin, r.id); }
     catch (e) { o = { state: "needs_review", note: `Couldn't write to the diary: ${e instanceof Error ? e.message.slice(0, 200) : "error"}` }; }
