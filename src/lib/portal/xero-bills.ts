@@ -156,7 +156,7 @@ export async function makeBill(admin: SupabaseClient, uploadId: string): Promise
   if (u.drive_file_id) {
     try {
       const g = await driveClient(admin);
-      await xero.attach(`Invoices/${bill.InvoiceID}`, u.file_name, Buffer.from(await g.download(u.drive_file_id)), u.mime || "application/pdf");
+      await xero.attach(`Invoices/${bill.InvoiceID}`, safeName(u.file_name), Buffer.from(await g.download(u.drive_file_id)), u.mime || "application/pdf");
     } catch (e) { attached = ` (the invoice file couldn't be attached: ${e instanceof Error ? e.message.slice(0, 80) : "error"})`; }
   }
   return { state: "created", note: `Draft bill ${number} for £${net}${vat ? ` + £${ai.vat_gbp} VAT` : ""} made in Xero${prev ? ` from ${prev.InvoiceNumber}` : ""}, waiting for approval${attached}`, bill_id: bill.InvoiceID, number };
@@ -187,7 +187,7 @@ export async function makePendingBills(admin: SupabaseClient) {
       const x = (r.ai_result as Ai).xero!;
       if (!x.bill_id || !r.drive_file_id) continue;
       try {
-        await xero.attach(`Invoices/${x.bill_id}`, r.file_name, Buffer.from(await g.download(r.drive_file_id)), r.mime || "application/pdf");
+        await xero.attach(`Invoices/${x.bill_id}`, safeName(r.file_name), Buffer.from(await g.download(r.drive_file_id)), r.mime || "application/pdf");
         await admin.from("portal_uploads").update({ ai_result: { ...(r.ai_result as object), xero: { ...x, note: `${x.note.split(" (the invoice file couldn't be attached")[0]} (invoice attached)`, at: new Date().toISOString() } } }).eq("id", r.id);
       } catch { break; } // still not allowed: try again next time
     }
@@ -203,3 +203,6 @@ export function numberFromFileName(name: string) {
   if (m) return m[1].replace(/[.\-]+$/, "");
   return "";
 }
+
+/** Xero refuses attachment names with characters like ":" (Aidan Cusack's " 2026:20- Beamore Invoice...pdf"). */
+export const safeName = (n: string) => n.replace(/[\/:*?"<>|]+/g, "-").replace(/\s+/g, " ").trim() || "invoice.pdf";
