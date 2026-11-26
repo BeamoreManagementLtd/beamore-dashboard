@@ -7,6 +7,7 @@ import { writeContactsIfNeeded } from "@/lib/portal/contacts-writer";
 import { writeProjectsTab } from "@/lib/portal/projects-writer";
 import { makePendingBills } from "@/lib/portal/xero-bills";
 import { sendAskedFromAi } from "@/lib/outbox";
+import { runInvoiceDeadlines } from "@/lib/invoice-deadline";
 
 export const maxDuration = 300;
 export const dynamic = "force-dynamic";
@@ -22,6 +23,8 @@ export async function GET(request: NextRequest) {
     const r = await processPending(admin);
     // emails Ronan asked to go from ai@beamore.co.uk
     const aiEmails = await sendAskedFromAi(admin).catch(() => 0);
+    // clerks' invoice deadline emails: a week before, the day before, and late (Ronan, 26 Nov 2026)
+    await runInvoiceDeadlines(admin).catch(() => undefined);
     const diary = await writePendingToDiary(admin);
     // invoices now in the diary become draft bills in Xero (Ronan, 25 Nov 2026)
     const bills = await makePendingBills(admin).catch(() => 0);

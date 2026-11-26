@@ -326,6 +326,13 @@ export async function buildDueList(db: SupabaseClient, me: Profile): Promise<Due
   }
   if (lastMonth >= "2026-11-01" && !(signoffs.data ?? []).some((s) => s.month === lastMonth))
     items.push({ key: `signoff-${lastMonth}`, kind: "Diary", title: `Compare planned and charged for ${MONTH(lastMonth)}, then sign off invoicing`, due: addDays(monthStart, 2), link: `/signoff?month=${lastMonth.slice(0, 7)}`, ...ownerOf(null, directorName) });
+  // clerks' invoice deadline: asked of Ronan each month from the 15th until he sets it (26 Nov 2026)
+  if (director) {
+    const { monthNeedingDeadline, monthName } = await import("@/lib/invoice-deadline");
+    const { createServiceClient } = await import("@/lib/supabase/server");
+    const m = await monthNeedingDeadline(createServiceClient(), t).catch(() => null);
+    if (m) items.push({ key: `invoice-deadline-${m}`, kind: "Diary", title: `When should clerks' ${monthName(m)} invoices be in by?`, detail: "Set the date and time: a week before, the clerks get an email from ai@ asking for their invoices, then a reminder the day before and a late email after", due: t, link: `/invoice-deadline?month=${m}`, ...ownerOf(null, directorName) });
+  }
   if (unmatchedSites.count)
     items.push({ key: "unmatched-sites", kind: "Diary", title: `${unmatchedSites.count} diary site name${unmatchedSites.count > 1 ? "s" : ""} not linked to a project`, due: null, link: "/projects", ...ownerOf(null, directorName) });
   if (unmatchedRefs.count)
