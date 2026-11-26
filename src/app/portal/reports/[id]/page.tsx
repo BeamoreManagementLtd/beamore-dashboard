@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { notFound, redirect } from "next/navigation";
+import { notFound } from "next/navigation";
 import { createServiceClient } from "@/lib/supabase/server";
 import { requirePortalUser } from "@/lib/portal/auth";
 import { fmtDate } from "@/lib/portal/data";
@@ -21,8 +21,6 @@ export default async function ReportFeedback({ params }: { params: Promise<{ id:
   const me = await requirePortalUser();
   if (!me.clerk) notFound();
   const db = createServiceClient();
-  const { data: c } = await db.from("clerks").select("ai_feedback").eq("id", me.clerk.id).single();
-  if (!c?.ai_feedback) redirect("/portal/reports");
   const { data: r } = await db.from("reports").select("id,clerk_id,file_name,renamed_from,visit_date,uploaded_at,status,pdf_file_id,issues,clerk_points,fixes,score,projects(name,display_name)")
     .eq("id", id).not("checked_at", "is", null).maybeSingle();
   if (!r || r.clerk_id !== me.clerk.id) notFound();

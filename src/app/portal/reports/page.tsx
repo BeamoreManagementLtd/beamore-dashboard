@@ -18,12 +18,10 @@ export default async function YourReports() {
   const me = await requirePortalUser();
   if (!me.clerk) return <section className="card"><h1>Your reports</h1><p className="muted">Clerks see their reports here.</p></section>;
   const db = createServiceClient();
-  const { data: c } = await db.from("clerks").select("ai_feedback,ai_feedback_email").eq("id", me.clerk.id).single();
-  const on = !!c?.ai_feedback;
-  const { data: reps } = on
-    ? await db.from("reports").select("id,file_name,visit_date,uploaded_at,status,report_number,score,projects(name,display_name)")
-      .eq("clerk_id", me.clerk.id).not("checked_at", "is", null).gte("uploaded_at", new Date(Date.now() - 183 * 864e5).toISOString()).order("uploaded_at", { ascending: false }).limit(80)
-    : { data: [] };
+  // on for every clerk (Ronan, 26 Nov 2026); only the email is a choice
+  const { data: c } = await db.from("clerks").select("ai_feedback_email").eq("id", me.clerk.id).single();
+  const { data: reps } = await db.from("reports").select("id,file_name,visit_date,uploaded_at,status,report_number,score,projects(name,display_name)")
+      .eq("clerk_id", me.clerk.id).not("checked_at", "is", null).gte("uploaded_at", new Date(Date.now() - 183 * 864e5).toISOString()).order("uploaded_at", { ascending: false }).limit(80);
   // checking a report before it goes in Google Drive (Ronan, 18 Nov 2026): open to every clerk, on their current jobs
   const [{ data: jobs }, { data: checks }, examples] = await Promise.all([
     db.from("projects").select("id,name,display_name").or(`clerk_id.eq.${me.clerk.id},clerk_me_id.eq.${me.clerk.id}`).in("stage", ["won_arranging", "won_preparing", "live", "on_hold"]).order("name"),
@@ -78,14 +76,11 @@ export default async function YourReports() {
       <section className="card">
         <h2>AI feedback on your sent reports</h2>
         <AiNote />
-        <AiSwitch on={on} email={!!c?.ai_feedback_email} viewingAs={me.viewingAs} />
+        <AiSwitch email={!!c?.ai_feedback_email} viewingAs={me.viewingAs} />
       </section>
-      {on && (
         <ScoreGraph rows={(reps ?? []).filter((r) => r.score !== null && r.score !== undefined)
           .map((r) => ({ id: r.id, when: (r.visit_date ?? r.uploaded_at.slice(0, 10)) as string, score: Number(r.score), name: r.file_name as string }))
           .sort((a, b) => a.when.localeCompare(b.when))} />
-      )}
-      {on && (
         <section className="card">
           <h2>Last six months</h2>
           {!reps?.length ? <p className="muted">No checked reports yet. They appear here once the office has run them through the check.</p> : (
@@ -107,7 +102,6 @@ export default async function YourReports() {
             </table>
           )}
         </section>
-      )}
     </>
   );
 }

@@ -1,4 +1,4 @@
-import { setAiFeedback, setAiFeedbackEmail } from "./actions";
+import { setAiFeedbackEmail } from "./actions";
 
 /** What the clerk is told before and while they see the AI feedback (Ronan's words, 17 Nov 2026). */
 export function AiNote() {
@@ -13,27 +13,17 @@ export function AiNote() {
 }
 
 /**
- * The on/off switches: the feedback itself, then (only once that's on) the emails, which are their own choice (Ronan,
- * 17 Nov 2026). Staff viewing as a clerk see them but can't change them.
+ * The feedback is on for everyone now (Ronan, 26 Nov 2026: "turn it on for everyone and remove the option to turn it on
+ * or off. Only give the option to receive it by email"). The one choice left is the email. Staff viewing as a clerk see
+ * it but can't change it.
  */
-export function AiSwitch({ on, email, viewingAs }: { on: boolean; email?: boolean; viewingAs?: boolean }) {
+export function AiSwitch({ email, viewingAs }: { email?: boolean; viewingAs?: boolean }) {
   const lock = viewingAs ? "Only the clerk can change this" : undefined;
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-      <form action={setAiFeedback} className="row" style={{ gap: 10, alignItems: "center" }}>
-        <input type="hidden" name="on" value={on ? "0" : "1"} />
-        <button className={`btn ${on ? "" : "primary"}`} disabled={viewingAs} title={lock}>
-          {on ? "Turn off AI feedback" : "Show me the AI feedback on my reports"}
-        </button>
-        <span className="small muted">{on ? "On: you can see the feedback on each report under Your reports." : "Off: nothing changes until you switch it on."}</span>
-      </form>
-      {on && (
-        <form action={setAiFeedbackEmail} className="row" style={{ gap: 10, alignItems: "center" }}>
-          <input type="hidden" name="on" value={email ? "0" : "1"} />
-          <button className="btn small" disabled={viewingAs} title={lock}>{email ? "Stop the emails" : "Also email me the feedback"}</button>
-          <span className="small muted">{email ? "On: you'll get an email from ai@beamore.co.uk with the feedback when each report has been sent." : "Optional: an email from ai@beamore.co.uk with the feedback when each report has been sent. Off unless you choose it."}</span>
-        </form>
-      )}
-    </div>
+    <form action={setAiFeedbackEmail} className="row" style={{ gap: 10, alignItems: "center" }}>
+      <input type="hidden" name="on" value={email ? "0" : "1"} />
+      <button className={`btn small ${email ? "" : "primary"}`} disabled={viewingAs} title={lock}>{email ? "Stop the emails" : "Email me the feedback"}</button>
+      <span className="small muted">{email ? "On: you'll get an email from ai@beamore.co.uk with the feedback when each report has been sent." : "Optional: an email from ai@beamore.co.uk with the feedback when each report has been sent. Off unless you choose it."}</span>
+    </form>
   );
 }
