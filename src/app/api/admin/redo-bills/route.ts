@@ -16,6 +16,13 @@ export async function GET(req: NextRequest) {
   if (!secret || req.headers.get("authorization") !== `Bearer ${secret}`) return NextResponse.json({ error: "unauthorised" }, { status: 401 });
   const admin = createServiceClient();
   const sp = req.nextUrl.searchParams;
+  // ?items=1: Xero's items (each project has one), read only
+  if (sp.get("items") === "1") {
+    const { xeroClient } = await import("@/lib/xero");
+    const xero = await xeroClient(admin);
+    const r = await xero<{ Items: { Code: string; Name: string; Description?: string; PurchaseDescription?: string; PurchaseDetails?: { UnitPrice?: number; AccountCode?: string; TaxType?: string }; SalesDetails?: { UnitPrice?: number; AccountCode?: string } }[] }>("Items");
+    return NextResponse.json(r.Items.map((i) => ({ code: i.Code, name: i.Name, desc: i.Description, pdesc: i.PurchaseDescription, buy: i.PurchaseDetails, sell: i.SalesDetails })));
+  }
   const dry = sp.get("dry") === "1", from = Number(sp.get("from") ?? 0), count = Math.min(Number(sp.get("count") ?? 8), 15);
   const { data } = await admin.from("portal_uploads").select("id,ai_result,clerks(name)").in("kind", ["invoice", "company_invoice"])
     .eq("ai_result->xero->>state", "created").order("received_at").range(from, from + count - 1);
