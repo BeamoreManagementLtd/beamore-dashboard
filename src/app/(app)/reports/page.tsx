@@ -45,7 +45,8 @@ export default async function Reports({ searchParams }: { searchParams: Promise<
   // asked of the clerk on earlier reports and not done yet, per job (Ronan, 23 Nov 2026)
   const asks = await openRequestCounts(createServiceClient());
   const askedBefore = (r: { id: string; project_id: string | null; project_folder_name: string | null; kind: string }) => asks.filter((q) => requestKey(q) === requestKey(r) && q.asked_on_report !== r.id).length;
-  const { data: helper } = await db.from("sync_files").select("modified_time,file_id").eq("key", "word_helper").maybeSingle();
+  // sync_files is service-role only (RLS): read as the signed-in user it always came back empty, so the warning always showed
+  const { data: helper } = await createServiceClient().from("sync_files").select("modified_time,file_id").eq("key", "word_helper").maybeSingle();
   const helperSeen = helper?.modified_time ?? null;
   const helperLate = (open ?? []).some((r) => r.status === "approved") && (!helperSeen || Date.now() - Date.parse(helperSeen) > 10 * 60_000);
   const clerkDays = settings?.clerk_days ?? 1, teamDays = settings?.team_days ?? 1;

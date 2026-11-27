@@ -784,7 +784,9 @@ export async function approveReport(admin: SupabaseClient, reportId: string, who
   if (!m.to.length && !m.pdfOnly) throw new Error("Nobody to send it to: add the report list on the project's page");
   const { data: rep } = await admin.from("reports").select("*").eq("id", reportId).single();
   if (!rep) throw new Error("No such report");
-  if (rep.status === "sent") throw new Error("Already sent");
+  // "sending" too: Hewett Academy 99 was approved again (clean PDF) while it was being sent on 24 Nov 2026, which put a
+  // sent report back to "approved" and left the PDF PC looking for a file that had moved, so the warning stayed up for days
+  if (rep.status === "sent" || rep.status === "sending") throw new Error("Already sent");
   if (rep.hold_at) throw new Error(`On hold: ${rep.hold_reason ?? "waiting for the clerk"}. Take it off hold first`);
   if (!rep.main_folder) throw new Error("Can't tell where this report is on the office PC; please make the PDF in Word by hand");
   if (!rep.checked_file_id) throw new Error("This report hasn't been checked yet");
@@ -832,7 +834,7 @@ export async function pdfQueue(admin: SupabaseClient) {
         await admin.from("reports").update({ checked_name: name, file_name: name, pdf_name: pdf }).eq("id", r.id);
       }
     }
-    out.push({ id: r.id, main_folder: r.main_folder, project_folder: r.project_folder_name, report_folder: r.folder_name, checked_folder: r.checked_file_id === r.drive_file_id ? "." : CHECKED_FOLDER, file_name: name, pdf_name: pdf });
+    out.push({ id: r.id, main_folder: r.main_folder, project_folder: r.project_folder_name, report_folder: r.folder_name, checked_folder: !r.checked_file_id || r.checked_file_id === r.drive_file_id ? "." : CHECKED_FOLDER, file_name: name, pdf_name: pdf });
   }
   return out;
 }
