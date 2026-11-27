@@ -32,7 +32,8 @@ type Ai = {
 const words = (s: string) => s.toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length > 3 && !/^(school|academy|college|primary|days?|from|with)$/.test(w));
 const money = (n: number) => Math.round(n * 100) / 100;
 
-export async function makeBill(admin: SupabaseClient, uploadId: string): Promise<BillOutcome> {
+/** redo: a draft already made from this invoice gets its lines rebuilt in place (one line per project); approved bills are left alone */
+export async function makeBill(admin: SupabaseClient, uploadId: string, opts: { redo?: boolean; dry?: boolean } = {}): Promise<BillOutcome> {
   const { data: u } = await admin.from("portal_uploads").select("id,clerk_id,file_name,mime,drive_file_id,ai_result,kind,clerks(name)").eq("id", uploadId).single();
   if (!u?.clerk_id) return { state: "not_applicable", note: "No clerk for this invoice" };
   const ai = (u.ai_result ?? {}) as Ai;
@@ -59,7 +60,8 @@ export async function makeBill(admin: SupabaseClient, uploadId: string): Promise
   const safe = number.replace(/"/g, "");
   const have = await xero<{ Invoices: { InvoiceID: string; InvoiceNumber: string; Status: string }[] }>("Invoices", { where: `Type=="ACCPAY" AND Contact.ContactID==Guid("${co.xero_contact_id}") AND InvoiceNumber=="${safe}"` });
   const dup = have.Invoices.find((i) => i.Status !== "DELETED" && i.Status !== "VOIDED");
-  if (dup) return { state: "exists", note: `Already in Xero as bill ${dup.InvoiceNumber} (${dup.Status.toLowerCase()})`, bill_id: dup.InvoiceID, number: dup.InvoiceNumber };
+  const redoId = opts.redo && dup?.Status === "DRAFT" ? dup.InvoiceID : null;
+  if (dup && !redoId) return { state: "exists", note: `Already in Xero as bill ${dup.InvoiceNumber} (${dup.Status.toLowerCase()})`, bill_id: dup.InvoiceID, number: dup.InvoiceNumber };
 
   // the clerk's last bill is the starting point, like "Copy" in Xero (Ronan, 25 Nov 2026): its account, VAT setting,
   // payment terms and reference style carry over; the lines, number, date and PDF are this invoice's
@@ -93,27 +95,92 @@ export async function makeBill(admin: SupabaseClient, uploadId: string): Promise
   const tax = vat ? (prevVat ?? "INPUT2") : (prevLine?.TaxType && !prevVat ? prevLine.TaxType : "NONE");
   const account = prevLine?.AccountCode || ACCOUNT;
   type Line = { Description: string; Quantity: number; UnitAmount: number; AccountCode: string; TaxType: string; Tracking?: { Name: string; Option: string }[] };
+  type Proj = NonNullable<(typeof jobs)[number]["project"]>;
+  const lineFor = (p: Proj, qty: number, rate: number): Line => ({
+    Description: `${p.display_name ?? p.name} - ${monthLabel}`, Quantity: qty, UnitAmount: rate, AccountCode: account, TaxType: tax,
+    ...(optionFor(p) ? { Tracking: optionFor(p) } : {}),
+  });
+  // ALWAYS one line per project, with the project's name, its number of visits and the day rate (Ronan, 27 Nov 2026:
+  // "You just put in one line, 17 visits. That's not good enough... I want the project name, the quantity of visits,
+  // and the unit price for each"). The visits per project come from the diary (this clerk's charged days that month,
+  // which is where this invoice was written), else from the visits read off the invoice. A line that can't be split
+  // so that it still adds up exactly waits for a person rather than going in as one lump.
+  const { data: dv } = await admin.from("diary_visits").select("project_id,days").eq("clerk_id", u.clerk_id).eq("side", "charged")
+    .gte("visit_date", `${period}-01`).lt("visit_date", new Date(Date.UTC(+period.slice(0, 4), +period.slice(5), 1)).toISOString().slice(0, 10)).not("project_id", "is", null);
+  const diaryDays = new Map<string, number>();
+  for (const v of dv ?? []) diaryDays.set(v.project_id as string, (diaryDays.get(v.project_id as string) ?? 0) + Number(v.days ?? 0));
+  const invoiceDays = new Map<string, number>();
+  for (const v of ai.visits ?? []) { const p = jobs.find((j) => j.wording === v.site.trim())?.project; if (p) invoiceDays.set(p.id, (invoiceDays.get(p.id) ?? 0) + (Number(v.half_days) || 2) / 2); }
+  // the diary's projects too (one with no diary aliases isn't in the list above)
+  const missing = [...diaryDays.keys()].filter((id) => !(projects ?? []).some((p) => p.id === id));
+  const extra = missing.length ? (await admin.from("projects").select("id,name,display_name,diary_aliases,is_dfe,folder_kind").in("id", missing)).data ?? [] : [];
+  const projById = (id: string) => [...(projects ?? []), ...extra].find((p) => p.id === id) ?? null;
+  const onInvoice = new Set(jobs.map((j) => j.project?.id).filter(Boolean) as string[]);
+  const whole = (n: number) => Math.abs(n * 2 - Math.round(n * 2)) < 0.001; // a day rate in whole pounds or 50p
+  /** Days per project that add up to the amount: the quantity when known, else a day rate that comes out exactly. */
+  const split = (amount: number, qty: number | null, rate: number | null, only: Set<string>) => {
+    for (const src of [diaryDays, invoiceDays]) {
+      const ids = [...src.keys()].filter((id) => src.get(id)! > 0 && (!only.size || only.has(id)) && projById(id));
+      const total = ids.reduce((s, id) => s + src.get(id)!, 0);
+      if (!ids.length || !(total > 0)) continue;
+      const r = qty != null && rate != null ? (Math.abs(total - qty) < 0.01 ? rate : null) : money(amount / total);
+      if (r == null || !whole(r) || r < 100 || Math.abs(money(r * total) - amount) > 0.02) continue;
+      return ids.map((id) => ({ p: projById(id)! as Proj, qty: Math.round(src.get(id)! * 100) / 100, rate: r }));
+    }
+    return null;
+  };
+  // the projects this invoice can be for: those named in its visits, else (no visits read) the diary's for the month
+  const candidates = onInvoice.size ? onInvoice : new Set([...diaryDays.keys()].filter((id) => projById(id)));
+  const only1 = candidates.size === 1 ? projById([...candidates][0]) : null;
+  const num = (x: string) => Number(x.replace(/,/g, ""));
+  /** The days and rates written on a line: "17 visits @ £315", "4@£320; 1@£160", "8 x £315", "£300 x 16", "300 x 9", "5x". */
+  const pairs = (text: string, amount: number): { qty: number; rate: number }[] | null => {
+    const found: { qty: number; rate: number }[] = [];
+    for (const m of text.matchAll(/(\d+(?:\.\d+)?)\s*(?:x\s*)?(?:inspections?|visits?|days?)?\s*@\s*£?\s*([\d,]+(?:\.\d+)?)/gi)) found.push({ qty: num(m[1]), rate: num(m[2]) });
+    if (!found.length) for (const m of text.matchAll(/£?\s*([\d,]+(?:\.\d+)?)\s*[x×]\s*£?\s*([\d,]+(?:\.\d+)?)/gi)) {
+      const a = num(m[1]), b = num(m[2]); found.push(a > b ? { qty: b, rate: a } : { qty: a, rate: b });
+    }
+    if (found.length && Math.abs(found.reduce((s, f) => s + f.qty * f.rate, 0) - amount) < 0.02) return found;
+    const nx = /\b(\d+(?:\.\d+)?)\s*x\b(?!\s*£?\d)/i.exec(text); // "5x (1 day)": the rate is what's left
+    // not when the line also gives a rate that doesn't add up (Carl Smith's "4 x Days @ £350" for five dates and £1,750):
+    // then the visits decide
+    if (nx && !found.length && whole(amount / num(nx[1]))) return [{ qty: num(nx[1]), rate: money(amount / num(nx[1])) }];
+    return null;
+  };
+  const expenseLike = (text: string, amount: number) => /hotel|mileage|travel|parking|train|fuel|accommodation|subsistence/i.test(text) || (ai.expenses ?? []).some((e) => Math.abs(Number(e.amount_gbp ?? 0) - amount) < 0.01 && !/visit|inspection|day/i.test(text));
+  // each line: its project (named on the line, else the only one) and its days x rate; lines dated one per visit count
+  // as one visit at that price. Then the same project at the same rate is added up into one line.
+  const merged = new Map<string, { p: Proj; qty: number; rate: number }>();
+  const add = (p: Proj, qty: number, rate: number) => { const k = `${p.id}|${rate}`; const m = merged.get(k); if (m) m.qty = Math.round((m.qty + qty) * 100) / 100; else merged.set(k, { p, qty, rate }); };
   const lines: Line[] = [];
-  for (const l of ai.lines ?? []) {
-    const amount = Number(l.amount_gbp ?? 0);
-    if (!(amount > 0)) continue;
-    // "4 days @ £310": days and day rate, as entered by hand
-    const m = /(\d+(?:\.\d+)?)\s*(?:days?|x)\b[^@£]*@\s*£?\s*([\d,]+(?:\.\d+)?)/i.exec(l.text);
-    const qty = m ? Number(m[1]) : 1, rate = m ? Number(m[2].replace(/,/g, "")) : amount;
-    const ok = Math.abs(qty * rate - amount) < 0.02;
+  const lumps: string[] = [];
+  const priced = (ai.lines ?? []).filter((l) => Number(l.amount_gbp ?? 0) > 0);
+  for (const l of priced) {
+    let amount = Number(l.amount_gbp);
+    // the only priced line is the total with VAT (Sunny Singh's CMS 13: £8,088 on the line, £6,740 + £1,348 VAT): the net
+    if (vat && priced.length === 1 && ai.gross_gbp && ai.net_gbp && Math.abs(amount - Number(ai.gross_gbp)) < 0.05) amount = Number(ai.net_gbp);
+    if (expenseLike(l.text, amount)) { lines.push({ Description: `${l.text} - ${monthLabel}`, Quantity: 1, UnitAmount: amount, AccountCode: account, TaxType: tax }); continue; }
     const t = l.text.toLowerCase();
-    const job = jobs.find((j) => t.includes(j.wording.toLowerCase())) ?? jobs.find((j) => words(j.wording).some((w) => t.includes(w))) ?? (jobs.length === 1 ? jobs[0] : undefined);
-    const p = job?.project ?? null;
-    lines.push({
-      Description: p ? `${p.display_name ?? p.name} - ${monthLabel}` : l.text,
-      Quantity: ok ? qty : 1, UnitAmount: ok ? rate : amount, AccountCode: account, TaxType: tax,
-      ...(p && optionFor(p) ? { Tracking: optionFor(p) } : {}),
-    });
+    const named = [...jobs].sort((a, b) => b.wording.length - a.wording.length).find((j) => j.project && t.includes(j.wording.toLowerCase()))
+      ?? jobs.find((j) => j.project && words(j.wording).some((w) => t.includes(w)));
+    // a site the invoice reading couldn't link (Mark Prickett's "Northumberland College"): the clerk's projects in the
+    // diary this month, by name
+    const byName = !named ? [...diaryDays.keys()].map(projById).filter(Boolean).find((x) => words(String(x!.display_name ?? x!.name).replace(/\s\d{4}$/, "")).some((w) => t.includes(w))) : null;
+    // a site on the line that isn't a project on the dashboard (Paul Hankin's St John Vianney): its own line under the
+    // name on the invoice (no tracking code), never folded into another job
+    const unlinked = !named && !byName ? [...jobs].sort((a, b) => b.wording.length - a.wording.length).find((j) => !j.project && t.includes(j.wording.toLowerCase())) : null;
+    const p = (named?.project ?? byName ?? (unlinked ? { id: `site:${unlinked.wording}`, name: unlinked.wording.replace(/\.\s/g, " "), display_name: null, diary_aliases: null, is_dfe: null, folder_kind: null } : null) ?? only1) as Proj | null;
+    const dated = /\b\d{1,2}[.\/-]\d{1,2}(?:[.\/-]\d{2,4})?\b|\b\d{1,2}(?:st|nd|rd|th)\b/i.test(l.text);
+    const ps = pairs(l.text, amount) ?? ((dated || /daily rate|day rate|visit|inspection/i.test(l.text)) && whole(amount) && amount >= 100 && amount <= 600 ? [{ qty: 1, rate: amount }] : null);
+    if (p && ps) { for (const x of ps) add(p, x.qty, x.rate); continue; }
+    // no project on the line (several jobs on one line), or no days: split by the visits
+    const one = ps?.length === 1 ? ps[0] : null;
+    const parts = split(amount, one?.qty ?? null, one?.rate ?? null, p ? new Set([p.id]) : candidates);
+    if (parts) { for (const x of parts) add(x.p, x.qty, x.rate); continue; }
+    lumps.push(`"${l.text}" (£${amount})`);
   }
-  // the only priced line is the total with VAT (Sunny Singh's CMS 13: £8,088 on the line, £6,740 + £1,348 VAT): the net
-  if (vat && lines.length === 1 && ai.gross_gbp && ai.net_gbp && Math.abs(lines[0].Quantity * lines[0].UnitAmount - Number(ai.gross_gbp)) < 0.05) {
-    lines[0].Quantity = 1; lines[0].UnitAmount = Number(ai.net_gbp);
-  }
+  if (lumps.length) return { state: "needs_review", note: `Couldn't split ${lumps.join(", ")} into one line per project with the visits and day rate (the visits on the invoice and in the diary don't add up to it): please enter it in Xero by hand, one line per project` };
+  lines.unshift(...[...merged.values()].map((m) => lineFor(m.p, m.qty, m.rate)));
   for (const e of ai.expenses ?? []) {
     const amount = Number(e.amount_gbp ?? 0);
     // already one of the invoice's own lines (Mark Prickett's hotel): not twice
@@ -136,6 +203,14 @@ export async function makeBill(admin: SupabaseClient, uploadId: string): Promise
   const vatable = money(lines.filter((l) => l.TaxType !== "NONE").reduce((s, l) => s + l.Quantity * l.UnitAmount, 0));
   if (vat && Math.abs(money(vatable * 0.2) - Number(ai.vat_gbp)) > 0.05) return { state: "needs_review", note: `VAT on the invoice is £${ai.vat_gbp}, not 20% of £${vatable}: please check and enter it in Xero by hand` };
 
+  // dry: what the lines would be, nothing written
+  if (opts.dry) return { state: "created", note: lines.map((l) => `${l.Description} | ${l.Quantity} x £${l.UnitAmount} | ${l.Tracking ? `code: ${l.Tracking[0].Option}` : "NO CODE"}`).join(" || "), bill_id: redoId ?? dup?.InvoiceID, number: `${number}${dup ? ` (${dup.Status})` : ""}` };
+  if (redoId) {
+    const up = await xero.post<{ Invoices: { HasErrors?: boolean; ValidationErrors?: { Message: string }[] }[] }>(`Invoices/${redoId}`, { Invoices: [{ InvoiceID: redoId, LineAmountTypes: "Exclusive", LineItems: lines }] });
+    const b = up.Invoices?.[0];
+    if (!b || b.HasErrors) return { state: "needs_review", note: `Xero didn't take the new lines: ${(b?.ValidationErrors ?? []).map((v) => v.Message).join("; ") || "no reason given"}`, bill_id: redoId, number };
+    return { state: "created", note: `Draft bill ${number} for £${net}${vat ? ` + £${ai.vat_gbp} VAT` : ""} in Xero, one line per project (redone ${new Date().toISOString().slice(0, 10)}), waiting for approval`, bill_id: redoId, number };
+  }
   const date = /^\d{4}-\d{2}-\d{2}$/.test(ai.invoice_date ?? "") ? ai.invoice_date! : new Date(Date.UTC(+period.slice(0, 4), +period.slice(5), 0)).toISOString().slice(0, 10);
   const res = await xero.put<{ Invoices: { InvoiceID: string; InvoiceNumber: string; HasErrors?: boolean; ValidationErrors?: { Message: string }[] }[] }>("Invoices", {
     Invoices: [{
