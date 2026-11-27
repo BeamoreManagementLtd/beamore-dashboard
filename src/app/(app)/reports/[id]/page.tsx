@@ -11,6 +11,7 @@ import type { ScorePart } from "@/lib/reports/score";
 import { assignChecker, sendReport, markDone, ignoreReport, checkAgain, sendClerkEmail, setVisitDate, claimReport, releaseReport, makeCleanPdf, holdReport, releaseHold, addRequests, requestDone, requestMissed, requestDrop } from "../actions";
 import { holdOf } from "@/lib/reports/hold";
 import { openRequests } from "@/lib/reports/requests";
+import { AskClerk } from "./ask-clerk";
 import { liveClaim, claimTime, CLAIM_HOURS } from "@/lib/reports/claim";
 
 export const dynamic = "force-dynamic";
@@ -73,10 +74,10 @@ function clerkNote(r: Record<string, unknown>, sender: string, reminders: string
 const SEV: Record<string, [string, string]> = { high: ["Must check", "bad"], medium: ["Should fix", "warn"], low: ["Minor", "muted"] };
 
 /** One report: what the AI found, then approve and send it from your own email with the standard email. */
-export default async function ReportPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ error?: string; clerk?: string }> }) {
+export default async function ReportPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ error?: string; clerk?: string; asked?: string }> }) {
   const me = await requireProfile();
   const { id } = await params;
-  const { error, clerk } = await searchParams;
+  const { error, clerk, asked } = await searchParams;
   const db = await createClient();
   const { data: r } = await db.from("reports").select("*,projects(id,name),clerks(name,email)").eq("id", id).maybeSingle();
   if (!r) notFound();
@@ -158,11 +159,10 @@ export default async function ReportPage({ params, searchParams }: { params: Pro
             );
           })}</tbody></table>
         )}
-        <form action={addRequests.bind(null, id)} className="form" style={{ marginTop: 10 }}>
-          <div className="field"><label htmlFor="ask">Ask the clerk for next week <span className="muted small">(one per line)</span></label>
-            <textarea id="ask" name="text" rows={2} placeholder="e.g. Start each report from last week's checked report, downloaded from the Drive" /></div>
-          <button className="btn small">Add</button>
-        </form>
+        {asked && <p className="callout good">Emailed to {asked} from your email, and kept on this job to check on their next report.</p>}
+        {error?.startsWith("Saved on the job") && <p className="callout bad">{error}</p>}
+        <AskClerk action={addRequests.bind(null, id)} canEmail={!!conn}
+          clerk={(() => { const c = r.clerks as unknown as { name?: string; email?: string | null } | null; return c?.email ? { first: (c.name ?? "").split(" ")[0], email: c.email } : null; })()} />
       </section>
       {/* how the mark was made up (Ronan, 16 Nov 2026): information 40, then 10 each for the rest */}
       {!!scoreParts.length && (

@@ -71,18 +71,41 @@ export async function sendReport(reportId: string, form: FormData) {
 }
 
 // ---- asked of the clerk for next week, carried on the job's later reports (Ronan, 23 Nov 2026)
-/** Adds one request per line written. */
+/**
+ * Adds one request per line written, kept on the job to tick off on the clerk's next reports. With "send" (Ronan, 27 Nov
+ * 2026: "add one, then add another, then click send and it just sends from their email") they're also emailed to the
+ * clerk from the checker's own Gmail. They're saved first, so nothing typed is lost if the email can't go.
+ */
 export async function addRequests(reportId: string, form: FormData) {
   const me = await requireProfile();
-  const lines = String(form.get("text") ?? "").split(/\r?\n/).map((t) => t.replace(/^[-*\u2022\s]+/, "").trim()).filter(Boolean).slice(0, 10);
+  const lines = String(form.get("text") ?? "").split(/\r?\n/).map((t) => t.replace(/^[-*\u2022\s]+/, "").trim()).filter(Boolean).slice(0, 15);
   if (!lines.length) return;
+  const send = form.get("send") === "1";
   const admin = createServiceClient();
-  const { data: r } = await admin.from("reports").select("id,project_id,project_folder_name,kind,clerk_id,file_name").eq("id", reportId).single();
+  const { data: r } = await admin.from("reports").select("id,project_id,project_folder_name,kind,clerk_id,file_name,report_number,projects(name,display_name),clerks(name,email)").eq("id", reportId).single();
   if (!r) return;
   await admin.from("report_requests").insert(lines.map((text) => ({ project_id: r.project_id, project_folder_name: r.project_folder_name, kind: r.kind, clerk_id: r.clerk_id, asked_on_report: r.id, text: text.slice(0, 500), asked_by: me.id })));
-  if (r.project_id) await admin.from("project_events").insert({ project_id: r.project_id, source: "team", kind: "Asked of the clerk", who: me.full_name ?? me.email, body: `On ${r.file_name}: ${lines.join("; ")}` });
+  const clerk = r.clerks as unknown as { name: string; email: string | null } | null;
+  let emailed: string | null = null, failed: string | null = null;
+  if (send) {
+    if (!clerk?.email) failed = "there's no email address for this clerk";
+    else try {
+      const pj = r.projects as unknown as { name: string; display_name: string | null } | null;
+      const job = pj?.display_name || pj?.name || r.project_folder_name || "this job";
+      const first = clerk.name.split(" ")[0];
+      const me1 = (me.full_name ?? "").split(" ")[0];
+      const which = r.report_number ? `report ${r.report_number}` : "your last report";
+      const body = `Hi ${first}\n\nThanks for ${which} for ${job}. For your next reports, please could you:\n\n${lines.map((l) => `- ${l}`).join("\n")}\n\nWe'll look out for these on your next report. Any questions, just ask.\n\nKind regards,\n${me1}`;
+      const { sendReportEmail } = await import("@/lib/google-user");
+      await sendReportEmail(admin, me.id, { to: [clerk.email], cc: [], subject: `${job}: for your next reports`, body, signature: true });
+      emailed = clerk.email;
+    } catch (e) { failed = e instanceof Error ? e.message : "it couldn't be sent"; }
+  }
+  if (r.project_id) await admin.from("project_events").insert({ project_id: r.project_id, source: "team", kind: "Asked of the clerk", who: me.full_name ?? me.email, body: `On ${r.file_name}: ${lines.join("; ")}${emailed ? ` (emailed to ${emailed})` : ""}` });
   revalidatePath(`/reports/${reportId}`);
   revalidatePath("/reports");
+  if (failed) redirect(`/reports/${reportId}?error=${encodeURIComponent(`Saved on the job, but not emailed: ${failed}`)}#asked`);
+  if (emailed) redirect(`/reports/${reportId}?asked=${encodeURIComponent(emailed)}#asked`);
 }
 
 /** Done: the clerk has acted on it (on this report). */
